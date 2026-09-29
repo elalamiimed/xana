@@ -1,0 +1,352 @@
+/**
+ * Calendar adapter.
+ *
+ * Live mode: subscribes to any published ICS feed. Google Calendar, Outlook and
+ * Fastmail all expose a private ICS URL, which means real schedule data with no
+ * OAuth dance and no server-side token custody — the right trade for a
+ * single-user local assistant.
+ *
+ * Local mode: events Xana herself created, read from SQLite.
+ *
+ *   XANA_CALENDAR_ICS_URLS="https://calendar.google.com/.../basic.ics,https://..."
+ */
+
+import type { AdapterStatus, CalendarEvent } from "../core/types";
+import { getStore } from "../core/store";
+import { endOfDay, startOfDay, addDays, uid } from "../core/time";
+import {
+  cred,
+  defineAdapter,
+  errorMessage,
+  httpText,
+  status,
+  type LifeAdapter,
+} from "./types";
+
+/** Minimal but correct-enough ICS unfolding, per RFC 5545 §3.1. */
+function unfold(ics: string): string[] {
+  const raw = ics.replace(/\r\n/g, "\n").split("\n");
+  const lines: string[] = [];
+  for (const line of raw) {
+    if ((line.startsWith(" ") || line.startsWith("\t")) && lines.length) {
+      lines[lines.length - 1] += line.slice(1);
+    } else {
+      lines.push(line);
+    }
+  }
+  return lines;
+}
+
+function unescapeText(v: string): string {
+  return v
+    .replace(/\\n/gi, "\n")
+    .replace(/\\,/g, ",")
+    .replace(/\\;/g, ";")
+    .replace(/\\\\/g, "\\")
+    .trim();
+}
+
+/** "20240517T140000Z" | "20240517T140000" | "20240517" -> Date | undefined */
+function parseIcsDate(value: string, tzid?: string): Date | undefined {
+  const v = value.trim();
+  const dateOnly = /^(\d{4})(\d{2})(\d{2})$/.exec(v);
+  if (dateOnly) {
+    return new Date(Number(dateOnly[1]), Number(dateOnly[2]) - 1, Number(dateOnly[3]), 0, 0, 0);
+  }
+  const m = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})(Z)?$/.exec(v);
+  if (!m) return undefined;
+  const [, y, mo, d, h, mi, s, z] = m;
+  if (z) {
+    // UTC — build from the epoch so the local zone applies.
+    return new Date(Date.UTC(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), Number(s)));
+  }
+  // Floating or TZID-qualified. Node resolves TZID names via Intl.
+  if (tzid) {
+    const guess = zonedToDate(y, mo, d, h, mi, s, tzid);
+    if (guess) return guess;
+  }
+  return new Date(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), Number(s));
+}
+
+/**
+ * Convert a wall-clock time in a named IANA zone to an absolute Date by
+ * measuring the zone's offset at that instant. Two passes handle DST edges.
+ */
+function zonedToDate(
+  y: string, mo: string, d: string, h: string, mi: string, s: string, tzid: string,
+): Date | undefined {
+  const naive = Date.UTC(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), Number(s));
+  try {
+    const fmt = new Intl.DateTimeFormat("en-US", {
+      timeZone: tzid,
+      hour12: false,
+      year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", second: "2-digit",
+    });
+    let offset = 0;
+    for (let i = 0; i < 2; i++) {
+      const parts = fmt.formatToParts(new Date(naive - offset));
+      const get = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? "0");
+      const asUtc = Date.UTC(
+        get("year"), get("month") - 1, get("day"),
+        get("hour") % 24, get("minute"), get("second"),
+      );
+      offset = asUtc - (naive - offset);
+    }
+    return new Date(naive - offset);
+  } catch {
+    return undefined; // unknown zone name — caller falls back to local time
+  }
+}
+
+function splitProp(line: string): { name: string; params: Record<string, string>; value: string } {
+  const colon = line.indexOf(":");
+  if (colon === -1) return { name: line.toUpperCase(), params: {}, value: "" };
+  const head = line.slice(0, colon);
+  const value = line.slice(colon + 1);
+  const [name, ...paramParts] = head.split(";");
+  const params: Record<string, string> = {};
+  for (const p of paramParts) {
+    const eq = p.indexOf("=");
+    if (eq > 0) params[p.slice(0, eq).toUpperCase()] = p.slice(eq + 1).replace(/^"|"$/g, "");
+  }
+  return { name: name.toUpperCase(), params, value };
+}
+
+export interface IcsParseOptions {
+  source: string;
+  from: Date;
+  to: Date;
+  /** Stable id prefix so repeated polls upsert instead of duplicating. */
+  idPrefix?: string;
+}
+
+/**
+ * Parse VEVENTs overlapping [from, to). Recurrence (RRULE) is expanded for the
+ * common DAILY/WEEKLY/MONTHLY/YEARLY + COUNT/UNTIL/INTERVAL cases, which covers
+ * essentially all real personal calendars.
+ */
+export function parseIcs(ics: string, opts: IcsParseOptions): CalendarEvent[] {
+  const lines = unfold(ics);
+  const out: CalendarEvent[] = [];
+  let cur: Record<string, { value: string; params: Record<string, string> }> | null = null;
+  let inEvent = false;
+
+  const flush = () => {
+    if (!cur) return;
+    const startProp = cur.DTSTART;
+    if (!startProp) {
+      cur = null;
+      return;
+    }
+    const start = parseIcsDate(startProp.value, startProp.params.TZID);
+    if (!start) {
+      cur = null;
+      return;
+    }
+    const endProp = cur.DTEND;
+    const end = endProp ? parseIcsDate(endProp.value, endProp.params.TZID) : undefined;
+    const durationMs = end && end > start ? end.getTime() - start.getTime() : 30 * 60_000;
+    const allDay = !startProp.value.includes("T");
+    const title = unescapeText(cur.SUMMARY?.value ?? "Untitled");
+    const baseUid = cur.UID?.value ?? uid("ics");
+    const rrule = cur.RRULE?.value;
+
+    const occurrences = rrule
+      ? expandRrule(rrule, start, opts.from, opts.to, allDay)
+      : start >= opts.from && start < opts.to
+        ? [start]
+        : [];
+
+    for (const occ of occurrences) {
+      const occEnd = new Date(occ.getTime() + durationMs);
+      out.push({
+        id: `${opts.idPrefix ?? opts.source}_${baseUid}_${occ.toISOString()}`.replace(/[^\w:@.-]/g, "_"),
+        title,
+        start: occ.toISOString(),
+        end: occEnd.toISOString(),
+        location: cur.LOCATION ? unescapeText(cur.LOCATION.value) : undefined,
+        attendees: collectAttendees(cur),
+        source: opts.source,
+        allDay,
+      });
+    }
+    cur = null;
+  };
+
+  for (const line of lines) {
+    if (line.startsWith("BEGIN:VEVENT")) {
+      inEvent = true;
+      cur = {};
+      continue;
+    }
+    if (line.startsWith("END:VEVENT")) {
+      flush();
+      inEvent = false;
+      continue;
+    }
+    if (!inEvent || !cur) continue;
+    const { name, params, value } = splitProp(line);
+    if (name === "ATTENDEE") {
+      cur[`ATTENDEE_${Object.keys(cur).length}`] = { value, params };
+      continue;
+    }
+    cur[name] = { value, params };
+  }
+  return out.sort((a, b) => a.start.localeCompare(b.start));
+}
+
+function collectAttendees(cur: Record<string, { value: string; params: Record<string, string> }>): string[] {
+  const names: string[] = [];
+  for (const [key, prop] of Object.entries(cur)) {
+    if (!key.startsWith("ATTENDEE")) continue;
+    const cn = prop.params.CN;
+    const raw = prop.value.replace(/^mailto:/i, "");
+    const name = cn ? unescapeText(cn) : raw.split("@")[0].replace(/[._]/g, " ");
+    if (name) names.push(name);
+  }
+  return names;
+}
+
+function expandRrule(
+  rrule: string,
+  start: Date,
+  from: Date,
+  to: Date,
+  allDay: boolean,
+): Date[] {
+  const parts: Record<string, string> = {};
+  for (const chunk of rrule.split(";")) {
+    const [k, v] = chunk.split("=");
+    if (k && v) parts[k.toUpperCase()] = v;
+  }
+  const freq = parts.FREQ;
+  const interval = Math.max(1, Number(parts.INTERVAL ?? 1));
+  const count = parts.COUNT ? Number(parts.COUNT) : undefined;
+  const until = parts.UNTIL ? parseIcsDate(parts.UNTIL) : undefined;
+  const byDay = parts.BYDAY?.split(",").filter(Boolean) ?? [];
+
+  if (!freq) return start >= from && start < to ? [start] : [];
+
+  // Hard ceiling: a bad RRULE must never spin.
+  const MAX = 500;
+  const out: Date[] = [];
+  const cursor = new Date(start);
+  const stepDays = freq === "DAILY" ? interval : freq === "WEEKLY" ? 7 * interval : 0;
+
+  if (freq === "DAILY" || freq === "WEEKLY") {
+    for (let i = 0, guard = 0; i < MAX && guard < 3000; guard++) {
+      if (until && cursor > until) break;
+      if (count !== undefined && i >= count) break;
+      if (cursor >= to) break;
+
+      if (freq === "WEEKLY" && byDay.length) {
+        const weekStart = new Date(cursor);
+        weekStart.setDate(weekStart.getDate() - ((weekStart.getDay() + 6) % 7));
+        for (const day of byDay) {
+          const target = "MO TU WE TH FR SA SU".split(" ").indexOf(day.slice(-2));
+          if (target < 0) continue;
+          const occ = new Date(weekStart);
+          occ.setDate(occ.getDate() + target);
+          occ.setHours(cursor.getHours(), cursor.getMinutes(), 0, 0);
+          if (occ < start) continue;
+          if (until && occ > until) continue;
+          if (occ >= from && occ < to) out.push(occ);
+        }
+        cursor.setDate(cursor.getDate() + stepDays);
+        i++;
+        continue;
+      }
+
+      if (cursor >= from && cursor < to) out.push(new Date(cursor));
+      cursor.setDate(cursor.getDate() + stepDays);
+      i++;
+    }
+    return out;
+  }
+
+  if (freq === "MONTHLY" || freq === "YEARLY") {
+    const stepMonths = freq === "MONTHLY" ? interval : 12 * interval;
+    for (let i = 0; i < MAX; i++) {
+      if (until && cursor > until) break;
+      if (count !== undefined && i >= count) break;
+      if (cursor >= to) break;
+      if (cursor >= from && cursor < to) out.push(new Date(cursor));
+      cursor.setMonth(cursor.getMonth() + stepMonths);
+    }
+    return out;
+  }
+
+  // Unsupported FREQ (e.g. HOURLY): treat as a single occurrence.
+  return start >= from && start < to ? [start] : [];
+}
+
+export function calendarAdapter(): LifeAdapter {
+  const icsCred = cred("XANA_CALENDAR_ICS_URLS", "XANA_CALENDAR_ICS_URL");
+  const id = "calendar";
+  const label = icsCred.present ? "Calendar (ICS)" : "Calendar";
+
+  const read = async (): Promise<{ data: { events: CalendarEvent[] }; status: AdapterStatus }> => {
+    const t0 = Date.now();
+    const store = getStore();
+    const from = startOfDay();
+    const to = endOfDay(addDays(new Date(), 7));
+
+    // Local events are always merged in — they are Xana's own write-back.
+    const local = store.eventsBetween(from.toISOString(), to.toISOString());
+    const events: CalendarEvent[] = local.map((e) => ({ ...e, source: e.source || "local" }));
+
+    if (!icsCred.present) {
+      return {
+        data: { events },
+        status: status(
+          id, label, "local", "local",
+          `${local.length} events · add XANA_CALENDAR_ICS_URLS to sync Google/Outlook`,
+          Date.now() - t0,
+        ),
+      };
+    }
+
+    const urls = icsCred.value.split(/[,\s]+/).filter(Boolean);
+    let imported = 0;
+    const failures: string[] = [];
+    for (const url of urls) {
+      try {
+        const body = await httpText(url, { timeoutMs: 6000 });
+        const parsed = parseIcs(body, {
+          source: "ics",
+          from: startOfDay(),
+          to: endOfDay(addDays(new Date(), 21)),
+          idPrefix: "ics",
+        });
+        events.push(...parsed);
+        imported += parsed.length;
+      } catch (err) {
+        failures.push(errorMessage(err));
+      }
+    }
+
+    if (imported === 0 && failures.length === urls.length) {
+      return {
+        data: { events },
+        status: status(id, label, "error", "local", `ICS unreachable: ${failures[0]}`, Date.now() - t0),
+      };
+    }
+    return {
+      data: { events },
+      status: status(
+        id, label, "connected", "live",
+        `${imported} from feed · ${local.length} local`,
+        Date.now() - t0,
+      ),
+    };
+  };
+
+  return defineAdapter<{ events: CalendarEvent[] }>({
+    id,
+    label,
+    ttlMs: 60_000,
+    empty: { events: [] },
+    produce: read,
+  });
+}

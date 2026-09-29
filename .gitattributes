@@ -1,0 +1,26 @@
+# Line endings, and which files are not text.
+#
+# `core.autocrlf` is configured for this clone, which means Git rewrites line
+# endings on checkout and stores LF in the repository. That is the behaviour
+# we want for source, and it is only safe if Git is never wrong about what is
+# text. It would be wrong about the SQLite file if `data/` were ever
+# un-ignored, and about any PNG that gets added later, so both are named here
+# as binary.
+
+* text=auto eol=lf
+
+*.db    binary
+*.db-journal binary
+*.sqlite binary
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.webp  binary
+*.ico   binary
+*.woff  binary
+*.woff2 binary
+
+# Lock files are generated. A diff of them is never reviewable, and marking
+# them as such keeps them out of the way without excluding them from the repo.
+package-lock.json -diff linguist-generated=true

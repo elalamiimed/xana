@@ -1,0 +1,44 @@
+{
+  "name": "xana",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Xana — a minimalist, Jarvis-inspired personal AI assistant with a persistent external brain.",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:next": "next dev -p 4310",
+    "build": "next build",
+    "start": "next start -p 4310",
+    "typecheck": "tsc --noEmit",
+    "seed": "node --import ./scripts/ts-loader.mjs scripts/seed.ts",
+    "demo": "node --import ./scripts/ts-loader.mjs scripts/demo.ts",
+    "smoke": "node --import ./scripts/ts-loader.mjs scripts/routes.ts",
+    "verify:web": "node scripts/verify-web.mjs",
+    "verify:orb": "node --import ./scripts/ts-loader.mjs scripts/verify-orb.mjs",
+    "verify:browser": "node scripts/verify-browser.mjs",
+    "verify:persistence": "node scripts/verify-persistence.mjs",
+    "verify:providers": "node --import ./scripts/ts-loader.mjs scripts/verify-providers.mjs",
+    "verify:cave": "node scripts/verify-cave.mjs",
+    "check:bundle": "node scripts/check-bundle.mjs",
+    "debug:key": "node scripts/debug-key.mjs",
+    "debug:engine": "node scripts/debug-engine.mjs",
+    "inspect": "node --import ./scripts/ts-loader.mjs scripts/inspect.ts",
+    "check": "npm run typecheck && npm run demo && npm run smoke && npm run verify:orb && npm run verify:providers"
+  },
+  "dependencies": {
+    "better-sqlite3": "^13.0.3",
+    "next": "^16.3.7",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.3.3",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^24.10.1",
+    "@types/react": "^19.2.7",
+    "@types/react-dom": "^19.2.4",
+    "tailwindcss": "^4.3.3",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3"
+  }
+}

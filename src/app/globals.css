@@ -1,0 +1,1141 @@
+/* Tailwind v4 scans the whole project by default and has no built-in
+   notion of "not my source". Xana vendors the Impeccable design skill at
+   `.impeccable/` for its reference documentation, and that clone is a full
+   monorepo: test fixtures, demo pages and provider builds, all of which
+   contain Tailwind class names. Scanning them added roughly 28 KB of
+   stylesheet for classes this app never uses — their fixtures even ship a
+   `should-flag.html` full of deliberate anti-patterns.
+
+   `source(none)` turns automatic detection off, and the two `@source`
+   lines below name the only directories that should be scanned. Naming
+   them explicitly rather than negating the clone is deliberate: a new
+   vendored directory should be invisible by default, not visible until
+   someone remembers to exclude it.
+
+   Two things worth knowing if this is ever revisited. `@source not
+   "../../.impeccable"` looks like the obvious fix and does *not* work on
+   its own, because automatic detection still contributes the clone. And
+   the dev server served a stale stylesheet chunk through several edits,
+   with an unchanged asset hash, so a size that refuses to move is evidence
+   of a cache rather than of a directive that had no effect.
+
+   `scripts/verify-web.mjs` asserts that no stock-palette utility from the
+   clone reaches the served CSS, so this cannot regress silently. */
+@import "tailwindcss" source(none);
+@source "../../src";
+@source "../../src/app/globals.css";
+
+/* ==================================================================
+   Xana — design tokens.
+
+   Every colour, duration, radius and shadow in the UI resolves to one
+   of these. Nothing downstream hardcodes a value (DESIGN.md, preamble).
+
+   THE ONE STRUCTURAL RULE: accents are stored as raw sRGB *channels*
+   (`--accent-rgb: 127 227 227`), never as a finished colour. Every
+   accent shade in the system is then composed with `rgb(var(--accent-rgb)
+   / <alpha>)`, which means the entire accent ramp — borders, washes,
+   glows, gradients, shadows — re-derives itself from a single channel
+   triplet. That is what makes the theme picker in Settings possible:
+   change three numbers and the whole interface recolours, including
+   colours that were never explicitly themed.
+   ================================================================== */
+
+:root {
+  /* ---- Deep surfaces. Each step is a real, visible step: on a
+     near-black UI a 1.05x luminance change is invisible, so these move
+     further apart than a light theme's would. ---- */
+  --void: #07070a;
+  --surface: #101017;
+  --surface-2: #181820;
+  --surface-3: #20202a;
+  --hairline: #262632;
+  --hairline-2: #33333f;
+
+  /* ---- Text. Three weights of presence, and each one is a measured
+     contrast decision rather than a guess.
+
+     `--text-faint` is the load-bearing one. It carries every `.label`,
+     every `.timestamp`, and — critically — every placeholder, at 10-13px.
+     The earlier value (#6A6C7E) measured 3.89:1 against the void and
+     3.66:1 against a surface, which fails the 4.5:1 floor for body-size
+     text and fails it hardest where it matters most, on placeholders.
+     #84879A is the *minimum* lightness that clears 4.5:1 on all four
+     surfaces including `--surface-3` (4.52:1), so it is the darkest this
+     token can be. Do not darken it again; lighten the surface instead.
+
+     Measured, against --void / --surface / --surface-2 / --surface-3:
+       --text       17.3 / 16.3 / 15.2 / 14.1
+       --text-dim    8.2 /  7.7 /  7.2 /  6.7
+       --text-faint  5.6 /  5.3 /  4.9 /  4.5   <- all pass 4.5:1
+     Hairlines are exempt: they are borders, not text, and WCAG 1.4.11
+     governs them only where a border is the sole means of identifying a
+     control. Xana never relies on one for that. ---- */
+  --text: #eceef4;
+  --text-dim: #a2a4b4;
+  --text-faint: #84879a;
+
+  /* ---- Semantic. Warm and cool rather than red and green, so a
+     warning never looks like an alarm and "good" never looks like a
+     success toast. ---- */
+  --warn: #e0b279;
+  --good: #86d6a6;
+  --danger: #e08a8a;
+
+  /* ---- Accents. The two below are the *defaults*; the settings
+     layer overrides them inline on <html>. ---- */
+  --accent-rgb: 111 227 227;
+  --accent-2-rgb: 156 140 255;
+  --accent: rgb(var(--accent-rgb));
+  --accent-2: rgb(var(--accent-2-rgb));
+  --glow-rgb: var(--accent-rgb);
+
+  /* Accent alpha ramp — use these, never invented opacities. */
+  --a-04: rgb(var(--accent-rgb) / 0.04);
+  --a-08: rgb(var(--accent-rgb) / 0.08);
+  --a-14: rgb(var(--accent-rgb) / 0.14);
+  --a-24: rgb(var(--accent-rgb) / 0.24);
+  --a-40: rgb(var(--accent-rgb) / 0.4);
+  --a-64: rgb(var(--accent-rgb) / 0.64);
+  --a2-08: rgb(var(--accent-2-rgb) / 0.08);
+  --a2-14: rgb(var(--accent-2-rgb) / 0.14);
+  --a2-24: rgb(var(--accent-2-rgb) / 0.24);
+
+  /* ---- Depth. Every shadow is an offset plus a real blur: a zero-offset
+     coloured halo is a glow, and a glow is decoration, not elevation. The
+     glow tokens exist separately below, for the one case where light
+     rather than height is the point.
+
+     Composition order is deliberate: a tight contact shadow first, then a
+     wide ambient one. Neither is pure black — each carries a few percent
+     of the surface hue, which is what stops a dark UI reading as flat
+     grey. ---- */
+  --shadow-1: 0 1px 2px rgb(8 8 14 / 0.55);
+  --shadow-2:
+    0 1px 2px rgb(8 8 14 / 0.5),
+    0 6px 18px -4px rgb(8 8 14 / 0.6);
+  --shadow-3:
+    0 2px 4px rgb(8 8 14 / 0.5),
+    0 16px 40px -12px rgb(8 8 14 / 0.75);
+  /* Light, not height. Used only where something should read as emitting
+     rather than as raised: the orb's own canvas draws its own, so this is
+     for controls that genuinely glow on interaction. */
+  --shadow-glow: 0 0 20px -6px rgb(var(--glow-rgb) / 0.22);
+  --shadow-glow-lg: 0 0 56px -12px rgb(var(--glow-rgb) / 0.3);
+
+  /* ---- Ambient light. The page is not a flat fill: two very low
+     radial washes give the void a top and a horizon, so the eye reads
+     the orb as sitting *in* a space rather than on a black rectangle. ---- */
+  --ambient-glow: 0.13;
+  --ambient: radial-gradient(
+      ellipse 130% 80% at 50% -18%,
+      rgb(var(--glow-rgb) / var(--ambient-glow)) 0%,
+      transparent 62%
+    ),
+    radial-gradient(
+      ellipse 90% 60% at 50% 118%,
+      rgb(var(--accent-2-rgb) / 0.07) 0%,
+      transparent 60%
+    );
+
+  /* ---- Surface fills. A card is a lit panel, not a flat swatch: the
+     gradient's top edge catches the same light as the ambient wash. ---- */
+  --fill-1: linear-gradient(
+    180deg,
+    rgb(255 255 255 / 0.035) 0%,
+    rgb(255 255 255 / 0) 55%
+  );
+  --fill-sheen: linear-gradient(
+    180deg,
+    rgb(255 255 255 / 0.06) 0%,
+    rgb(255 255 255 / 0.012) 100%
+  );
+
+  /* Typography */
+  --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, monospace;
+
+  /* Space scale: 4 8 12 16 24 32 48 64 96 */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 24px;
+  --s-6: 32px;
+  --s-7: 48px;
+  --s-8: 64px;
+  --s-9: 96px;
+
+  /* Shape. Card radius sits inside the 12-16px band; the panel step
+     above it is for sheets, which are not cards. */
+  --r-sm: 8px;
+  --r-md: 12px;
+  --r-lg: 16px;
+  --r-xl: 20px;
+  --r-full: 999px;
+
+  /* Motion. `--motion` is the global speed multiplier the settings
+     layer writes; 1 is the designed pace, 0 would freeze everything. */
+  --motion: 1;
+  --t-fast: calc(180ms * var(--motion));
+  --t-base: calc(320ms * var(--motion));
+  --t-slow: calc(520ms * var(--motion));
+  --t-orbit: 18s;
+  --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --ease-soft: cubic-bezier(0.4, 0, 0.2, 1);
+  /* A gentle overshoot, for things that arrive rather than move. */
+  --ease-out-back: cubic-bezier(0.34, 1.3, 0.64, 1);
+
+  /* Layout */
+  --content-max: 760px;
+  --header-h: 60px;
+  --orb-size: 260px;
+}
+
+/* Larger canvases get a larger orb. The 3D renderer reads its size
+   from the element, so this is the only place the size is decided. */
+@media (min-width: 768px) {
+  :root {
+    --orb-size: 300px;
+  }
+}
+
+@media (min-width: 1200px) {
+  :root {
+    --orb-size: 340px;
+  }
+}
+
+/* ==================================================================
+   Tailwind v4 theme mapping.
+   `inline` keeps the utilities pointing at the live custom properties,
+   so a token change in :root flows through every utility — and so does
+   a theme change written onto <html> at runtime.
+   ================================================================== */
+
+@theme inline {
+  --color-void: var(--void);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-hairline: var(--hairline);
+  --color-hairline-2: var(--hairline-2);
+
+  /* `color-mix` is what makes `bg-accent/12` work against a runtime
+     channel triplet. Supported in every browser that runs the rest of
+     this stylesheet. */
+  --color-accent: rgb(var(--accent-rgb));
+  --color-accent-2: rgb(var(--accent-2-rgb));
+
+  --color-text: var(--text);
+  --color-dim: var(--text-dim);
+  --color-faint: var(--text-faint);
+  --color-warn: var(--warn);
+  --color-good: var(--good);
+  --color-danger: var(--danger);
+
+  --font-sans: var(--font);
+  --font-mono: var(--font-mono);
+
+  --radius-sm: var(--r-sm);
+  --radius-md: var(--r-md);
+  --radius-lg: var(--r-lg);
+  --radius-xl: var(--r-xl);
+  --radius-full: var(--r-full);
+
+  --ease-xana: var(--ease);
+  --ease-soft: var(--ease-soft);
+
+  /* Spacing names for the 4 8 12 16 24 32 48 64 96 scale. The numeric
+     utilities (p-6 = 24px) stay available alongside these. */
+  --spacing-1: var(--s-1);
+  --spacing-2: var(--s-2);
+  --spacing-3: var(--s-3);
+  --spacing-4: var(--s-4);
+  --spacing-5: var(--s-5);
+  --spacing-6: var(--s-6);
+  --spacing-7: var(--s-7);
+  --spacing-8: var(--s-8);
+  --spacing-9: var(--s-9);
+}
+
+/* ==================================================================
+   Void everywhere, plus the ambient wash.
+   ================================================================== */
+
+html,
+body {
+  background-color: var(--void);
+}
+
+body {
+  color: var(--text);
+  font-family: var(--font);
+  font-weight: 300;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* The wash is a fixed pseudo-element rather than a `background-image` on
+   body: a background scrolls with the page and would slide the light
+   source as the user reads. This stays put. `pointer-events: none` so it
+   never intercepts a click, and a negative z-index so it sits behind
+   every panel without needing a stacking context on the app shell. */
+.ambient-wash {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: var(--ambient);
+  transition: background var(--t-slow) var(--ease);
+}
+
+/* A grain overlay used to live here: a tiled `feTurbulence` SVG at 2.5%
+   opacity, to stop the large gradients banding on an 8-bit display. It is
+   gone on purpose. An SVG filter imitating film grain is named as an
+   amateur tell, and the thing it was guarding against is now handled by
+   the layers themselves: the ambient wash is soft enough, and the cards
+   carry their own top sheen, so there is no large flat gradient left to
+   band. If banding ever shows up on a real display, fix the gradient
+   stops rather than reaching for a noise texture. */
+
+/* ==================================================================
+   Type utilities (DESIGN.md §2)
+   ================================================================== */
+
+/* The signature of the interface: 10px, 500, uppercase, 0.18em. */
+.label {
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.4;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.metric {
+  font-size: 30px;
+  font-weight: 200;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  color: var(--text);
+}
+
+.timestamp {
+  font-size: 11px;
+  font-weight: 300;
+  letter-spacing: 0.04em;
+  color: var(--text-faint);
+}
+
+/* The 15px body size the whole interface is set in. One step up from the
+   original 13–14px: the previous scale was legible on a 27" display and
+   cramped on a laptop, and this is a product people read, not a spec. */
+.body-text {
+  font-size: 15px;
+  line-height: 1.65;
+  font-weight: 300;
+  letter-spacing: 0.005em;
+  color: var(--text);
+}
+
+/* ==================================================================
+   Surfaces (DESIGN.md §3).
+
+   Elevation is declared ONCE. A 1px border together with a wide soft
+   shadow is the "ghost card": two competing mechanisms describing two
+   different heights, which reads as neither. So a panel carries the
+   border and a low shadow, and nothing invents a bigger one on hover.
+   ================================================================== */
+
+.hairline {
+  border: 1px solid var(--hairline);
+}
+
+.card {
+  position: relative;
+  background-color: var(--surface);
+  background-image: var(--fill-1);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-1);
+  transition:
+    border-color var(--t-base) var(--ease),
+    background-color var(--t-base) var(--ease);
+}
+
+/* Interactive cards warm their border and lift their fill. No transform
+   and no glow: this is an Operate surface, where an animated card is
+   movement the user did not ask for. */
+.card-interactive:hover {
+  border-color: var(--a-24);
+  background-color: var(--surface-2);
+}
+
+.panel {
+  background-color: var(--surface);
+  background-image: var(--fill-1);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-xl);
+  box-shadow: var(--shadow-2);
+}
+
+/* A floating surface that must read above the page: the settings sheet,
+   the tooltip, the model picker. This is the one place a wider shadow is
+   earned, because these genuinely sit above the document. */
+.floating {
+  background-color: var(--surface-2);
+  border: 1px solid var(--hairline-2);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-3);
+  backdrop-filter: blur(12px);
+}
+
+/* ==================================================================
+   Entry animations. Every one of these is "arrive on the spot", never
+   "fly in" — with `prefers-reduced-motion` they all collapse to a plain
+   fade (see the media query at the foot of this file).
+   ================================================================== */
+
+.card-entry {
+  animation: card-in var(--t-base) var(--ease) both;
+}
+
+.toast-in {
+  animation: rise-in var(--t-base) var(--ease-out-back) both;
+}
+
+.sheet-in {
+  animation: sheet-in var(--t-base) var(--ease) both;
+}
+
+.scrim-in {
+  animation: fade-in var(--t-fast) var(--ease) both;
+}
+
+/* ==================================================================
+   Focus (DESIGN.md §4) — accent, visible, never the browser default.
+   ================================================================== */
+
+/* The composer is the one exception, and it has to be named here rather
+   than fixed where it is used. Tailwind emits utilities after this
+   stylesheet, and this rule is unlayered while `.outline-none` is not, so
+   `outline-none` on the textarea loses no matter which order the classes
+   are written in. The result was a 2px accent ring drawn *inside* the
+   composer's own pill — two focus indicators stacked, the inner one
+   squared off against the pill's radius.
+ *
+ * The composer does not need an outline: the pill already answers with
+ * `focus-within:border-accent/24`, which is the indicator this surface
+ * wants. So the textarea is excluded here, and the pill is the entire
+ * focus story. */
+:focus-visible:not(#xana-composer) {
+  outline: 2px solid var(--a-40);
+  outline-offset: 2px;
+  border-radius: var(--r-sm);
+}
+
+/* ==================================================================
+   Scrollbar — near-invisible: thin hairline thumb, transparent track.
+   ================================================================== */
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--hairline) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: var(--hairline);
+  border-radius: var(--r-full);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--hairline-2);
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+::selection {
+  background: var(--a-24);
+  color: var(--text);
+}
+
+/* ==================================================================
+   Buttons
+   ================================================================== */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-2);
+  border-radius: var(--r-full);
+  font-size: 13px;
+  font-weight: 400;
+  letter-spacing: 0.01em;
+  padding: 9px 18px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition:
+    background-color var(--t-fast) var(--ease),
+    border-color var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease),
+    box-shadow var(--t-fast) var(--ease),
+    transform var(--t-fast) var(--ease);
+}
+
+.btn:active:not(:disabled) {
+  transform: translateY(1px) scale(0.99);
+}
+
+.btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  background-color: var(--a-14);
+  border-color: var(--a-24);
+  color: var(--text);
+}
+
+.btn-primary:hover:not(:disabled) {
+  background-color: var(--a-24);
+  border-color: var(--a-40);
+}
+
+.btn-ghost {
+  background-color: transparent;
+  border-color: var(--hairline);
+  color: var(--text-dim);
+}
+
+.btn-ghost:hover:not(:disabled) {
+  border-color: var(--hairline-2);
+  background-color: var(--surface-2);
+  color: var(--text);
+}
+
+/* ==================================================================
+   Form fields
+   ================================================================== */
+
+.field {
+  width: 100%;
+  background-color: rgb(0 0 0 / 0.28);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-md);
+  padding: 9px 12px;
+  /* 16px, not 14px. iOS Safari force-zooms the whole page when a focused
+     input's text is under 16px, which on a full-height app layout throws
+     the composition off screen and the user has to pinch back out. 16px
+     is the only value that prevents it, so this is a floor rather than a
+     preference. */
+  font-size: 16px;
+  font-weight: 300;
+  color: var(--text);
+  transition:
+    border-color var(--t-fast) var(--ease),
+    box-shadow var(--t-fast) var(--ease),
+    background-color var(--t-fast) var(--ease);
+}
+
+/* Above the phone breakpoint the zoom risk is gone and 16px is a shade
+   large for a settings label, so it comes back down. */
+@media (min-width: 768px) {
+  .field {
+    font-size: 14px;
+  }
+}
+
+.field::placeholder {
+  color: var(--text-faint);
+}
+
+.field:hover:not(:disabled) {
+  border-color: var(--hairline-2);
+}
+
+.field:focus {
+  outline: none;
+  border-color: var(--a-40);
+  background-color: rgb(0 0 0 / 0.4);
+  box-shadow: 0 0 0 3px var(--a-08);
+}
+
+.field:disabled {
+  opacity: 0.45;
+}
+
+/* A native select, restyled.
+ *
+ * The chevron is an inline data URI, which is the one place in this
+ * stylesheet that cannot reference a token: a data URI is not parsed for
+ * `var()`, so the stroke colour has to be a literal. It is therefore the
+ * one literal here that has to be maintained by hand, and it is called out
+ * for that reason — the value below is `--text-faint`, and if that token
+ * moves, this moves with it. A mask would make it a token, but `.select` is
+ * always applied alongside `.field`, and a mask paints from
+ * `background-color`, so it would fight the field's own background. A
+ * literal that is documented beats a clever rule that is fragile. */
+.select {
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' fill='none'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%2384879a' stroke-width='1.2' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  padding-right: 32px;
+}
+
+.select option {
+  background-color: var(--surface-2);
+  color: var(--text);
+}
+
+/* Range input for the motion-speed slider. */
+.slider {
+  appearance: none;
+  width: 100%;
+  height: 3px;
+  border-radius: var(--r-full);
+  background: var(--hairline);
+  cursor: pointer;
+}
+
+.slider::-webkit-slider-thumb {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: none;
+  box-shadow: var(--shadow-glow);
+  cursor: pointer;
+  transition: transform var(--t-fast) var(--ease);
+}
+
+.slider::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+}
+
+.slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: none;
+  box-shadow: var(--shadow-glow);
+  cursor: pointer;
+}
+
+/* ==================================================================
+   Switches — a real <button role="switch">, styled.
+   ================================================================== */
+
+.switch {
+  position: relative;
+  width: 38px;
+  height: 22px;
+  shrink: 0;
+  border-radius: var(--r-full);
+  border: 1px solid var(--hairline);
+  background-color: rgb(0 0 0 / 0.35);
+  cursor: pointer;
+  transition:
+    background-color var(--t-base) var(--ease),
+    border-color var(--t-base) var(--ease);
+}
+
+.switch[aria-checked="true"] {
+  background-color: var(--a-24);
+  border-color: var(--a-40);
+}
+
+.switch-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background-color: var(--text-faint);
+  transition:
+    transform var(--t-base) var(--ease-out-back),
+    background-color var(--t-base) var(--ease);
+}
+
+.switch[aria-checked="true"] .switch-knob {
+  transform: translateX(16px);
+  background-color: var(--accent);
+  box-shadow: var(--shadow-glow);
+}
+
+/* ==================================================================
+   Keyframes (DESIGN.md §4)
+   ================================================================== */
+
+/* The breath: scale 1 -> 1.035 with the glow rising underneath. Used for
+   the CSS fallback orb and the header's activity dot. */
+@keyframes breath {
+  from {
+    transform: scale(1);
+    opacity: 0.55;
+  }
+  to {
+    transform: scale(1.035);
+    opacity: 0.85;
+  }
+}
+
+/* Ripple: one ring leaving the orb on a reply. Forwards — never loops. */
+@keyframes ripple {
+  from {
+    transform: scale(1);
+    opacity: 0.4;
+  }
+  to {
+    transform: scale(1.6);
+    opacity: 0;
+  }
+}
+
+@keyframes ripple-soft {
+  from {
+    opacity: 0.4;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes spin-cw {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes spin-ccw {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(-360deg);
+  }
+}
+
+/* Acting: one secondary-accent flash on the rim, then back. */
+@keyframes flash {
+  from {
+    box-shadow:
+      0 0 0 1px var(--a2-24),
+      0 0 28px 0 var(--a2-14);
+  }
+  to {
+    box-shadow:
+      0 0 0 1px transparent,
+      0 0 0 0 transparent;
+  }
+}
+
+@keyframes card-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.995);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes sheet-in {
+  from {
+    opacity: 0;
+    transform: translateX(24px) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
+@keyframes shimmer {
+  from {
+    background-position: -200% 0;
+  }
+  to {
+    background-position: 200% 0;
+  }
+}
+
+/* The thinking placeholder: two bars of drifting light. Used while a
+   reply is in flight so the transcript has a shape to fill. */
+.skeleton {
+  background-image: linear-gradient(
+    90deg,
+    var(--surface-2) 0%,
+    var(--surface-3) 50%,
+    var(--surface-2) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.6s linear infinite;
+  border-radius: var(--r-sm);
+}
+
+/* ==================================================================
+   The CSS orb (DESIGN.md §5) — the *fallback*.
+
+   The live orb is rendered in 3D on a canvas (Orb.tsx). These rules
+   remain for two real cases: a browser without canvas, and a reader who
+   has asked for reduced motion, for whom a still, layered, breathing
+   disc is a better answer than a rotating particle field. Keeping both
+   is why `Orb.tsx` can promise that the status region is never empty.
+   ================================================================== */
+
+.orb {
+  position: relative;
+  width: var(--orb-size);
+  height: var(--orb-size);
+  display: grid;
+  place-items: center;
+  isolation: isolate;
+}
+
+.orb-layer {
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.orb-halo {
+  width: var(--orb-size);
+  height: var(--orb-size);
+  background: radial-gradient(
+    circle,
+    rgb(var(--glow-rgb) / 0.1) 0%,
+    transparent 70%
+  );
+  transition:
+    transform var(--t-slow) var(--ease),
+    background var(--t-slow) var(--ease);
+}
+
+.orb-ring {
+  border: 1px solid var(--hairline);
+  opacity: 0;
+  transition: opacity var(--t-slow) var(--ease);
+}
+
+.orb-ring-1 {
+  width: calc(var(--orb-size) * 0.985);
+  height: calc(var(--orb-size) * 0.985);
+}
+
+.orb-ring-2 {
+  width: calc(var(--orb-size) * 0.8);
+  height: calc(var(--orb-size) * 0.8);
+}
+
+.orb-ring-3 {
+  width: calc(var(--orb-size) * 0.615);
+  height: calc(var(--orb-size) * 0.615);
+}
+
+.orb-core {
+  width: calc(var(--orb-size) * 0.415);
+  height: calc(var(--orb-size) * 0.415);
+  background: radial-gradient(
+    circle,
+    rgb(var(--glow-rgb) / 0.24) 0%,
+    transparent 72%
+  );
+  box-shadow: 0 0 0 1px var(--a-40);
+  opacity: 1;
+  transition:
+    opacity var(--t-slow) var(--ease),
+    box-shadow var(--t-slow) var(--ease);
+}
+
+.orb-light {
+  width: calc(var(--orb-size) * 0.14);
+  height: calc(var(--orb-size) * 0.14);
+  background: radial-gradient(
+    circle,
+    rgb(var(--glow-rgb) / 0.4) 0%,
+    transparent 70%
+  );
+}
+
+.orb-ripple {
+  width: calc(var(--orb-size) * 0.415);
+  height: calc(var(--orb-size) * 0.415);
+  box-shadow: 0 0 0 1px var(--a-40);
+  opacity: 0;
+  animation: ripple 900ms var(--ease) forwards;
+}
+
+/* ----------------------------- dormant ------------------------------ */
+.state-dormant .orb-core {
+  --breath-duration: 8s;
+  opacity: 0.35;
+  animation: breath var(--breath-duration) var(--ease-soft) infinite alternate;
+}
+
+.state-dormant .orb-light {
+  --breath-duration: 8s;
+  animation: breath var(--breath-duration) var(--ease-soft) infinite alternate;
+}
+
+/* The dormant halo desaturates toward the faint text tone. This is the
+   one place the fallback orb uses a literal rather than a token: the
+   resting state needs to read as *off*, so it takes the faint tone at a
+   whisper of alpha, and `color-mix` against a token would be a heavier
+   construction than the effect deserves. The literal is `--text-faint`
+   with 0x24 alpha, and it has to move when that token moves. */
+.state-dormant .orb-halo {
+  background: radial-gradient(circle, #84879a24 0%, transparent 70%);
+}
+
+/* ------------------------------- idle ------------------------------- */
+.state-idle .orb-core,
+.state-idle .orb-light {
+  --breath-duration: 6.5s;
+  animation: breath var(--breath-duration) var(--ease-soft) infinite alternate;
+}
+
+/* ----------------------------- thinking ----------------------------- */
+.state-thinking .orb-core {
+  --breath-duration: 2.4s;
+  opacity: 0.9;
+  animation: breath var(--breath-duration) var(--ease-soft) infinite alternate;
+}
+
+.state-thinking .orb-light {
+  --breath-duration: 2.4s;
+  animation: breath var(--breath-duration) var(--ease-soft) infinite alternate;
+}
+
+/* Rings read as thought, not as a spinner: 18 / 26 / 40s, opposing ways. */
+.state-thinking .orb-ring-1 {
+  opacity: 0.14;
+  animation: spin-cw 18s linear infinite;
+}
+
+.state-thinking .orb-ring-2 {
+  opacity: 0.14;
+  animation: spin-ccw 26s linear infinite;
+}
+
+.state-thinking .orb-ring-3 {
+  opacity: 0.14;
+  animation: spin-cw 40s linear infinite;
+}
+
+/* ----------------------------- speaking ----------------------------- */
+.state-speaking .orb-core {
+  --breath-duration: 6.5s;
+  opacity: 1;
+  animation: breath var(--breath-duration) var(--ease-soft) infinite alternate;
+}
+
+.state-speaking .orb-light {
+  --breath-duration: 6.5s;
+  animation: breath var(--breath-duration) var(--ease-soft) infinite alternate;
+}
+
+.state-speaking .orb-halo {
+  transform: scale(1.15);
+}
+
+.state-speaking .orb-ring-1,
+.state-speaking .orb-ring-2,
+.state-speaking .orb-ring-3 {
+  opacity: 0.14;
+}
+
+/* ------------------------------ acting ------------------------------ */
+.state-acting .orb-core {
+  --breath-duration: 6.5s;
+  animation:
+    breath var(--breath-duration) var(--ease-soft) infinite alternate,
+    flash 600ms var(--ease) 1;
+}
+
+.state-acting .orb-light {
+  --breath-duration: 6.5s;
+  animation: breath var(--breath-duration) var(--ease-soft) infinite alternate;
+}
+
+/* ==================================================================
+   Reduced motion (DESIGN.md §4) — non-negotiable, and the JS renderer
+   checks the same query (see `prefersReducedMotion` in motion.ts).
+   The breath, the rotation, the ripple and the stagger stop. Opacity
+   and colour transitions survive, so a state change still reads.
+   ================================================================== */
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --t-fast: 1ms;
+    --t-base: 1ms;
+    --t-slow: 1ms;
+  }
+
+  /* 1. The breath. Frozen at a fixed per-state opacity instead, so the
+        orb still differentiates dormant / idle / thinking / speaking. */
+  .state-dormant .orb-core,
+  .state-dormant .orb-light,
+  .state-idle .orb-core,
+  .state-idle .orb-light,
+  .state-thinking .orb-core,
+  .state-thinking .orb-light,
+  .state-speaking .orb-core,
+  .state-speaking .orb-light,
+  .state-acting .orb-core,
+  .state-acting .orb-light {
+    animation: none;
+  }
+
+  .state-dormant .orb-core {
+    opacity: 0.35;
+  }
+
+  .state-idle .orb-core {
+    opacity: 0.7;
+  }
+
+  .state-thinking .orb-core {
+    opacity: 0.9;
+  }
+
+  .state-speaking .orb-core {
+    opacity: 1;
+  }
+
+  /* 2. The rotation. Rings stay visible, stationary. */
+  .state-thinking .orb-ring-1,
+  .state-thinking .orb-ring-2,
+  .state-thinking .orb-ring-3 {
+    animation: none;
+    opacity: 0.14;
+  }
+
+  /* 3. The ripple becomes a pure opacity fade, no expansion. */
+  .orb-ripple {
+    animation: ripple-soft 900ms var(--ease) forwards;
+  }
+
+  /* 4. The secondary-accent flash becomes a held rim colour. */
+  .state-acting .orb-core {
+    box-shadow: 0 0 0 1px var(--a2-24);
+  }
+
+  /* 5. The stagger. Cards fade in together, on the spot. The !important
+        is required to beat the per-card inline animation-delay. */
+  .card-entry,
+  .toast-in,
+  .sheet-in {
+    animation-duration: 200ms;
+    animation-delay: 0ms !important;
+    animation-timing-function: var(--ease);
+  }
+
+  .card-entry {
+    animation-name: card-in;
+  }
+
+  .toast-in {
+    animation-name: fade-in;
+  }
+
+  .sheet-in {
+    animation-name: fade-in;
+  }
+
+  /* The skeleton stops sweeping; it is a static placeholder. */
+  .skeleton {
+    animation: none;
+  }
+
+  /* The halo stops expanding. Its `transform` transition is deliberately
+     left alone so returning from `speaking` cross-fades rather than snaps —
+     a colour fade is exactly the kind of motion this setting permits. */
+  .state-speaking .orb-halo {
+    transform: none;
+  }
+
+  /* Interactive cards stop lifting. */
+  .card-interactive:hover {
+    transform: none;
+  }
+}
+
+/* Honour the OS setting for the keyframes that encode travel: with
+   reduced motion nothing rises anywhere. Declared outside the media query
+   so the keyframes themselves stay single-sourced. */
+@media (prefers-reduced-motion: reduce) {
+  @keyframes card-in {
+    from {
+      opacity: 0;
+      transform: none;
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  @keyframes rise-in {
+    from {
+      opacity: 0;
+      transform: none;
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  @keyframes sheet-in {
+    from {
+      opacity: 0;
+      transform: none;
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+}

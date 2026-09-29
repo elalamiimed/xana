@@ -1,0 +1,86 @@
+# Xana — what belongs in the repository.
+#
+# This project lives inside a OneDrive folder, so the directory it sits in
+# contains a great deal that is not Xana: a 437 MB clone of another project,
+# two dependency trees, build output, and the assistant's own runtime state.
+# The rules below are the line between "the app" and "everything that happens
+# to be next to the app". `git add -A` should never pick up any of it.
+#
+# The test for anything you are unsure about: would a fresh clone need it, or
+# can it be regenerated? If it can be regenerated, it is ignored here.
+
+# --------------------------------------------------------------------
+# Dependencies and build output
+# --------------------------------------------------------------------
+
+node_modules/
+.next/
+out/
+build/
+dist/
+
+# TypeScript. `next-env.d.ts` is generated on every install, and the
+# tsbuildinfo is a cache that goes stale the moment a file changes.
+*.tsbuildinfo
+next-env.d.ts
+
+# The npm cache is deliberately kept inside the project (see .npmrc) so that
+# installs need no access outside the working directory. That makes it a
+# 360 MB directory sitting in the repository root, and it is never committed.
+.npm-cache/
+
+# --------------------------------------------------------------------
+# Secrets
+# --------------------------------------------------------------------
+
+# Every .env variant, but not the example file: a documented template is how
+# someone else knows which variables exist.
+.env
+.env.*
+!.env.example
+
+# --------------------------------------------------------------------
+# Xana's runtime state
+# --------------------------------------------------------------------
+
+# The SQLite store and the settings file, which holds API keys in plaintext.
+# This is the user's life, not the repository's. It is safe to delete — she
+# rebuilds from empty — but it must never be published.
+data/
+
+# --------------------------------------------------------------------
+# The Impeccable skill clone
+# --------------------------------------------------------------------
+
+# A full clone of https://github.com/pbakaus/impeccable, used as a design
+# reference while building the interface. It is a git repository in its own
+# right (hence the exclusion rather than a submodule — this is a steerable
+# overlay, not a pinned dependency), it is 437 MB, and none of it is ours to
+# publish. Nothing in `src/`, `scripts/` or the config references it at
+# runtime; `DESIGN.md` is the contract that survived it.
+.impeccable/
+
+# The critique reports that came out of that review pass. Kept on disk as the
+# record of why the interface looks the way it does, deliberately not
+# published. Remove this line to version them.
+.impeccable-review/
+
+# --------------------------------------------------------------------
+# Local agent and editor configuration
+# --------------------------------------------------------------------
+
+# Per-machine instructions and permissions for whichever coding tool is in
+# use. Useful locally, meaningless to a clone.
+.claude/
+.dsh/
+.vscode/
+.idea/
+
+# --------------------------------------------------------------------
+# Operating system
+# --------------------------------------------------------------------
+
+.DS_Store
+Thumbs.db
+desktop.ini
+*~
