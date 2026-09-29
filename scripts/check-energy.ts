@@ -281,6 +281,54 @@ check(
   asksAt(readingAgo(20, 9), 20) === true,
 );
 
+/**
+ * And it survives the trip through `buildNudges`.
+ *
+ * The checks above call the source directly, which is not the same thing as
+ * reaching the user: `buildNudges` dedupes and then cuts to the five highest
+ * priorities, so a check-in that is built correctly can still be dropped
+ * before anyone sees it. That is the failure this guards, and it is invisible
+ * from the source module.
+ */
+const busyEvening = {
+  tasks: [
+    { id: "t1", title: "One", priority: 1 as const, status: "open" as const, createdAt: new Date(Date.now() - 9 * 86400000).toISOString(), source: "x" },
+    { id: "t2", title: "Two", priority: 1 as const, status: "open" as const, createdAt: new Date(Date.now() - 9 * 86400000).toISOString(), source: "x" },
+    { id: "t3", title: "Three", priority: 1 as const, status: "open" as const, createdAt: new Date(Date.now() - 9 * 86400000).toISOString(), source: "x" },
+    { id: "t4", title: "Four", priority: 1 as const, status: "open" as const, createdAt: new Date(Date.now() - 9 * 86400000).toISOString(), source: "x" },
+    { id: "t5", title: "Five", priority: 1 as const, status: "open" as const, createdAt: new Date(Date.now() - 9 * 86400000).toISOString(), source: "x" },
+    { id: "t6", title: "Six", priority: 1 as const, status: "open" as const, createdAt: new Date(Date.now() - 9 * 86400000).toISOString(), source: "x" },
+  ],
+  events: [
+    { id: "e1", title: "Block", start: new Date(new Date().setHours(22, 0, 0, 0)).toISOString(), end: new Date(new Date().setHours(23, 0, 0, 0)).toISOString(), source: "x" },
+  ],
+  health: [{ date: toDateKey(), energy: 3, energyAt: readingAgo(20, 9), source: "user" }],
+  freeMinutes: 200,
+};
+
+const reachedUser = buildNudges({ ...busyEvening, ...{ now: new Date(new Date().setHours(20, 0, 0, 0)) } } as never);
+check(
+  "the ask survives the shortlist on a busy evening",
+  reachedUser.some((n) => /A number, 1 to 5/.test(n.text)),
+  reachedUser.map((n) => `p${n.priority}`).join(","),
+);
+check(
+  "and the shortlist is still capped at five",
+  reachedUser.length <= 5,
+  String(reachedUser.length),
+);
+
+const suppressed = buildNudges({
+  ...busyEvening,
+  health: [{ date: toDateKey(), energy: 3, energyAt: readingAgo(20, 1), source: "user" }],
+  now: new Date(new Date().setHours(20, 0, 0, 0)),
+} as never);
+check(
+  "answering removes it from the shortlist",
+  !suppressed.some((n) => /A number, 1 to 5/.test(n.text)),
+  suppressed.map((n) => n.text.slice(0, 30)).join(" | "),
+);
+
 store.close();
 rmSync(dir, { recursive: true, force: true });
 invalidateContext();

@@ -260,6 +260,19 @@ check(
   detect([habit(4, 2)]).every((p) => typeof p.basis === "string" && p.basis.length > 10),
   JSON.stringify(detect([habit(4, 2)]).map((p) => p.basis)),
 );
+/**
+ * A basis has to be about something measured, not a restatement of the label.
+ *
+ * "the size of the change against last week" named a change without naming
+ * what changed. Every basis worth having names its subject, so this requires
+ * the statement to be substantive rather than merely present — the field is
+ * only useful if it can be argued with.
+ */
+check(
+  "and names its subject rather than restating the label",
+  detect([habit(4, 2)]).every((p) => /\b(share|change|how|over|time|week|milestones?)\b/i.test(p.basis)),
+  JSON.stringify(detect([habit(4, 2)]).map((p) => p.basis)),
+);
 check(
   "a 4-day streak and a 60-day streak do not get the same figure",
   Boolean(short && long && short.confidence !== long.confidence),

@@ -236,7 +236,144 @@ check(
     (survived.find((s) => s.kind === "pattern") as { detectedBy: string }).detectedBy === "detector",
 );
 
-/* ---- 4. No model, no request ----------------------------------------- */
+/* ---- 4. The provider's own envelope ---------------------------------- */
+
+console.log("\nResponse shapes a real provider returns\n");
+
+/**
+ * The stub above returns the minimum. A live endpoint returns more, and the
+ * extras are where a parser breaks.
+ *
+ * DeepSeek is what this project is configured for, and its chat-completions
+ * envelope is the OpenAI one: `choices[0].message.content` carrying a JSON
+ * *string*, surrounded by id/usage/finish_reason. These cases use that exact
+ * shape, plus the two ways a model wraps JSON in practice.
+ */
+const shaped = (content: string, extra: Record<string, unknown> = {}) => ({
+  status: 200,
+  payload: {
+    id: "chatcmpl-9f2c",
+    object: "chat.completion",
+    created: 1759160000,
+    model: "deepseek-chat",
+    choices: [
+      {
+        index: 0,
+        message: { role: "assistant", content },
+        finish_reason: "stop",
+      },
+    ],
+    usage: { prompt_tokens: 812, completion_tokens: 96, total_tokens: 908 },
+    ...extra,
+  },
+});
+
+const good = JSON.stringify({
+  pattern: { analysis: "Two of your runs are breaking in the same week.", evidence: ["2 of 7 this week"] },
+  recall: [{ title: "Spare key", because: "unmentioned for months" }],
+});
+
+for (const [label, payload] of [
+  ["a full DeepSeek envelope", shaped(good)],
+  ["the same, JSON in a code fence", shaped("```json\n" + good + "\n```")],
+  ["the same, with a sentence in front", shaped("Here is what I found:\n" + good)],
+  [
+    "a reasoning model's extra field",
+    shaped(good, {
+      choices: [
+        {
+          index: 0,
+          message: { role: "assistant", content: good, reasoning_content: "The user's habit data shows…" },
+          finish_reason: "stop",
+        },
+      ],
+    }),
+  ],
+] as const) {
+  nextReply = payload as never;
+  const got = await analyseLifeState({ lifeState: base });
+  check(
+    `"${label}" yields a reading`,
+    got?.pattern?.analysis === "Two of your runs are breaking in the same week.",
+    JSON.stringify(got?.pattern?.analysis),
+  );
+  check(`"${label}" keeps the memory`, got?.recall?.[0]?.title === "Spare key");
+}
+
+// A model that answers with the JSON wrapped in prose and a trailing sentence
+// is the common real-world shape; the brace walk has to find the object.
+nextReply = shaped(
+  "Sure.\n```json\n" + good + "\n```\nLet me know if you want more detail.",
+) as never;
+check(
+  "a fenced answer with trailing prose still parses",
+  (await analyseLifeState({ lifeState: base }))?.pattern?.analysis ===
+    "Two of your runs are breaking in the same week.",
+);
+
+// Anthropic's envelope is a different shape entirely, and the client branches
+// on the configured provider to read it. So the provider has to actually be
+// Anthropic for this to exercise anything — sending an Anthropic body to a
+// client configured for OpenAI tests the wrong branch and passes for the
+// wrong reason.
+writeFileSync(
+  path.join(dir, "settings.json"),
+  JSON.stringify({
+    model: {
+      enabled: true,
+      provider: "anthropic",
+      baseUrl: "https://stub.invalid",
+      model: "claude-sonnet-4",
+      apiKey: "stub-key-not-a-real-secret",
+      temperature: 0.3,
+    },
+  }),
+  "utf8",
+);
+await new Promise((r) => setTimeout(r, 20));
+
+nextReply = {
+  status: 200,
+  payload: {
+    id: "msg_01",
+    type: "message",
+    role: "assistant",
+    model: "claude-sonnet-4",
+    content: [{ type: "text", text: good }],
+    stop_reason: "end_turn",
+    usage: { input_tokens: 812, output_tokens: 96 },
+  },
+} as never;
+const anthropic = await analyseLifeState({ lifeState: base });
+check(
+  "an Anthropic content-block envelope parses under an Anthropic provider",
+  anthropic?.pattern?.analysis === "Two of your runs are breaking in the same week.",
+  JSON.stringify(anthropic?.pattern?.analysis ?? anthropic),
+);
+check(
+  "and the request went to the messages endpoint",
+  calls.at(-1)?.url.includes("/messages") === true,
+  calls.at(-1)?.url,
+);
+
+// Back to OpenAI-compatible for the remaining cases.
+writeFileSync(
+  path.join(dir, "settings.json"),
+  JSON.stringify({
+    model: {
+      enabled: true,
+      provider: "openai",
+      baseUrl: "https://stub.invalid/v1",
+      model: "stub-model",
+      apiKey: "stub-key-not-a-real-secret",
+      temperature: 0.3,
+    },
+  }),
+  "utf8",
+);
+await new Promise((r) => setTimeout(r, 20));
+
+/* ---- 5. No model, no request ----------------------------------------- */
 
 console.log("\nWhen there is no model\n");
 

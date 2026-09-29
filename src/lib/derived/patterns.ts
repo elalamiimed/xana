@@ -235,7 +235,7 @@ function stalledGoal(input: PatternInputs): Pattern | undefined {
       wilsonLower(stalled.progress.milestonesDone, Math.max(1, stalled.progress.milestonesTotal)),
       2,
     ),
-    basis: `how many of its ${stalled.progress.milestonesTotal} milestones it has closed`,
+    basis: `how many of its ${stalled.progress.milestonesTotal} milestones the goal has closed`,
     evidence: [
       stalled.progress.note,
       `${stalled.progress.milestonesDone} of ${stalled.progress.milestonesTotal} milestones done`,
@@ -313,7 +313,7 @@ function productiveWindow(input: PatternInputs): Pattern | undefined {
     key: `productive-${part}`,
     observation: `${Math.round(share * 100)}% of what you finish, you finish in the ${part}.`,
     confidence: round(Math.min(0.88, 0.45 + share * 0.35), 2),
-    basis: `the share of completed work that lands in the ${part}`,
+    basis: `the share of this week's completed work that lands in the ${part}`,
     evidence: [
       `${count} of ${completedTasks.length} completed tasks in the ${part}`,
       `next busiest: ${ranked[1] ? `${ranked[1][0]} (${ranked[1][1]})` : "n/a"}`,
@@ -352,7 +352,7 @@ function focusTrend(input: PatternInputs): Pattern | undefined {
     key: `focus-trend-${direction}`,
     observation: `Focused time is ${direction} ${Math.round(Math.abs(delta) * 100)}% on last week.`,
     confidence: round(Math.min(0.8, 0.45 + Math.abs(delta) * 0.25), 2),
-    basis: "the size of the change against last week",
+    basis: "the change in focused time against the same week last week",
     evidence: [`${Math.round(thisWeek / 60)}h this week`, `${Math.round(lastWeek / 60)}h last week`],
     suggestion: delta < 0 ? `Want a focus block tomorrow morning?` : undefined,
     detectedAt: nowIso(),
