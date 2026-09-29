@@ -49,15 +49,35 @@ const TEXT_EXTENSIONS = new Set([
 ]);
 
 /**
- * CJK ranges are the tell for a CP936 round trip, U+FFFD for a lossy decode.
+ * The shapes a bad round trip leaves behind.
  *
- * Xana's own copy is English, so any CJK character in the tree is either a
- * corruption or a deliberate translation — and there is no translation, which
- * is exactly why this can be a hard failure rather than a warning.
+ * Built from character codes rather than written as literals: a literal
+ * pattern matches itself, and this file would fail its own check. The
+ * sequences are data, not prose, and assembling them says so.
+ *
+ *   A-tilde or A-circumflex followed by a continuation byte is where an
+ *   accented letter and a curly apostrophe land once their bytes have been
+ *   read as Windows-1252. That pairing does not occur in English prose.
+ *
+ *   An em dash needs only its first two decoded characters to be recognised.
+ *   The third and fourth vary by decoder, and an earlier version that pinned
+ *   them let a straight-quote dash through undetected.
+ *
+ * The examples are deliberately not written out here. They were, and the
+ * guard failed on its own source.
  */
+const ch = (code) => String.fromCharCode(code);
+const CIRCUMFLEX = `${ch(0xc2)}${ch(0xc3)}`;
+const CONTINUATION = `[${ch(0x80)}-${ch(0xbf)}]`;
+const DASH_PREFIX = `${ch(0xe2)}${ch(0x20ac)}`;
+
 const CORRUPTION = [
   { label: "mojibake (CJK from a codepage round trip)", test: /[\u3000-\u9fff\uff00-\uffef]/ },
   { label: "replacement character (lossy decode)", test: /\ufffd/ },
+  {
+    label: "mojibake (UTF-8 read as Latin-1)",
+    test: new RegExp(`[${CIRCUMFLEX}]${CONTINUATION}|${DASH_PREFIX}`),
+  },
 ];
 
 const findings = [];
