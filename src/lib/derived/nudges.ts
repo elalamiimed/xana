@@ -99,26 +99,46 @@ function overdueTasks(input: NudgeInputs, now: Date): Nudge | undefined {
 function streakRisk(input: NudgeInputs): Nudge | undefined {
   const risk = input.habits.filter((h) => h.atRisk && h.streak >= 3).sort((a, b) => b.streak - a.streak)[0];
   if (!risk) return undefined;
-  return nudge(
-    "suggest",
-    `${risk.name} is at ${risk.streak} days. Log it and it holds.`,
-    76,
-    { type: "log_habit", habitId: risk.id },
-  );
+
+  const remaining = risk.targetPerWeek - risk.thisWeek;
+  const name = risk.name;
+
+  // One line for every streak told the user nothing about which streak it was.
+  // A record-length run and a three-day one are different losses, and a week
+  // that needs one more log is a different ask from a week that needs four.
+  const text =
+    risk.streak >= risk.longestStreak && risk.streak >= 14
+      ? `${name} is at ${risk.streak} days — your longest run. Logging it today keeps that.`
+      : remaining <= 1
+        ? `One ${name.toLowerCase()} today and the ${risk.streak}-day run holds.`
+        : `${name} is at ${risk.streak} days and needs ${remaining} this week.`;
+
+  return nudge("suggest", text, 76, { type: "log_habit", habitId: risk.id });
 }
 
 /** Weather that should change what you wear or carry. */
 function weatherWarning(input: NudgeInputs): Nudge | undefined {
   const w = input.weather;
   if (!w || w.synthetic) return undefined;
+
+  // These are readings, not advice, and they read that way now. "Take the
+  // coat" and "Layers." were instructions attached to a measurement, which is
+  // the same mistake as a pattern telling the user what to do about a number.
+  const wet = Math.round(w.precipitationChance * 100);
   if (w.precipitationChance >= 0.55) {
-    return nudge("info", `${Math.round(w.precipitationChance * 100)}% chance of rain in ${w.location}. Take the coat.`, 60);
+    return nudge(
+      "info",
+      wet >= 80
+        ? `Rain in ${w.location} — ${wet}% chance.`
+        : `${wet}% chance of rain in ${w.location}.`,
+      60,
+    );
   }
   if (w.highC - w.lowC >= 12) {
-    return nudge("info", `Big swing today — ${w.lowC}° to ${w.highC}°. Layers.`, 45);
+    return nudge("info", `A ${w.highC - w.lowC}° swing today, ${w.lowC}° to ${w.highC}°.`, 45);
   }
   if (w.temperatureC <= 2) {
-    return nudge("info", `${w.temperatureC}° and ${w.condition}. It's properly cold.`, 50);
+    return nudge("info", `${w.temperatureC}° and ${w.condition} in ${w.location}.`, 50);
   }
   return undefined;
 }
@@ -129,7 +149,18 @@ function sleepDebt(input: NudgeInputs): Nudge | undefined {
   if (recent.length < 3) return undefined;
   const debt = recent.reduce((acc, h) => acc + Math.max(0, 7.5 - (h.sleepHours ?? 7.5)), 0);
   if (debt < 5) return undefined;
-  return nudge("warn", `${debt.toFixed(1)}h of sleep debt this week. Tonight is the cheapest fix.`, 72);
+
+  // How big the debt is changes what it is worth saying. Five hours is a bad
+  // week; fifteen is a fortnight of it, and "tonight is the cheapest fix" is
+  // advice for the first and not the second.
+  const text =
+    debt >= 12
+      ? `${debt.toFixed(1)}h of sleep debt. That is not one early night, it is a fortnight of them.`
+      : debt >= 8
+        ? `${debt.toFixed(1)}h down this week. Two good nights would clear most of it.`
+        : `${debt.toFixed(1)}h of sleep debt. Tonight is the cheapest place to start.`;
+
+  return nudge("warn", text, 72);
 }
 
 /** A goal milestone due soon and not yet done. */
@@ -163,13 +194,36 @@ function celebrate(input: NudgeInputs, now: Date): Nudge | undefined {
   });
   if (justDone.length === 0) return undefined;
   const t = justDone[0];
-  return nudge("celebrate", `"${t.title}" is done. That was one of the real ones.`, 40);
+
+  // "That was one of the real ones" for a five-minute chore is the kind of
+  // praise that teaches a user to ignore praise. How long it had been open is
+  // the thing that makes it worth saying, and it is knowable.
+  const age = daysBetween(new Date(t.createdAt), now);
+  const text =
+    age >= 14
+      ? `"${t.title}" is done — open for ${age} days. That one has been sitting there a while.`
+      : justDone.length > 1
+        ? `"${t.title}" is done, and ${justDone.length - 1} more with it.`
+        : `"${t.title}" is done.`;
+
+  return nudge("celebrate", text, 40);
 }
 
 /** Free time worth naming — only when it is substantial and unscheduled. */
 function freeBlock(input: NudgeInputs): Nudge | undefined {
   if (input.freeMinutes < 90 || input.events.length === 0) return undefined;
-  return nudge("info", `${humanDuration(input.freeMinutes)} unscheduled today.`, 30);
+
+  // Three hours free is not the same offer as ninety minutes, and the sentence
+  // should not pretend otherwise: one is a gap between things, the other is
+  // enough to finish something.
+  const text =
+    input.freeMinutes >= 240
+      ? `${humanDuration(input.freeMinutes)} unscheduled — enough to finish something real.`
+      : input.freeMinutes >= 150
+        ? `${humanDuration(input.freeMinutes)} free. Worth claiming before it fills.`
+        : `${humanDuration(input.freeMinutes)} between things.`;
+
+  return nudge("info", text, 30);
 }
 
 /** Carry over yesterday's unfinished priority-1 work. */
@@ -178,7 +232,21 @@ function carriedOver(input: NudgeInputs, now: Date): Nudge | undefined {
     (t) => t.priority === 1 && t.status !== "done" && daysBetween(new Date(t.createdAt), now) >= 5,
   );
   if (stale.length === 0) return undefined;
-  return nudge("suggest", `"${stale[0].title}" has been top priority for ${daysBetween(new Date(stale[0].createdAt), now)} days. Finish it or drop it.`, 66);
+
+  const oldest = stale.sort(
+    (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+  )[0];
+  const age = daysBetween(new Date(oldest.createdAt), now);
+
+  // Two weeks at the top of a list is a different situation from five days:
+  // one is a busy stretch, the other is a decision being avoided, and the
+  // nudge is the only place that can say so without nagging.
+  const text =
+    age >= 14
+      ? `"${oldest.title}" has been your top priority for ${age} days. Either it is not actually the priority, or something else is.`
+      : `"${oldest.title}" has sat at the top for ${age} days.`;
+
+  return nudge("suggest", text, 66);
 }
 
 /**
