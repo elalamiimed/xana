@@ -272,6 +272,46 @@ check(
   JSON.stringify(detect([habit(365, 7)]).map((p) => p.confidence)),
 );
 
+/**
+ * The observations themselves have to respond to the data.
+ *
+ * They interpolate a number in every case, which is what made them look
+ * dynamic, but the *phrasing* was one sentence per detector: a 4-day run and
+ * the longest run of the user's life were described the same way, as were a
+ * week nearly saved and a week already lost. So the assertion is on the words,
+ * not the digits.
+ */
+const words = (text: string) => text.replace(/[0-9]+/g, "").replace(/\s+/g, " ").trim();
+
+const obs = (h: unknown[]) => detect(h).find((p) => p.key.startsWith("habit-at-risk"))?.observation ?? "";
+
+const newborn = obs([habit(5, 1)]);
+const longRun = obs([habit(60, 1)]);
+const nearlyThere = obs([habit(12, 6)]);
+const longestEver = obs([{ ...(habit(45, 2) as object), longestStreak: 45 } as never]);
+
+check("a habit observation is produced", newborn.length > 0, newborn);
+check(
+  "a 5-day run and a 60-day run are described differently",
+  words(newborn) !== words(longRun),
+  `"${words(newborn)}" vs "${words(longRun)}"`,
+);
+check(
+  "a week one log from saved says so",
+  /one more/i.test(nearlyThere),
+  nearlyThere,
+);
+check(
+  "a run matching the user's own record is named as such",
+  /longest/i.test(longestEver),
+  longestEver,
+);
+check(
+  "the phrasing varies across the four cases, not just the numbers",
+  new Set([newborn, longRun, nearlyThere, longestEver].map(words)).size >= 3,
+  JSON.stringify([newborn, longRun, nearlyThere, longestEver].map(words)),
+);
+
 store.close();
 rmSync(dir, { recursive: true, force: true });
 invalidateContext();

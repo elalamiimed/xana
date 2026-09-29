@@ -105,10 +105,30 @@ function habitAtRisk(input: PatternInputs): Pattern | undefined {
   if (!atRisk) return undefined;
 
   const remaining = atRisk.targetPerWeek - atRisk.thisWeek;
+  const name = atRisk.name.toLowerCase();
+
+  /**
+   * What is actually at stake, said differently depending on what it is.
+   *
+   * The old line had one shape for every case — "your X streak is N days and
+   * needs M more this week to hold" — which reads the same whether the run is
+   * the longest the user has ever managed or four days old, and whether the
+   * week is nearly saved or already lost. Those are different situations and
+   * they deserve different sentences.
+   */
+  const observation =
+    atRisk.streak >= atRisk.longestStreak && atRisk.streak >= 20
+      ? `Your ${name} run is ${atRisk.streak} days — the longest you have managed. ${remaining} this week keeps it.`
+      : remaining <= 1
+        ? `One more ${name} this week and the ${atRisk.streak}-day run holds.`
+        : remaining >= atRisk.targetPerWeek - 1
+          ? `${atRisk.streak} days of ${name}, and the week has barely started. It needs ${remaining} of ${atRisk.targetPerWeek}.`
+          : `${atRisk.streak} days of ${name}. ${remaining} more this week, out of ${atRisk.targetPerWeek}.`;
+
   return {
     id: uid("pat"),
     key: `habit-at-risk-${atRisk.id}`,
-    observation: `Your ${atRisk.name.toLowerCase()} streak is ${atRisk.streak} days and needs ${remaining} more this week to hold.`,
+    observation,
     // The streak is the sample: n days observed, all of them kept. A 4-day
     // streak and a 26-day streak are very different amounts of evidence, and
     // a flat figure hid that completely.
@@ -160,10 +180,19 @@ function sleepMoodCoupling(input: PatternInputs): Pattern | undefined {
   const gap = longMood - shortMood;
   if (gap < 0.5) return undefined;
 
+  // A large effect and a small one are different claims, and the sample behind
+  // them matters: the same gap read off 8 nights is a hint, off 60 it is a
+  // pattern. The fixed line stated the number and left both out.
+  const strength = gap >= 1.2 ? "clearly" : gap >= 0.8 ? "measurably" : "slightly";
+  const observation =
+    pairs.length >= 40
+      ? `Across ${pairs.length} nights, short sleep costs you ${gap.toFixed(1)} points of next-day mood — the effect is ${strength} there.`
+      : `Nights under 6.5h have cost you ${gap.toFixed(1)} points of mood the next day, over ${pairs.length} nights so far.`;
+
   return {
     id: uid("pat"),
     key: "sleep-mood-coupling",
-    observation: `Nights under 6.5h cost you roughly ${gap.toFixed(1)} points of mood the next day.`,
+    observation,
     confidence: round(Math.min(0.85, 0.45 + gap * 0.2), 2),
     basis: `the mood difference between short and full nights, over ${pairs.length} paired nights`,
     evidence: [
@@ -183,10 +212,21 @@ function stalledGoal(input: PatternInputs): Pattern | undefined {
     .sort((a, b) => (b.progress.daysRemaining ?? 999) - (a.progress.daysRemaining ?? 999))[0];
   if (!stalled) return undefined;
 
+  // Overdue and unstarted is a different sentence from parked-but-scheduled.
+  // The old line reported the percentage either way, which tells the user
+  // nothing they cannot see on the card.
+  const days = stalled.progress.daysRemaining;
+  const observation =
+    typeof days === "number" && days < 0
+      ? `"${stalled.goal.title}" is ${Math.abs(days)} days past its date and still at ${Math.round(stalled.progress.progress * 100)}%.`
+      : stalled.progress.milestonesDone === 0 && stalled.progress.milestonesTotal > 0
+        ? `"${stalled.goal.title}" has ${stalled.progress.milestonesTotal} steps and none of them started.`
+        : `"${stalled.goal.title}" stopped moving at ${Math.round(stalled.progress.progress * 100)}%, ${stalled.progress.milestonesDone} of ${stalled.progress.milestonesTotal} steps in.`;
+
   return {
     id: uid("pat"),
     key: `goal-stalled-${stalled.goal.id}`,
-    observation: `"${stalled.goal.title}" has stalled at ${Math.round(stalled.progress.progress * 100)}%.`,
+    observation,
     // A stalled goal with milestones behind it has a sample: how many of them
     // it has actually closed. The lower bound is deliberately unflattering for
     // a goal with two milestones, because two milestones is not much evidence
