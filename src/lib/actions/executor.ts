@@ -13,7 +13,16 @@
 import type { ActionIntent, ActionOutcome, Task } from "../core/types";
 import { getStore, type XanaStore } from "../core/store";
 import { invalidateContext } from "../context/gateway";
-import { addDays, addMinutes, formatDay, formatTime, toDateKey, uid } from "../core/time";
+import {
+  addDays,
+  addMinutes,
+  formatDay,
+  formatTime,
+  humanDuration,
+  nowIso,
+  toDateKey,
+  uid,
+} from "../core/time";
 import { buildReflection, monthlyReflectionInputs, weeklyReflectionInputs } from "../derived/reflection";
 import { computeGoalProgress } from "../derived/goals";
 import { habitsWithHealth } from "../derived/habits";
@@ -59,6 +68,9 @@ export function executeAction(intent: ActionIntent, opts: ExecuteOptions = {}): 
 
       case "log_habit":
         return finish(logHabit(intent.habitId, intent.date, store));
+
+      case "log_energy":
+        return finish(logEnergy(intent.level, intent.at, store));
 
       case "remember":
         return finish(remember(intent, store, opts.sessionId));
@@ -309,6 +321,78 @@ function logHabit(habitId: string, date: string | undefined, store: XanaStore): 
     ids: [habit.id],
     refresh: ["habits", "context"],
   };
+}
+
+/**
+ * The user telling her how they feel, on a scale of one to five.
+ *
+ * Every other energy figure in the app is inferred — from sleep, from the
+ * circadian curve, from how booked the day is. This one is asked for, which
+ * makes it the only honest answer to "how much have I got today", and the only
+ * one that can disagree with the forecast.
+ *
+ * The reply says something the user does not already know, or it says nothing
+ * extra. "Low" on a day with four hours of meetings is worth flagging; "4"
+ * on an empty day is not worth a paragraph, so it gets one clause and stops.
+ */
+function logEnergy(level: number, at: string | undefined, store: XanaStore): ActionOutcome {
+  const clamped = Math.max(1, Math.min(5, Math.round(level)));
+  const today = toDateKey();
+  const when = at ?? nowIso();
+
+  store.upsertHealth({ date: today, energy: clamped, energyAt: when, source: "user" });
+
+  const context = energyContext(store);
+  const label = ENERGY_LABELS[clamped];
+
+  return {
+    ok: true,
+    effect: "energy.logged",
+    message: `${clamped}/5 — ${label}.${context}`,
+    refresh: ["context"],
+  };
+}
+
+const ENERGY_LABELS: Record<number, string> = {
+  1: "running on empty",
+  2: "low",
+  3: "steady",
+  4: "sharp",
+  5: "at your peak",
+};
+
+/**
+ * One clause about what that reading means against the rest of the day.
+ *
+ * Derived, not stored: it is a comparison between what the user just said and
+ * what the calendar and last night say, so it has to be computed at the moment
+ * they say it. Returns an empty string when there is nothing to add, which is
+ * the common case and the whole point.
+ */
+function energyContext(store: XanaStore): string {
+  const today = toDateKey();
+  const events = store.eventsBetween(`${today}T00:00:00`, `${today}T23:59:59`).filter((e) => !e.allDay);
+  let meetingMinutes = 0;
+  for (const event of events) {
+    meetingMinutes += Math.max(
+      0,
+      Math.round((new Date(event.end).getTime() - new Date(event.start).getTime()) / 60_000),
+    );
+  }
+
+  const latest = store.healthSamples(1)[0];
+  const slept = latest?.sleepHours;
+  const reading = latest?.energy ?? 3;
+
+  if (reading <= 2 && meetingMinutes >= 180) {
+    return ` That is ${humanDuration(meetingMinutes)} of calendar against it — worth deciding now what gets dropped.`;
+  }
+  if (reading >= 4 && typeof slept === "number" && slept < 6.5) {
+    return ` On ${slept.toFixed(1)}h of sleep, so it is borrowed rather than yours.`;
+  }
+  if (reading <= 2) return " Keep the day small.";
+  if (reading >= 4 && meetingMinutes === 0) return " The day is clear for it.";
+  return "";
 }
 
 function remember(

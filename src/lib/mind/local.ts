@@ -459,6 +459,55 @@ const handleDayQuestion: Handler = ({ text, lifeState }) => {
   return { text: localBriefingReply(lifeState), cards: [briefingCard(lifeState)] };
 };
 
+/**
+ * Is the user *reporting* their energy, or *asking* about it?
+ *
+ * "energy 3" is a report; "how's my energy" is a question. They arrive through
+ * the same word, so the deciding question is whether a level is present. The
+ * distinction matters because the two do opposite things: one writes the only
+ * self-reported number in the app, the other reads a forecast.
+ */
+function energyLevelIn(text: string): number | undefined {
+  const words: Array<[RegExp, number]> = [
+    [/\b(?:empty|exhausted|drained|wiped|shattered|running on empty)\b/i, 1],
+    [/\b(?:low|tired|sluggish|flat|foggy|rough)\b/i, 2],
+    [/\b(?:steady|ok|okay|fine|alright|average|normal|middling)\b/i, 3],
+    [/\b(?:sharp|good|strong|solid|clear|fresh)\b/i, 4],
+    [/\b(?:peak|great|excellent|brilliant|unstoppable|on fire)\b/i, 5],
+  ];
+
+  // Explicit coordinates first: "3/5", "energy: 4", "energy 2". The filler
+  // words matter — "my energy is 4" and "energy level 4" are how people
+  // actually type it, and a pattern that only accepts a bare adjacency misses
+  // both while still looking like it works.
+  const explicit =
+    /\b([1-5])\s*\/\s*5\b/i.exec(text) ??
+    /\benergy\b(?:\s+(?:level|rating|score|reading|is|at|of|around|about|like|today|now|this\s+\w+)){0,3}[^0-9a-z]{0,3}([1-5])\b/i.exec(
+      text,
+    );
+  if (explicit) return Number(explicit[1]);
+
+  // Sentences that are about a level by their shape. "at 3" on its own is not
+  // enough — "at 3" is also a time, and this must not swallow it.
+  const phrased =
+    /\b(?:i(?:'m| am)|feeling|feel|rating|rate|score|put me)\b[^.!?]{0,24}?\b([1-5])\b/i.exec(text) ??
+    /\b([1-5])\s*(?:out of|\/)\s*(?:5|five)\b/i.exec(text);
+  if (phrased) return Number(phrased[1]);
+
+  for (const [pattern, level] of words) {
+    if (pattern.test(text)) return level;
+  }
+  return undefined;
+}
+
+/** "energy 3", "I'm at 2 today", "feeling a 4". Writes the reading. */
+const handleLogEnergy: Handler = ({ text, sessionId }) => {
+  const level = energyLevelIn(text);
+  if (level === undefined) return undefined;
+  const outcome = executeAction({ type: "log_energy", level }, { sessionId });
+  return { text: "", outcome };
+};
+
 /** Energy, in its own words. */
 const handleEnergy: Handler = ({ text, lifeState }) => {
   if (!any(text, /\benergy\b/i, /\bhow am i (?:doing|feeling)\b/i, /\btired\b/i)) return undefined;
@@ -537,6 +586,7 @@ const HANDLERS: Handler[] = [
   handleTask,
   handleBrief,
   handleDayQuestion,
+  handleLogEnergy,
   handleEnergy,
   handleGoals,
   handleRecall,

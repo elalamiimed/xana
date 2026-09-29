@@ -20,6 +20,7 @@
     "verify:providers": "node --import ./scripts/ts-loader.mjs scripts/verify-providers.mjs",
     "verify:cave": "node scripts/verify-cave.mjs",
     "verify:briefing": "node --import ./scripts/ts-loader.mjs scripts/check-briefing.ts",
+    "verify:energy": "node --import ./scripts/ts-loader.mjs scripts/check-energy.ts",
     "check:encoding": "node scripts/check-encoding.mjs",
     "check:bundle": "node scripts/check-bundle.mjs",
     "debug:key": "node scripts/debug-key.mjs",

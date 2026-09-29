@@ -508,6 +508,13 @@ export type ActionIntent =
   | { type: "create_goal"; title: string; horizon: GoalHorizon; targetDate?: string; why?: string }
   | { type: "complete_milestone"; milestoneId: string }
   | { type: "log_habit"; habitId: string; date?: string }
+  /**
+   * The user reporting their own energy, 1-5.
+   *
+   * The only energy figure in the app that is not inferred from sleep, load
+   * or circadian rhythm — it is what they say it is.
+   */
+  | { type: "log_energy"; level: number; at?: string }
   | { type: "remember"; kind: MemoryKind; title: string; content: string; entities?: string[]; tags?: string[] }
   | { type: "start_focus"; label: string; minutes: number }
   | { type: "protect_block"; title: string; start: string; end: string; reason?: string }

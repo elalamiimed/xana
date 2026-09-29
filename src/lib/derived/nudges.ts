@@ -198,6 +198,55 @@ function patternAction(input: NudgeInputs): Nudge | undefined {
   return nudge("suggest", p.suggestion, 55, p.action);
 }
 
+/**
+ * Asking the user for their energy, twice a day.
+ *
+ * Every other source here reads something. This one asks, because the reading
+ * it wants does not exist anywhere else — sleep, load and the circadian curve
+ * can be inferred, but "how much have you actually got" is a fact only the
+ * user holds, and it is the one number that can disagree with the forecast.
+ *
+ * Twice, not more, and the limit is structural rather than a cooldown counter:
+ * the nudge only exists while the newest reading is stale, so answering it is
+ * what makes it stop. There is no separate bookkeeping to fall out of step
+ * with the data, which is the failure mode a cooldown would have.
+ *
+ * It fires in the middle of each half of the waking day. Asking at 06:00 is
+ * asking before there is anything to report; asking at 14:00 and 20:00 catches
+ * the shape of the day, which is what makes two readings worth more than one.
+ */
+function energyCheckIn(input: NudgeInputs, now: Date): Nudge | undefined {
+  const hour = now.getHours();
+
+  // The two windows. Outside them, nothing.
+  const evening = hour >= 19 && hour < 23;
+  const afternoon = hour >= 13 && hour < 16;
+  if (!evening && !afternoon) return undefined;
+
+  const latest = input.health[input.health.length - 1];
+  const at = latest?.energyAt ? new Date(latest.energyAt) : undefined;
+  const hoursSince = at ? (now.getTime() - at.getTime()) / 3_600_000 : Infinity;
+  if (hoursSince < 7) return undefined;
+
+  // Say why it is being asked, from the day itself. A bare "rate your energy"
+  // is a form; this is a question with a reason attached.
+  const events = input.events.filter((e) => !e.allDay && new Date(e.end) > now);
+  const nextAt = events.sort((a, b) => a.start.localeCompare(b.start))[0];
+  const why = nextAt
+    ? `${nextAt.title} is still ahead`
+    : events.length > 0
+      ? `${events.length} still to get through`
+      : "the rest of today is yours";
+
+  return nudge(
+    "suggest",
+    hoursSince === Infinity
+      ? `You have not told me your energy today — ${why}. A number, 1 to 5.`
+      : `How is your energy now? ${why}. A number, 1 to 5.`,
+    58,
+  );
+}
+
 const SOURCES = [
   imminentEvent,
   inProgress,
@@ -209,6 +258,7 @@ const SOURCES = [
   carriedOver,
   weatherWarning,
   patternAction,
+  energyCheckIn,
   celebrate,
   freeBlock,
 ];

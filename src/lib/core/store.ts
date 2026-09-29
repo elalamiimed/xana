@@ -98,6 +98,11 @@ export class XanaStore {
       { table: "goals", column: "last_touched_at", definition: "TEXT" },
       // Pinned memories are always considered for recall and never decay.
       { table: "memories", column: "pinned", definition: "INTEGER NOT NULL DEFAULT 0" },
+      // The user's own energy reading, 1-5, and when they gave it. Unlike
+      // every other health field this is not imported from anywhere — it is
+      // the one number in the app that comes from asking them.
+      { table: "health_samples", column: "energy", definition: "INTEGER" },
+      { table: "health_samples", column: "energy_at", definition: "TEXT" },
     ];
 
     for (const { table, column, definition } of additions) {
@@ -239,6 +244,8 @@ export class XanaStore {
         active_minutes INTEGER,
         resting_heart_rate INTEGER,
         mood TEXT,
+        energy INTEGER,
+        energy_at TEXT,
         source TEXT NOT NULL DEFAULT 'local'
       );
       CREATE INDEX IF NOT EXISTS idx_health_day ON health_samples(day DESC);
@@ -1126,8 +1133,8 @@ export class XanaStore {
     const s: HealthSample = { ...sample, source: sample.source || "local" };
     this.db
       .prepare(
-        `INSERT INTO health_samples (day, sleep_hours, sleep_quality, steps, active_minutes, resting_heart_rate, mood, source)
-         VALUES (@day, @sleepHours, @sleepQuality, @steps, @activeMinutes, @restingHeartRate, @mood, @source)
+        `INSERT INTO health_samples (day, sleep_hours, sleep_quality, steps, active_minutes, resting_heart_rate, mood, energy, energy_at, source)
+         VALUES (@day, @sleepHours, @sleepQuality, @steps, @activeMinutes, @restingHeartRate, @mood, @energy, @energyAt, @source)
          ON CONFLICT(day) DO UPDATE SET
            sleep_hours = COALESCE(excluded.sleep_hours, health_samples.sleep_hours),
            sleep_quality = COALESCE(excluded.sleep_quality, health_samples.sleep_quality),
@@ -1135,6 +1142,14 @@ export class XanaStore {
            active_minutes = COALESCE(excluded.active_minutes, health_samples.active_minutes),
            resting_heart_rate = COALESCE(excluded.resting_heart_rate, health_samples.resting_heart_rate),
            mood = COALESCE(excluded.mood, health_samples.mood),
+           -- The newest reading wins. A day holds two, and the card shows the
+           -- current one; keeping the morning figure here would mean showing a
+           -- number the user has already replaced.
+           energy = COALESCE(excluded.energy, health_samples.energy),
+           energy_at = CASE
+             WHEN excluded.energy IS NULL THEN health_samples.energy_at
+             ELSE excluded.energy_at
+           END,
            source = excluded.source`,
       )
       .run({
@@ -1145,6 +1160,8 @@ export class XanaStore {
         activeMinutes: s.activeMinutes ?? null,
         restingHeartRate: s.restingHeartRate ?? null,
         mood: s.mood ?? null,
+        energy: s.energy ?? null,
+        energyAt: s.energyAt ?? null,
         source: s.source,
       });
     return s;
@@ -1344,6 +1361,8 @@ function rowToHealth(row: Row): HealthSample {
     activeMinutes: row.active_minutes == null ? undefined : Number(row.active_minutes),
     restingHeartRate: row.resting_heart_rate == null ? undefined : Number(row.resting_heart_rate),
     mood: row.mood ? (String(row.mood) as MoodLabel) : undefined,
+    energy: row.energy == null ? undefined : Number(row.energy),
+    energyAt: row.energy_at ? String(row.energy_at) : undefined,
     source: row.source ? String(row.source) : "local",
   };
 }
