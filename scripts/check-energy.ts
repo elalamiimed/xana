@@ -151,6 +151,94 @@ check(
   reply.outcome?.message,
 );
 
+/* ---- the note says what the number cannot ---------------------------- */
+
+console.log("\nThe forecast note\n");
+
+const { energyForecast } = await import("../src/lib/derived/energy");
+
+const event = (startHour: number, hours: number) => {
+  const start = new Date(new Date().setHours(startHour, 0, 0, 0));
+  const end = new Date(start.getTime() + hours * 3_600_000);
+  return { id: "e", title: "Block", start: start.toISOString(), end: end.toISOString(), source: "local" };
+};
+
+const forecastAt = (hour: number, opts: { sleep?: number; events?: unknown[]; debt?: number } = {}) =>
+  energyForecast({
+    health: Array.from({ length: opts.debt ? 6 : 1 }, (_, i) => ({
+      date: toDateKey(new Date(Date.now() - i * 86_400_000)),
+      sleepHours: opts.sleep ?? 7.6,
+      source: "seed",
+    })),
+    events: (opts.events ?? []) as never,
+    tasks: [],
+    focus: [],
+    now: new Date(new Date().setHours(hour, 0, 0, 0)),
+  });
+
+const morning = forecastAt(8, { sleep: 7.6, events: [event(14, 3)] });
+const cramped = forecastAt(9, { sleep: 5.2, events: [event(9, 4), event(14, 3)] });
+const empty = forecastAt(8, { sleep: 7.8, events: [] });
+
+check("a note is always produced", [morning, cramped, empty].every((f) => f.note.length > 0));
+check(
+  "a short night is named rather than described as a band",
+  /5\.2h/.test(cramped.note),
+  cramped.note,
+);check(
+  "the same band at different hours does not read identically",
+  morning.note !== forecastAt(20, { sleep: 7.6, events: [event(14, 3)] }).note,
+  `08:00="${morning.note}" 20:00="${forecastAt(20, { sleep: 7.6, events: [event(14, 3)] }).note}"`,
+);
+// A morning at peak with a clear afternoon: the useful thing to say is that
+// the strength is now, not later. What matters is that it is a statement about
+// the shape of the day rather than a label already printed beside the number.
+const peakNow = forecastAt(8, { sleep: 7.6, events: [event(14, 3)] });
+check(
+  "a peak morning says the strength is now",
+  /now is the strong stretch/i.test(peakNow.note),
+  peakNow.note,
+);
+
+// A low morning with nothing better coming: the honest answer is that today
+// will not improve, which is more useful than naming the cause and stopping.
+// An earlier version of this function did exactly that — a short night
+// produced the note "On 5.5h." and said nothing about the day.
+const lowMorning = forecastAt(6, { sleep: 5.5, events: [event(14, 3)] });
+check(
+  "a slow start with no relief says so",
+  /no better stretch is coming/i.test(lowMorning.note),
+  lowMorning.note,
+);
+check(
+  "and the cause is still named alongside it",
+  /slept 5\.5h/i.test(lowMorning.note),
+  lowMorning.note,
+);
+
+// A good night with a stronger morning ahead: the useful thing is the lift.
+const lifts = forecastAt(6, { sleep: 7.6, events: [event(14, 3)] });
+check(
+  "a morning that improves points at the stretch that is coming",
+  /lifts through|strongest stretch/i.test(lifts.note),
+  lifts.note,
+);
+check(
+  "and that is a different sentence from the peak morning",
+  lifts.note !== peakNow.note,
+  `"${lifts.note}" vs "${peakNow.note}"`,
+);
+check(
+  "an empty day is not given advice it cannot support",
+  empty.note.length < 60,
+  empty.note,
+);
+check(
+  "the band alone is not the whole note when there is more to say",
+  morning.note !== "A maintenance day." && morning.note !== "Strong day.",
+  morning.note,
+);
+
 /* ---- the twice-daily ask --------------------------------------------- */
 
 console.log("\nAsking for it, twice a day\n");

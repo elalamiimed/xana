@@ -144,12 +144,13 @@ export function energyForecast(input: EnergyInputs): EnergyForecast {
 
   score = clamp(Math.round(score), 5, 98);
   const band = bandFor(score);
+  const windows = buildWindows(score, today, hour, sleptHours);
 
   return {
     score,
     band,
-    windows: buildWindows(score, today, hour, sleptHours),
-    note: noteFor(band, sleptHours, debt, meetingMinutes),
+    windows,
+    note: noteFor(band, sleptHours, debt, meetingMinutes, windows, hour),
   };
 }
 
@@ -202,26 +203,94 @@ function buildWindows(
   return windows;
 }
 
+/**
+ * The sentence under the score.
+ *
+ * This used to be nine literal sentences chosen by band, which meant a 31 and
+ * a 34 were told the same thing and a heavy calendar read identically at 09:00
+ * and at 21:00. The band is the least interesting thing known here: it is
+ * already printed beside the number, so a sentence that restates it is a
+ * sentence that says nothing.
+ *
+ * What is worth saying, in order of how much it changes a decision:
+ *
+ *  1. **Where the day is going.** `windows` already computes the shape of the
+ *     day, and "the afternoon is stronger than now" is the one fact that
+ *     changes what someone does next. It is the reason this sentence exists.
+ *  2. **What is causing it**, when the cause is specific: a short night, a
+ *     week of debt, a calendar that will spend the capacity a good night
+ *     bought.
+ *  3. **Nothing.** When none of those is true, the note is a short statement
+ *     of the band and stops. Padding it out would be the template again.
+ */
 function noteFor(
   band: EnergyBand,
   sleptHours: number | undefined,
   debt: number,
   meetingMinutes: number,
+  windows: EnergyWindow[],
+  hour: number,
 ): string {
-  if (band === "low" && typeof sleptHours === "number" && sleptHours < 6) {
-    return `Short night. Aim for one real thing, not five.`;
+  const parts: string[] = [];
+
+  /**
+   * Where the day is going, first.
+   *
+   * This has to lead, and an earlier version of this function got that wrong:
+   * it put the cause first and stopped once it had one, so a short night
+   * produced the note "On 5.5h." and said nothing about the day at all. The
+   * cause is the least actionable thing here — the number it explains is
+   * already printed above it. The shape of what is left is what changes a
+   * decision.
+   *
+   * Windows carry a band rather than a score, so the comparison is ordinal.
+   * That is enough: the claim is "a better stretch is coming", which does not
+   * need to know by how much.
+   */
+  const ahead = windows.filter((w) => w.endHour > hour);
+  const best = ahead.slice().sort((a, b) => bandRank(b.band) - bandRank(a.band))[0];
+
+  if (best && best.startHour > hour && best.band === "peak") {
+    parts.push(`${best.label} at ${best.startHour}:00 is the strongest stretch.`);
+  } else if (best && best.startHour > hour && bandRank(best.band) > bandRank(band)) {
+    parts.push(`It lifts through the ${best.label}.`);
+  } else if (band === "peak" || band === "sharp") {
+    parts.push("Now is the strong stretch.");
+  } else if (ahead.length > 0 && ahead.every((w) => w.band === "low")) {
+    parts.push("No better stretch is coming today, so front-load what matters.");
   }
-  if (band === "low" && debt > 6) {
-    return `The week has been borrowing against you. An early night would pay most of it back.`;
+
+  // The cause, when there is a specific one worth naming. A short night is
+  // stated plainly because it is a fact about last night, not a diagnosis.
+  if (typeof sleptHours === "number" && sleptHours < 6) {
+    parts.push(`You slept ${sleptHours.toFixed(1)}h.`);
+  } else if (debt > 6) {
+    parts.push(`${debt.toFixed(1)}h of debt behind you.`);
+  } else if (meetingMinutes > 180) {
+    parts.push(`${Math.round(meetingMinutes / 60)}h booked.`);
+  } else if (band === "peak" && meetingMinutes > 120) {
+    parts.push(`The calendar will spend ${Math.round(meetingMinutes / 60)}h of it.`);
   }
-  if (band === "peak" && meetingMinutes > 120) {
-    return `You have the capacity today; the calendar is what will spend it.`;
+
+  if (parts.length === 0) {
+    return band === "low"
+      ? "Low reserves."
+      : band === "peak"
+        ? "Strong day."
+        : band === "sharp"
+          ? "Clear enough for demanding work."
+          : "A maintenance day.";
   }
-  if (band === "peak") return `Strong day. Put the hardest thing first.`;
-  if (band === "sharp") return `Clear enough for demanding work.`;
-  if (band === "steady") return `A maintenance day. Move things forward, don't start wars.`;
-  if (meetingMinutes > 180) return `Heavy calendar and thin reserves. Protect the gaps.`;
-  return `Low reserves. Choose deliberately.`;
+
+  return parts.join(" ");
+}
+
+/** Ordering for "is this window better than now", low to peak. */
+function bandRank(band: EnergyBand): number {
+  if (band === "peak") return 3;
+  if (band === "sharp") return 2;
+  if (band === "steady") return 1;
+  return 0;
 }
 
 /** Morning vs afternoon completion ratio — feeds the pattern detector. */
