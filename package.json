@@ -22,6 +22,7 @@
     "verify:briefing": "node --import ./scripts/ts-loader.mjs scripts/check-briefing.ts",
     "verify:energy": "node --import ./scripts/ts-loader.mjs scripts/check-energy.ts",
     "verify:analysis": "node --import ./scripts/ts-loader.mjs scripts/check-analysis.ts",
+    "verify:analysis-live": "node --import ./scripts/ts-loader.mjs scripts/check-analysis-live.ts",
     "verify:nudges": "node --import ./scripts/ts-loader.mjs scripts/check-nudges.ts",
     "check:encoding": "node scripts/check-encoding.mjs",
     "check:bundle": "node scripts/check-bundle.mjs",
