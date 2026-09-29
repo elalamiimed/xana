@@ -20,7 +20,8 @@ import { buildLifeState, invalidateContext } from "../src/lib/context/gateway";
 import { executeAction } from "../src/lib/actions/executor";
 import { localMind } from "../src/lib/mind/local";
 import { parseDuration, parseWhen, stripWhen } from "../src/lib/core/nlp";
-import { toDateKey } from "../src/lib/core/time";
+import { formatTime, humanDuration, toDateKey } from "../src/lib/core/time";
+import type { BriefingSection } from "../src/lib/core/types";
 
 /* ------------------------------------------------------------------ */
 /* Harness                                                             */
@@ -216,8 +217,12 @@ async function main(): Promise<void> {
   const briefing = brief.cards?.find((c) => c.kind === "briefing");
   if (briefing && briefing.kind === "briefing") {
     console.log(`  ${briefing.title}`);
-    for (const line of briefing.lines) console.log(`     ${line}`);
-    check("briefing has content", briefing.lines.length >= 3);
+    for (const line of describeSections(briefing.sections)) console.log(`     ${line}`);
+    check("briefing has content", briefing.sections.length >= 2);
+    check(
+      "every section is populated, not just present",
+      briefing.sections.length > 0 && !describeSections(briefing.sections).some((l) => l.trim() === ""),
+    );
   } else {
     check("produces a briefing card", false);
   }
@@ -262,6 +267,52 @@ async function main(): Promise<void> {
 /** "Tue Mar 10 2026 15:00" — enough to check the day, hour and minute. */
 function format(d: Date): string {
   return `${d.toDateString().slice(0, 10)} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+/**
+ * The briefing, rendered for a terminal.
+ *
+ * Deliberately reads the sections rather than any prose field: the point of
+ * the shape is that each section is data, so a demo that printed a sentence
+ * would be checking the thing that was removed.
+ */
+function describeSections(sections: BriefingSection[]): string[] {
+  const clock = (iso: string) => formatTime(iso);
+  return sections.map((section) => {
+    switch (section.kind) {
+      case "energy": {
+        const reading = section.reading
+          ? `${section.reading.level}/5 at ${clock(section.reading.at)}`
+          : "not reported";
+        return `energy    ${reading} · forecast ${section.forecast.score} ${section.forecast.band}${section.stale ? " (stale)" : ""}`;
+      }
+      case "next": {
+        const { event, then } = section;
+        const free = event.freeBefore ? ` · ${humanDuration(event.freeBefore)} free before` : "";
+        return `next      ${clock(event.start)} ${event.title}${event.location ? ` · ${event.location}` : ""}${free}${then ? ` · then ${then.title}` : ""}`;
+      }
+      case "focus": {
+        const parts: string[] = [];
+        if (section.live) parts.push(`now: ${section.live.title} (${section.live.minutesLeft}m left)`);
+        if (section.working) parts.push(`on: ${section.working.title}`);
+        if (section.window) parts.push(`best window ${section.window.startHour}:00–${section.window.endHour}:00`);
+        return `focus     ${parts.join(" · ")}`;
+      }
+      case "open": {
+        const late = section.overdue.map((o) => `${o.title} (${o.daysLate}d late)`).join(", ");
+        const soon = section.upcoming.map((u) => `${u.title} (in ${u.daysAway}d)`).join(", ");
+        return `open      ${[late && `overdue: ${late}`, soon && `soon: ${soon}`, `${section.openCount} open`].filter(Boolean).join(" · ")}`;
+      }
+      case "pattern":
+        return `pattern   ${section.analysis ?? section.evidence.join("; ")} (${section.detectedBy})`;
+      case "recall":
+        return `recall    ${section.items.map((i) => `${i.title} — ${i.because}`).join("; ")} (${section.detectedBy})`;
+      default: {
+        const unhandled: never = section;
+        return String(unhandled);
+      }
+    }
+  });
 }
 
 main().catch((err: unknown) => {

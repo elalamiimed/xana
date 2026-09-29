@@ -122,8 +122,91 @@ export interface HealthSample {
   activeMinutes?: number;
   restingHeartRate?: number;
   mood?: MoodLabel;
+  /** What the user says their energy is, 1-5. Their own reading, not ours. */
+  energy?: number;
+  /** When they said it. A day can hold two readings, so the time matters. */
+  energyAt?: string;
   source: string;
 }
+
+/**
+ * One section of the briefing.
+ *
+ * The briefing used to be `lines: string[]` — five sentences in a fixed order,
+ * every one of them written by a template. A section instead names what it is
+ * *about*, so the renderer knows what it is showing and the assembler cannot
+ * quietly fall back to prose that has nothing to do with the data.
+ *
+ * Every section is either present with real content or explicitly empty. There
+ * is no "no data" sentence: an empty section is `null`, and the renderer omits
+ * it rather than printing a line about the absence of a line.
+ */
+export type BriefingSection =
+  | {
+      kind: "energy";
+      /** 1-5, as the user reported it. Undefined until they do. */
+      reading?: { level: number; at: string };
+      /** The forecast's own view, which is computed and is not the same thing. */
+      forecast: { score: number; band: EnergyBand; note: string };
+      /** True when the reading is stale enough to ask again. */
+      stale: boolean;
+    }
+  | {
+      kind: "next";
+      event: {
+        id: string;
+        title: string;
+        start: string;
+        end: string;
+        location?: string;
+        /** True when it has already started and is still running. */
+        running: boolean;
+        minutesUntil: number;
+        /** Free minutes between now and it, when there are any. */
+        freeBefore?: number;
+      };
+      /** What follows it, so "next" is not a dead end. */
+      then?: { title: string; start: string };
+    }
+  | {
+      kind: "focus";
+      /** The event happening right now, if one is. */
+      live?: { title: string; endsAt: string; minutesLeft: number; location?: string };
+      /** The best window today to do demanding work, from the forecast. */
+      window?: { startHour: number; endHour: number; label: string; band: EnergyBand };
+      /** What the user is actually working on, from their own task list. */
+      working?: { id: string; title: string; project?: string };
+    }
+  | {
+      kind: "open";
+      overdue: Array<{ id: string; title: string; daysLate: number }>;
+      /** Not late, but soon — the next few things with a date on them. */
+      upcoming: Array<{ id: string; title: string; due: string; daysAway: number }>;
+      openCount: number;
+    }
+  | {
+      kind: "pattern";
+      /** Written by the model from the pattern and the memories behind it. */
+      analysis?: string;
+      /** The measured facts it was given, so the claim is checkable. */
+      evidence: string[];
+      /** How sure the detector is, computed from its own sample size. */
+      confidence?: number;
+      suggestion?: string;
+      detectedBy: "model" | "detector";
+    }
+  | {
+      kind: "recall";
+      /** Something the user knows but may not have thought of right now. */
+      items: Array<{
+        id: string;
+        title: string;
+        content: string;
+        /** Why it surfaced — the reason, not a score. */
+        because: string;
+      }>;
+      detectedBy: "model" | "detector";
+    };
 
 export interface WeatherSnapshot {
   location: string;
@@ -476,7 +559,20 @@ export interface Message {
 }
 
 export type Card =
-  | { kind: "briefing"; title: string; lines: string[]; generatedAt: string }
+  | {
+      kind: "briefing";
+      title: string;
+      /**
+       * The briefing, as sections rather than sentences.
+       *
+       * `sections` is the briefing. `lines` survives only so an old cached
+       * message still renders; nothing writes it any more.
+       */
+      sections: BriefingSection[];
+      /** @deprecated superseded by `sections`. A fixed sentence per section. */
+      lines?: string[];
+      generatedAt: string;
+    }
   | { kind: "recall"; title: string; hits: Array<{ id: string; title: string; content: string; score: number; kind: MemoryKind }> }
   | { kind: "pattern"; title: string; observation: string; evidence: string[]; confidence: number; suggestion?: string }
   | { kind: "goals"; title: string; items: Array<{ id: string; title: string; horizon: GoalHorizon; progress: number; pace: GoalProgress["pace"]; note: string }> }

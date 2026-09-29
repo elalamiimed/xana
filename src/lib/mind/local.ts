@@ -15,10 +15,26 @@
  *     `LifeState` the UI renders, so the two can never disagree.
  */
 
-import type { ActionIntent, Card, LifeState, Message } from "../core/types";
+import type {
+  ActionIntent,
+  BriefingSection,
+  Card,
+  LifeState,
+  Message,
+} from "../core/types";
 import { executeAction } from "../actions/executor";
 import { parseDuration, parseWhen, stripWhen } from "../core/nlp";
-import { addDays, formatDay, formatTime, humanDuration, nowIso, uid } from "../core/time";
+import {
+  addDays,
+  daysBetween,
+  formatDay,
+  formatTime,
+  humanDuration,
+  minutesBetween,
+  nowIso,
+  toDateKey,
+  uid,
+} from "../core/time";
 
 export interface LocalMindInput {
   text: string;
@@ -629,55 +645,175 @@ function observationalReply(text: string, state: LifeState): string | undefined 
 /* Cards                                                               */
 /* ------------------------------------------------------------------ */
 
-/** The daily briefing, assembled from the life state. */
-export function briefingCard(state: LifeState): Card {
-  const lines: string[] = [];
+/* ------------------------------------------------------------------ */
+/* The briefing                                                        */
+/* ------------------------------------------------------------------ */
 
-  const ev = state.calendar.today.filter((e) => !e.allDay);
-  if (ev.length === 0) {
-    lines.push("Nothing scheduled.");
-  } else {
-    const first = ev[0];
-    lines.push(
-      ev.length === 1
-        ? `One thing today: ${first.title} at ${formatTime(first.start)}.`
-        : `${ev.length} scheduled. First is ${first.title} at ${formatTime(first.start)}.`,
-    );
-    if (state.calendar.freeMinutes > 90) {
-      lines.push(`${humanDuration(state.calendar.freeMinutes)} of it is unscheduled.`);
-    }
+/**
+ * The next thing on the calendar, and what follows it.
+ *
+ * "Next" means next: an event that has not started yet. An event currently
+ * running is the *focus* section's business, not this one — showing a meeting
+ * that started twenty minutes ago under a heading that says "next" is how a
+ * briefing teaches someone to stop trusting it.
+ */
+function nextEvent(state: LifeState, now: Date) {
+  const upcoming = state.calendar.today
+    .filter((e) => !e.allDay && new Date(e.start) > now)
+    .sort((a, b) => a.start.localeCompare(b.start));
+  return upcoming[0];
+}
+
+/** The event happening right now, if one is. */
+function runningEvent(state: LifeState, now: Date) {
+  return state.calendar.today
+    .filter((e) => !e.allDay)
+    .find((e) => new Date(e.start) <= now && new Date(e.end) > now);
+}
+
+/** The next window the forecast thinks is worth spending. */
+function nextFocusWindow(state: LifeState, now: Date) {
+  const hour = now.getHours();
+  return state.energy.windows
+    .filter((w) => w.endHour > hour)
+    .sort((a, b) => b.confidence - a.confidence)[0];
+}
+
+/** Overdue, and the dated work that is not late yet. */
+function openWork(state: LifeState, now: Date) {
+  const overdue = state.tasks.overdue.map((t) => ({
+    id: t.id,
+    title: t.title,
+    daysLate: t.due ? Math.max(1, Math.abs(daysBetween(now, new Date(t.due)))) : 1,
+  }));
+
+  const upcoming = state.tasks.focus
+    .filter((t) => t.due && new Date(t.due) >= now && !overdue.some((o) => o.id === t.id))
+    .map((t) => ({
+      id: t.id,
+      title: t.title,
+      due: t.due as string,
+      daysAway: Math.max(0, daysBetween(now, new Date(t.due as string))),
+    }))
+    .sort((a, b) => a.due.localeCompare(b.due))
+    .slice(0, 3);
+
+  return { overdue, upcoming, openCount: state.tasks.openCount };
+}
+
+/**
+ * The user's own energy reading, and the forecast's opinion of it.
+ *
+ * These are two different things and the card shows both, because they can
+ * disagree and the disagreement is the interesting part: "you say 2, the
+ * numbers say steady" is worth knowing. The reading is what the user reported
+ * — the only energy figure in the app that is not inferred.
+ */
+function energySection(state: LifeState, now: Date) {
+  const latest = state.health.latest;
+  const reading =
+    typeof latest?.energy === "number"
+      ? { level: latest.energy, at: latest.energyAt ?? latest.date }
+      : undefined;
+
+  // Asked for twice a day, so a reading is stale once the day has moved on
+  // from the half of it that the reading belongs to.
+  const stale = !reading || hoursBetween(new Date(reading.at), now) >= 8;
+
+  return {
+    kind: "energy" as const,
+    reading,
+    forecast: { score: state.energy.score, band: state.energy.band, note: state.energy.note },
+    stale,
+  };
+}
+
+function hoursBetween(from: Date, to: Date): number {
+  return (to.getTime() - from.getTime()) / 3_600_000;
+}
+
+/**
+ * The briefing, as sections rather than sentences.
+ *
+ * Every section is either populated from the life state or omitted. There is
+ * no sentence anywhere in here that says nothing: the previous version pushed
+ * "Nothing scheduled." and "Task list is clear." as literal strings, which
+ * meant a card that looked identical whether it knew something or not.
+ *
+ * `pattern` and `recall` are assembled elsewhere, by the model, because both
+ * are judgements about the user rather than readings of their calendar. They
+ * are appended to this list when they exist.
+ */
+export function localBriefingSections(
+  state: LifeState,
+  now: Date = new Date(),
+): BriefingSection[] {
+  const sections: BriefingSection[] = [energySection(state, now)];
+
+  const next = nextEvent(state, now);
+  if (next) {
+    const following = state.calendar.today
+      .filter((e) => !e.allDay && e.start > next.start)
+      .sort((a, b) => a.start.localeCompare(b.start))[0];
+    const free = minutesBetween(now, new Date(next.start));
+    sections.push({
+      kind: "next",
+      event: {
+        id: next.id,
+        title: next.title,
+        start: next.start,
+        end: next.end,
+        location: next.location,
+        running: false,
+        minutesUntil: free,
+        freeBefore: free > 90 ? free : undefined,
+      },
+      then: following ? { title: following.title, start: following.start } : undefined,
+    });
   }
 
-  if (state.tasks.overdue.length > 0) {
-    lines.push(
-      state.tasks.overdue.length === 1
-        ? `"${state.tasks.overdue[0].title}" is overdue.`
-        : `${state.tasks.overdue.length} things are overdue.`,
-    );
+  const live = runningEvent(state, now);
+  const window = nextFocusWindow(state, now);
+  const working = live ? undefined : state.tasks.focus[0];
+  if (live || window || working) {
+    sections.push({
+      kind: "focus",
+      live: live
+        ? {
+            title: live.title,
+            endsAt: live.end,
+            minutesLeft: Math.max(0, minutesBetween(now, new Date(live.end))),
+            location: live.location,
+          }
+        : undefined,
+      window: window
+        ? {
+            startHour: window.startHour,
+            endHour: window.endHour,
+            label: window.label,
+            band: window.band,
+          }
+        : undefined,
+      working: working
+        ? { id: working.id, title: working.title, project: working.project }
+        : undefined,
+    });
   }
 
-  if (state.tasks.focus.length > 0) {
-    const top = state.tasks.focus.slice(0, 3).map((t) => t.title);
-    lines.push(`Focus: ${top.join(" · ")}.`);
-  } else {
-    lines.push("Task list is clear.");
+  const open = openWork(state, now);
+  if (open.overdue.length > 0 || open.upcoming.length > 0 || open.openCount > 0) {
+    sections.push({ kind: "open", ...open });
   }
 
-  const atRisk = state.habits.filter((h) => h.atRisk);
-  if (atRisk.length > 0) {
-    lines.push(`${atRisk.map((h) => h.name).join(", ")} ${atRisk.length === 1 ? "is" : "are"} at risk today.`);
-  }
+  return sections;
+}
 
-  if (state.weather && !state.weather.synthetic) {
-    lines.push(`${state.weather.temperatureC}° and ${state.weather.condition} in ${state.weather.location}.`);
-  }
-
-  lines.push(state.energy.note);
-
+/** The briefing as a card. */
+export function briefingCard(state: LifeState, now: Date = new Date()): Card {
   return {
     kind: "briefing",
     title: greetingFor(state.partOfDay),
-    lines,
+    sections: localBriefingSections(state, now),
     generatedAt: nowIso(),
   };
 }

@@ -8,7 +8,14 @@
  *   POST /api/action    -> ActionResponse    (one-tap buttons on cards)
  */
 
-import type { Card, LifeState, Message, ActionIntent, ActionOutcome } from "../core/types";
+import type {
+  ActionIntent,
+  ActionOutcome,
+  BriefingSection,
+  Card,
+  LifeState,
+  Message,
+} from "../core/types";
 
 export type Presence =
   | "dormant"   // nothing happening, low ambient activity
@@ -51,4 +58,4 @@ export interface ChatApiResponse {
   lifeState: LifeState;
 }
 
-export type { Card, LifeState, Message, ActionIntent, ActionOutcome };
+export type { BriefingSection, Card, LifeState, Message, ActionIntent, ActionOutcome };

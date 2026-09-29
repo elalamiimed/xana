@@ -1,8 +1,31 @@
 "use client";
 
-import type { Card } from "@/lib/api/contract";
+import type { BriefingSection, Card } from "@/lib/api/contract";
 
 import { Bar, Ring } from "./Rings";
+
+/** Formats an ISO instant as a local clock time. */
+function formatTime(iso: string): string {
+  const when = new Date(iso);
+  if (Number.isNaN(when.getTime())) return iso;
+  return when.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+}
+
+/**
+ * "2h 15m" for a span of minutes.
+ *
+ * Local to this file rather than imported from `lib/core/time`, which is
+ * server-side: pulling that in would drag the whole module into the client
+ * bundle to format a duration.
+ */
+function span(minutes: number): string {
+  const total = Math.max(0, Math.round(minutes));
+  if (total < 60) return `${total}m`;
+  const hours = Math.floor(total / 60);
+  const rest = total % 60;
+  if (hours >= 24) return `${Math.round(hours / 24)}d`;
+  return rest === 0 ? `${hours}h` : `${hours}h ${rest}m`;
+}
 
 /**
  * Renders one `Card` from `Message.cards`.
@@ -82,19 +105,225 @@ function dueLabel(due: string): string | null {
 /* Variant renderers                                                   */
 /* ------------------------------------------------------------------ */
 
+/**
+ * One briefing section.
+ *
+ * A section is data, and it is presented as the thing it is: a reading as a
+ * number out of five, an event as a time and a place, overdue work as a count
+ * and an age. The previous version printed five sentences and left the reader
+ * to work out which was which.
+ *
+ * Nothing here writes a sentence to fill a gap. A section with nothing in it
+ * is omitted by the assembler rather than filled with prose about its absence.
+ */
+function BriefingSectionView({ section }: { section: BriefingSection }) {
+  switch (section.kind) {
+    case "energy": {
+      const { reading, forecast, stale } = section;
+      return (
+        <div>
+          <h4 className="label">energy</h4>
+          <div className="mt-2 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+            {reading ? (
+              <>
+                <span className="metric">{reading.level}</span>
+                <span className="text-[13px] font-light text-dim">/ 5</span>
+                <span className="timestamp">
+                  {formatTime(reading.at)}
+                  {stale ? " · asked again soon" : ""}
+                </span>
+              </>
+            ) : (
+              <span className="text-[14px] font-light text-dim">
+                Not reported yet — tell her and it will show here.
+              </span>
+            )}
+          </div>
+          <div className="mt-2 flex flex-wrap items-baseline gap-3">
+            <Meta label="forecast" value={`${forecast.score} ${forecast.band}`} />
+            <span className="text-[13px] font-light text-dim">{forecast.note}</span>
+          </div>
+        </div>
+      );
+    }
+
+    case "next": {
+      const { event, then } = section;
+      return (
+        <div>
+          <h4 className="label">next</h4>
+          <div className="mt-2 flex items-baseline gap-3">
+            <span className="text-[15px] font-light text-text">
+              {formatTime(event.start)}
+            </span>
+            <span className="text-[14px] font-light text-text">{event.title}</span>
+          </div>
+          <div className="mt-1 flex flex-wrap items-baseline gap-3">
+            <span className="timestamp">
+              {event.minutesUntil <= 0
+                ? "now"
+                : event.minutesUntil <= 60
+                  ? `in ${event.minutesUntil}m`
+                  : `in ${span(event.minutesUntil)}`}
+            </span>
+            {event.location ? (
+              <span className="text-[13px] font-light text-dim">{event.location}</span>
+            ) : null}
+            {event.freeBefore ? (
+              <span className="timestamp">{span(event.freeBefore)} free before</span>
+            ) : null}
+          </div>
+          {then ? (
+            <p className="mt-2 text-[13px] font-light text-faint">
+              then {then.title} at {formatTime(then.start)}
+            </p>
+          ) : null}
+        </div>
+      );
+    }
+
+    case "focus": {
+      const { live, working, window } = section;
+      return (
+        <div>
+          <h4 className="label">focus</h4>
+          {live ? (
+            <div className="mt-2">
+              <div className="flex flex-wrap items-baseline gap-3">
+                <span className="text-[14px] font-light text-text">{live.title}</span>
+                <span className="timestamp">{live.minutesLeft}m left</span>
+              </div>
+              {live.location ? (
+                <p className="mt-1 text-[13px] font-light text-dim">{live.location}</p>
+              ) : null}
+            </div>
+          ) : null}
+          {working ? (
+            <div className="mt-2">
+              <p className="text-[14px] font-light text-text">{working.title}</p>
+              {working.project ? <p className="mt-1 timestamp">{working.project}</p> : null}
+            </div>
+          ) : null}
+          {window ? (
+            <div className="mt-3 flex items-center gap-3">
+              <span className="timestamp w-20 shrink-0">
+                {`${window.startHour}`.padStart(2, "0")}:00–
+                {`${window.endHour}`.padStart(2, "0")}:00
+              </span>
+              <Bar value={window.band === "peak" ? 0.9 : 0.6} label={`${window.label}, ${window.band}`} />
+              <span className="w-16 shrink-0 text-right text-[13px] font-light text-dim">
+                {window.band}
+              </span>
+            </div>
+          ) : null}
+        </div>
+      );
+    }
+
+    case "open": {
+      const { overdue, upcoming, openCount } = section;
+      return (
+        <div>
+          <h4 className="label">open</h4>
+          {overdue.length > 0 ? (
+            <ul className="mt-2 space-y-1.5">
+              {overdue.map((item) => (
+                <li key={item.id} className="flex items-baseline gap-3">
+                  <span className="min-w-0 flex-1 truncate text-[14px] font-light text-text">
+                    {item.title}
+                  </span>
+                  <span className="timestamp shrink-0 text-danger">{item.daysLate}d late</span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          {upcoming.length > 0 ? (
+            <ul className="mt-2 space-y-1.5">
+              {upcoming.map((item) => (
+                <li key={item.id} className="flex items-baseline gap-3">
+                  <span className="min-w-0 flex-1 truncate text-[14px] font-light text-dim">
+                    {item.title}
+                  </span>
+                  <span className="timestamp shrink-0">{dueLabel(item.due) ?? item.due}</span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          <p className="mt-2 timestamp">{openCount} open in total</p>
+        </div>
+      );
+    }
+
+    case "pattern": {
+      const { analysis, evidence, confidence, suggestion, detectedBy } = section;
+      return (
+        <div>
+          <h4 className="label">pattern</h4>
+          {analysis ? (
+            <p className="mt-2 text-[14px] leading-relaxed font-light text-text">{analysis}</p>
+          ) : null}
+          {evidence.length > 0 ? (
+            <ul className="mt-2 space-y-1">
+              {evidence.map((line, index) => (
+                <li key={`${index}-${line}`} className="timestamp">
+                  {line}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          <div className="mt-2 flex flex-wrap items-baseline gap-3">
+            {typeof confidence === "number" ? (
+              <Meta label="confidence" value={`${Math.round(confidence * 100)}%`} />
+            ) : null}
+            <span className="timestamp">
+              {detectedBy === "model" ? "read by the model" : "from the detector"}
+            </span>
+            {suggestion ? (
+              <span className="text-[13px] font-light text-dim">{suggestion}</span>
+            ) : null}
+          </div>
+        </div>
+      );
+    }
+
+    case "recall": {
+      const { items, detectedBy } = section;
+      return (
+        <div>
+          <h4 className="label">recall</h4>
+          <ul className="mt-2 space-y-3">
+            {items.map((item) => (
+              <li key={item.id}>
+                <p className="text-[14px] font-light text-text">{item.title}</p>
+                <p className="mt-0.5 text-[13px] leading-relaxed font-light text-dim">
+                  {item.content}
+                </p>
+                <p className="mt-1 timestamp">{item.because}</p>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-2 timestamp">
+            {detectedBy === "model" ? "chosen by the model" : "from memory"}
+          </p>
+        </div>
+      );
+    }
+
+    default: {
+      const unhandled: never = section;
+      return unhandled;
+    }
+  }
+}
+
 function BriefingCard({ card }: { card: Extract<Card, { kind: "briefing" }> }) {
   return (
     <CardShell label={card.title}>
-      <ul className="space-y-2">
-        {card.lines.map((line, index) => (
-          <li
-            key={`${index}-${line}`}
-            className="text-[15px] leading-relaxed font-light tracking-[0.01em] text-text"
-          >
-            {line}
-          </li>
+      <div className="space-y-5">
+        {card.sections.map((section) => (
+          <BriefingSectionView key={section.kind} section={section} />
         ))}
-      </ul>
+      </div>
     </CardShell>
   );
 }
