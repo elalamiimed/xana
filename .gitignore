@@ -84,3 +84,13 @@ data/
 Thumbs.db
 desktop.ini
 *~
+
+# --------------------------------------------------------------------
+# Scratch
+# --------------------------------------------------------------------
+
+# Commit messages are written here and removed after the commit. One was
+# committed once by being staged in the same `git add -A`, so the pattern is
+# here rather than relying on remembering. The real fix is to write these
+# under .git/, which is never tracked.
+.git-commit-msg

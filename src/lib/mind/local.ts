@@ -328,6 +328,48 @@ const handleProtect: Handler = ({ text, sessionId }) => {
   return { text: "", outcome };
 };
 
+/**
+ * What she says when she briefs you.
+ *
+ * This used to be nothing at all: both briefing paths returned `text: ""` and
+ * let the lead-in table supply a fixed sentence. "Here's the shape of it."
+ * read perfectly well and was identical every day, every schedule and every
+ * mood — the most-stated line in the product and the least informed by it.
+ *
+ * The reply is assembled from the life state instead, starting with the piece
+ * that already answers "what is this moment": `headline` names the critical
+ * nudge, else the imminent event, else what is due, and it is computed from
+ * the state rather than chosen from a list.
+ *
+ * What it deliberately does not do is repeat the card. The card carries the
+ * schedule, the overdue list, the focus list, the habits and the weather; a
+ * reply that restated them would be a wall of text above a wall of text. So
+ * this is the headline plus at most one thing the headline left out. Brevity
+ * here is not a style preference — it is what keeps the card worth reading.
+ *
+ * Exported so `scripts/check-briefing.ts` can assert it responds to the state.
+ * The wording is free to change; the responsiveness is not.
+ */
+export function localBriefingReply(state: LifeState): string {
+  const parts = [state.headline];
+
+  // The one thing the headline has no room for: whether there is anything to
+  // spend. Only mentioned when energy is actually low, because "you are fine"
+  // is noise.
+  //
+  // The first sentence only. A low-energy note is itself two sentences — the
+  // signal and then what to do about it — and taking all of it pushed the
+  // briefing to three. The advice belongs in the card's note, where the reader
+  // has already decided to look; repeating it here makes the reply the wall of
+  // text this function exists to avoid.
+  if (state.energy.band === "low") {
+    const signal = state.energy.note.split(/(?<=[.!?])\s+/)[0]?.trim();
+    if (signal) parts.push(signal);
+  }
+
+  return parts.join(" ");
+}
+
 /** "brief me", "catch me up", "what's going on" */
 const handleBrief: Handler = ({ text, lifeState }) => {
   if (
@@ -343,7 +385,7 @@ const handleBrief: Handler = ({ text, lifeState }) => {
   ) {
     return undefined;
   }
-  return { text: "", cards: [briefingCard(lifeState)] };
+  return { text: localBriefingReply(lifeState), cards: [briefingCard(lifeState)] };
 };
 
 /** "reflect on this week" */
@@ -398,7 +440,7 @@ const handleDayQuestion: Handler = ({ text, lifeState }) => {
     /^\s*(?:my|the) (?:day|schedule)\s*\??\s*$/i,
   );
   if (!asks) return undefined;
-  return { text: "", cards: [briefingCard(lifeState)] };
+  return { text: localBriefingReply(lifeState), cards: [briefingCard(lifeState)] };
 };
 
 /** Energy, in its own words. */
@@ -530,10 +572,18 @@ export function localMind(input: LocalMindInput): LocalMindOutput {
   };
 }
 
-/** A sentence to introduce a card, so a card is never dropped in silently. */
+/**
+ * A sentence to introduce a card, so a card is never dropped in silently.
+ *
+ * This is the fallback, not the usual path: a handler that can say something
+ * grounded supplies its own text, as the briefing now does. It exists for the
+ * case where a card is attached with nothing to say about it, and it is
+ * deliberately plain rather than characterful — a generic line pretending to
+ * be a considered one is worse than an obvious placeholder.
+ */
 function leadInFor(cards: Card[] | undefined): string {
   switch (cards?.[0]?.kind) {
-    case "briefing": return "Here's the shape of it.";
+    case "briefing": return "Here's the day.";
     case "goals": return "Here's where they stand.";
     case "energy": return "Reading the day.";
     case "recall": return "This is what I have.";
