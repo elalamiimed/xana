@@ -457,6 +457,34 @@ export interface LifeState {
   };
 }
 
+/**
+ * What the model made of the user's patterns and memories.
+ *
+ * Deliberately not a field on `LifeState`. The life state is assembled from
+ * what the app can observe, and it is rebuilt constantly; this is produced by
+ * a network call and is only wanted when a briefing is being drawn. Passing it
+ * to the briefing assembler as an argument keeps the model out of the state
+ * every other caller reads.
+ *
+ * Separate from `Pattern`, which is the deterministic detector's output. The
+ * detector measures and states a fact; this is a reading of several facts
+ * together, which is the part a template cannot do. Absent when no model is
+ * configured, and the briefing then shows the detector's own evidence rather
+ * than prose invented to fill the gap.
+ */
+export interface Analysis {
+  pattern?: {
+    analysis: string;
+    evidence: string[];
+    confidence?: number;
+    suggestion?: string;
+  };
+  recall?: Array<{ id: string; title: string; content: string; because: string }>;
+  /** Which patterns and memories it was shown, for auditability. */
+  considered: { patterns: number; memories: number };
+  at: string;
+}
+
 export interface Pattern {
   id: string;
   /** Stable machine name, e.g. "deep-work-tuesday". */

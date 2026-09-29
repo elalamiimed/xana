@@ -17,6 +17,7 @@
 
 import type {
   ActionIntent,
+  Analysis,
   BriefingSection,
   Card,
   LifeState,
@@ -790,13 +791,15 @@ function hoursBetween(from: Date, to: Date): number {
  * "Nothing scheduled." and "Task list is clear." as literal strings, which
  * meant a card that looked identical whether it knew something or not.
  *
- * `pattern` and `recall` are assembled elsewhere, by the model, because both
- * are judgements about the user rather than readings of their calendar. They
- * are appended to this list when they exist.
+ * `analysis` is the model's reading of the measured facts, passed in by the
+ * mind layer because this function is synchronous and that call is not. It is
+ * optional in the strongest sense: without it the detector's own finding is
+ * reported instead, with its evidence and a label naming the source.
  */
 export function localBriefingSections(
   state: LifeState,
   now: Date = new Date(),
+  analysis?: Analysis,
 ): BriefingSection[] {
   const sections: BriefingSection[] = [energySection(state, now)];
 
@@ -853,6 +856,39 @@ export function localBriefingSections(
   const open = openWork(state, now);
   if (open.overdue.length > 0 || open.upcoming.length > 0 || open.openCount > 0) {
     sections.push({ kind: "open", ...open });
+  }
+
+  /**
+   * Pattern and recall come from the reading the model made of the measured
+   * facts, when there is one. With no model configured the detector's own
+   * finding is still shown — with its evidence and a label saying where it
+   * came from — because a measured fact is worth reporting even unanalysed.
+   * What never happens is prose written to fill the space.
+   */
+  const reading = analysis;
+  const detector = state.patterns[0];
+
+  if (reading?.pattern) {
+    sections.push({
+      kind: "pattern",
+      analysis: reading.pattern.analysis,
+      evidence: reading.pattern.evidence,
+      confidence: reading.pattern.confidence,
+      suggestion: reading.pattern.suggestion,
+      detectedBy: "model",
+    });
+  } else if (detector) {
+    sections.push({
+      kind: "pattern",
+      evidence: detector.evidence,
+      confidence: detector.confidence,
+      suggestion: detector.suggestion,
+      detectedBy: "detector",
+    });
+  }
+
+  if (reading?.recall?.length) {
+    sections.push({ kind: "recall", items: reading.recall, detectedBy: "model" });
   }
 
   return sections;

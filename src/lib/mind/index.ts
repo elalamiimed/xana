@@ -18,7 +18,8 @@
 import type { ChatRequest, ChatResponse, LifeState, Message } from "../core/types";
 import { getStore } from "../core/store";
 import { nowIso, uid } from "../core/time";
-import { localMind, briefingCard, toMessage, type LocalMindOutput } from "./local";
+import { localMind, localBriefingSections, briefingCard, greetingFor, toMessage, type LocalMindOutput } from "./local";
+import { analyseLifeState } from "./analysis";
 import {
   llmAvailable,
   llmComplete,
@@ -65,6 +66,17 @@ export async function think(
 
   const acted = Boolean(local.outcome?.ok);
   const refreshed = acted ? await refreshAfterAction(lifeState) : lifeState;
+
+  /**
+   * A briefing gets the model's reading of the measured facts.
+   *
+   * Only a briefing: this is the one reply whose whole job is to tell the user
+   * something about their own life that they did not already know, so it is
+   * the one place the extra call earns its latency.
+   */
+  if (local.cards?.some((c) => c.kind === "briefing")) {
+    local.cards = await briefingWithAnalysis(refreshed);
+  }
 
   /* --- 2. Remember anything durable the user just told us. --- */
   try {
@@ -164,6 +176,31 @@ async function refreshAfterAction(lifeState: LifeState): Promise<LifeState> {
   } catch {
     return lifeState;
   }
+}
+
+/**
+ * The briefing, with the model's reading of the measured facts when there is
+ * one.
+ *
+ * This lives here rather than in the local mind because the local handlers are
+ * synchronous by design — they are the deterministic path, and making them
+ * await a network call would put the model in front of what she *does* rather
+ * than only what she *says*.
+ *
+ * The analysis is additive. If there is no model, or it fails, or it has
+ * nothing to say, the briefing still has its measured sections: energy, next,
+ * focus, open, and the detector's own finding with its evidence attached.
+ */
+async function briefingWithAnalysis(state: LifeState): Promise<Message["cards"]> {
+  const analysis = await analyseLifeState({ lifeState: state });
+  return [
+    {
+      kind: "briefing",
+      title: greetingFor(state.partOfDay),
+      sections: localBriefingSections(state, new Date(), analysis),
+      generatedAt: nowIso(),
+    },
+  ];
 }
 
 /* ------------------------------------------------------------------ */
@@ -393,13 +430,13 @@ function stripMarkdown(text: string): string {
 }
 
 /** The greeting on first load — always local, so startup never waits on a model. */
-export function greeting(lifeState: LifeState): Message {
+export async function greeting(lifeState: LifeState): Promise<Message> {
   return {
     id: uid("msg"),
     role: "xana",
     text: "",
     createdAt: nowIso(),
-    cards: [briefingCard(lifeState)],
+    cards: await briefingWithAnalysis(lifeState),
     engine: "local",
   };
 }

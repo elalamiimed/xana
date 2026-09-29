@@ -21,6 +21,7 @@
     "verify:cave": "node scripts/verify-cave.mjs",
     "verify:briefing": "node --import ./scripts/ts-loader.mjs scripts/check-briefing.ts",
     "verify:energy": "node --import ./scripts/ts-loader.mjs scripts/check-energy.ts",
+    "verify:analysis": "node --import ./scripts/ts-loader.mjs scripts/check-analysis.ts",
     "check:encoding": "node scripts/check-encoding.mjs",
     "check:bundle": "node scripts/check-bundle.mjs",
     "debug:key": "node scripts/debug-key.mjs",
