@@ -1,36 +1,131 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-import { contrastWithVoid, THEME_PRESETS } from "@/lib/settings/themes";
-import type { AppearanceSettings, SettingsPatch } from "@/lib/settings/types";
+import { contrastWithVoid, findTheme, THEME_PRESETS } from "@/lib/settings/themes";
+import type {
+  AppearanceSettings,
+  SettingsPatch,
+  SettingsView,
+} from "@/lib/settings/types";
 
 import { Actions, Button, Section, Slider, StatusLine } from "./controls";
 
 /**
  * Appearance: theme, ambient light, and speed.
  *
- * The one section that saves *itself*, because it is the one section where
- * the result is visible while you are changing it. Every control calls
- * `onPreview` on change, which writes the tokens straight onto `<html>` so
- * the orb behind the panel recolours as you click; the write to disk is
- * debounced so dragging a colour picker does not produce sixty HTTP
- * requests.
+ * SAVING
  *
- * The debounce is the interesting part. It has to solve two problems at
- * once: coalesce a burst of changes into one save, and never leave the
- * last change unsaved because the user closed the panel. Hence both a
- * timer and a flush on unmount.
+ * This is the one section that saves itself, because it is the one section
+ * where the result is visible while you are changing it. Every control
+ * applies to the live document immediately — the orb behind the panel
+ * recolours as you click — and the write to disk is debounced, so dragging
+ * the ambient slider does not produce sixty HTTP requests. The effect is
+ * keyed on the persisted fields and skips its first run, so opening the
+ * panel is not itself a write.
+ *
+ * A THEME IS BOTH HALVES
+ *
+ * The bug this section used to have is worth stating, because the shape of
+ * it is easy to reintroduce. Clicking a preset sent `{ theme: "aurora" }`
+ * and merged it into the appearance object the panel was holding:
+ *
+ *     onPreview({ ...appearance, theme: "aurora" })
+ *
+ * so the panel kept the *old* accent channels while claiming the new theme
+ * id. The server disagreed — `mergePatch` resolves a preset theme to that
+ * preset's two colours — but the panel's copy was now a different object
+ * from the one the server had, and it never re-read. The visible result was
+ * a click that moved the selection ring and changed no colour at all,
+ * which is indistinguishable from a dead button.
+ *
+ * Two rules came out of fixing it, and both are load-bearing:
+ *
+ *  1. **The wire carries the change, not the resolved state.** `mergePatch`
+ *     treats any patch containing accent channels as an explicit custom
+ *     pair, so resolving a preset locally and sending its colours *alongside*
+ *     the name flips the stored theme to `custom`. Send `{ theme }`, or send
+ *     `{ accent, accent2 }`, never both by accident.
+ *  2. **The panel reads `appearance` rather than a copy of it.** That prop
+ *     is the server's answer, so anything the server normalises — a preset
+ *     name, a "custom" flip, a clamped number — reaches the UI without a
+ *     second mechanism to keep in step.
+ *
+ * `previewAfter` resolves a preset locally only to paint the document, which
+ * must happen before the server replies. Everything else is read, not held.
+ *
+ * The pickers are what switch the theme to `custom`, exactly as the server
+ * does it: an explicit channel triplet only ever applies to a custom theme,
+ * so choosing a colour by hand is what makes it custom.
  */
 
 /** How long the picker must be still before the change is persisted. */
 const SAVE_DEBOUNCE_MS = 700;
 
+/** What a preset looks like as stored state. */
+function fromPreset(id: string): AppearanceSettings {
+  const preset = findTheme(id);
+  if (!preset) return { theme: "custom" } as AppearanceSettings;
+  return {
+    theme: preset.id,
+    accent: preset.accent,
+    accent2: preset.accent2,
+  } as AppearanceSettings;
+}
+
+/**
+ * The appearance after a change.
+ *
+ * The channel rule lives on the server, in `mergePatch`, and this function
+ * deliberately does not duplicate it. An earlier attempt did — resolving a
+ * preset name to the preset's pair and sending both — and it cannot work:
+ * `mergePatch` treats *any* patch carrying accent channels as an explicit
+ * custom pair, so sending the pair alongside the name flips the stored theme
+ * to `custom`. The fix is to send only what changed and let the server
+ * resolve it, which is the same rule that already passes `verify:web`:
+ *
+ *   { theme: "aurora" }        -> stored as aurora, with its own pair
+ *   { accent: "10 200 120" }   -> stored as custom, keeping the other channel
+ *   { ambient: 0.2 }           -> stored unchanged, no theme implication
+ *
+ * Preview still needs a complete object for the live document, because
+ * `applyAppearance` reads the channels and the server's answer for a theme
+ * change is not known until it responds. So the preview resolves the preset
+ * locally while the wire carries only the change. If they ever differ, the
+ * next read of `appearance` corrects the panel — it is the server's copy.
+ */
+function previewAfter(
+  current: AppearanceSettings,
+  patch: Partial<AppearanceSettings>,
+): AppearanceSettings {
+  const preset = typeof patch.theme === "string" ? findTheme(patch.theme) : undefined;
+  if (preset) return { ...current, ...fromPreset(preset.id) };
+  if (patch.accent !== undefined || patch.accent2 !== undefined) {
+    return { ...current, ...patch, theme: "custom" };
+  }
+  return { ...current, ...patch };
+}
+
+/** The preset a set of channels corresponds to exactly, if any. */
+function presetFor(appearance: AppearanceSettings): string | null {
+  const match = THEME_PRESETS.find(
+    (preset) =>
+      preset.accent === appearance.accent && preset.accent2 === appearance.accent2,
+  );
+  return match ? match.id : null;
+}
+
 export interface AppearancePanelProps {
   appearance: AppearanceSettings;
   /** Applied to the live document immediately, without saving. */
   onPreview: (next: AppearanceSettings) => void;
-  onSave: (patch: SettingsPatch) => Promise<unknown>;
+  /**
+   * Resolves to the server's view, or `null` when the save failed.
+   *
+   * The null matters: it is the only signal a write was rejected, and the
+   * panel must not claim "Saved" on the strength of a promise that resolved.
+   */
+  onSave: (patch: SettingsPatch) => Promise<SettingsView | null>;
   saving: boolean;
 }
 
@@ -128,36 +223,81 @@ export default function AppearancePanel({
   onSave,
   saving,
 }: AppearancePanelProps) {
-  const [saved, setSaved] = useState(false);
+  const [pending, setPending] = useState(false);
+  const [savedAt, setSavedAt] = useState<number | null>(null);
+  const [failed, setFailed] = useState<string | null>(null);
+  const firstRun = useRef(true);
+  /** The change waiting to be written, as the patch and as the preview. */
+  const pendingPatch = useRef<Partial<AppearanceSettings> | null>(null);
+  const pendingPreview = useRef<AppearanceSettings | null>(null);
+  /** Set by an explicit save, so the debounce does not fire a second write. */
+  const handledBy = useRef<AppearanceSettings | null>(null);
+
+  /**
+   * Stage a change: apply it to the live document now, write it shortly.
+   *
+   * `patch` is what travels — only the fields the user actually touched —
+   * and `preview` is the complete object the document needs. They are
+   * different objects on purpose; see `previewAfter`.
+   */
+  const stage = useCallback(
+    (patch: Partial<AppearanceSettings>, preview: AppearanceSettings) => {
+      onPreview(preview);
+      pendingPatch.current = patch;
+      pendingPreview.current = preview;
+      setPending(true);
+      setFailed(null);
+    },
+    [onPreview],
+  );
 
   /**
    * Persist after the user stops moving.
    *
    * `appearance` is the dependency, so every change resets the timer and
-   * only the final value is written. The cleanup clears the pending timer —
-   * but that alone would lose the last change on unmount, so the value is
-   * also kept in a ref and flushed. `useEffect` cleanup cannot await, so
-   * the flush is fire-and-forget; the server is the source of truth either
-   * way, and a dropped flush at worst means the next open shows the
-   * previous value.
+   * only the final value is written. The cleanup clears the pending timer.
+   * The first run is skipped, so opening the panel is not itself a write.
    */
   useEffect(() => {
-    setSaved(false);
-    const timer = setTimeout(() => {
-      void onSave({ appearance }).then(() => setSaved(true));
-    }, SAVE_DEBOUNCE_MS);
-    return () => clearTimeout(timer);
-    // Intentionally keyed on the persisted fields only: `onSave` is stable
-    // from the controller, and including it would re-trigger on every render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    appearance.theme,
-    appearance.accent,
-    appearance.accent2,
-    appearance.ambient,
-    appearance.motionSpeed,
-  ]);
+    if (firstRun.current) {
+      firstRun.current = false;
+      return;
+    }
 
+    // An explicit save already wrote this exact value.
+    if (handledBy.current === appearance) {
+      handledBy.current = null;
+      return;
+    }
+    const patch = pendingPatch.current;
+    if (!patch || pendingPreview.current !== appearance) return;
+
+    const timer = setTimeout(() => {
+      void Promise.resolve(onSave({ appearance: patch })).then((result) => {
+        setPending(false);
+        if (result === null) setFailed("That change could not be saved.");
+        else setSavedAt(Date.now());
+      });
+    }, SAVE_DEBOUNCE_MS);
+
+    return () => clearTimeout(timer);
+  }, [appearance, onSave]);
+
+  /** Write immediately, for the changes where waiting is wrong. */
+  const saveNow = useCallback(
+    async (patch: Partial<AppearanceSettings>, preview: AppearanceSettings) => {
+      stage(patch, preview);
+      handledBy.current = preview;
+      const result = await onSave({ appearance: patch });
+      setPending(false);
+      if (result === null) setFailed("That change could not be saved.");
+      else setSavedAt(Date.now());
+    },
+    [onSave, stage],
+  );
+
+  // The channels actually in force. `appearance` is the persisted truth, so
+  // reading it here is what stops the panel drifting from the server.
   const accentContrast = contrastWithVoid(appearance.accent);
   const accent2Contrast = contrastWithVoid(appearance.accent2);
   const lowContrast = [
@@ -165,9 +305,23 @@ export default function AppearancePanel({
     accent2Contrast < 3 ? "secondary" : null,
   ].filter(Boolean) as string[];
 
-  const patch = (next: Partial<AppearanceSettings>) => {
-    onPreview({ ...appearance, ...next });
-  };
+  const matchingPreset = presetFor(appearance);
+  const activePreset = findTheme(appearance.theme)?.id ?? matchingPreset;
+  const isCustom = matchingPreset === null;
+
+  const status = failed
+    ? { tone: "error" as const, text: failed }
+    : pending || saving
+      ? { tone: "info" as const, text: "Saving…" }
+      : savedAt
+        ? {
+            tone: "ok" as const,
+            text: "Saved. The theme is applied everywhere, including the orb.",
+          }
+        : {
+            tone: "info" as const,
+            text: "Changes apply immediately and save on their own.",
+          };
 
   return (
     <div>
@@ -187,8 +341,11 @@ export default function AppearancePanel({
               accent2={preset.accent2}
               label={preset.label}
               mood={preset.mood}
-              selected={appearance.theme === preset.id}
-              onSelect={() => patch({ theme: preset.id })}
+              selected={activePreset === preset.id}
+              onSelect={() => {
+                const patch = { theme: preset.id };
+                void saveNow(patch, previewAfter(appearance, patch));
+              }}
             />
           ))}
         </div>
@@ -213,7 +370,18 @@ export default function AppearancePanel({
                 id="accent-primary"
                 type="color"
                 value={channelsToHex(appearance.accent)}
-                onChange={(event) => patch({ accent: hexToChannels(event.target.value) })}
+                onChange={(event) => {
+                  // Both channels travel: the server keys "this is a custom
+                  // pair" off the presence of an explicit colour, and sending
+                  // only one would leave the other to be inferred.
+                  const accent = hexToChannels(event.target.value);
+                  const patch = {
+                    theme: "custom",
+                    accent,
+                    accent2: appearance.accent2,
+                  };
+                  stage(patch, previewAfter(appearance, patch));
+                }}
                 className="h-8 w-12 cursor-pointer rounded-[var(--r-sm)] border border-hairline bg-transparent"
               />
               <code className="font-mono text-[12px] text-dim">
@@ -237,7 +405,15 @@ export default function AppearancePanel({
                 id="accent-secondary"
                 type="color"
                 value={channelsToHex(appearance.accent2)}
-                onChange={(event) => patch({ accent2: hexToChannels(event.target.value) })}
+                onChange={(event) => {
+                  const accent2 = hexToChannels(event.target.value);
+                  const patch = {
+                    theme: "custom",
+                    accent: appearance.accent,
+                    accent2,
+                  };
+                  stage(patch, previewAfter(appearance, patch));
+                }}
                 className="h-8 w-12 cursor-pointer rounded-[var(--r-sm)] border border-hairline bg-transparent"
               />
               <code className="font-mono text-[12px] text-dim">
@@ -246,6 +422,24 @@ export default function AppearancePanel({
             </div>
           </div>
         </div>
+
+        {/* Which preset the colours currently correspond to. Without this,
+            a theme id and a colour pair that disagree look like a bug — and
+            were one. */}
+        <p className="mt-4 text-[12px] font-light text-faint">
+          {isCustom ? (
+            <>
+              These two colours match no preset, so the theme is{" "}
+              <span className="text-dim">custom</span>. Pick a preset above to
+              go back to a hand-tuned pair.
+            </>
+          ) : (
+            <>
+              Currently <span className="text-dim">{findTheme(matchingPreset)?.label}</span>
+              {appearance.theme !== matchingPreset ? " (stored as a custom pair)" : ""}.
+            </>
+          )}
+        </p>
 
         {lowContrast.length > 0 ? (
           <StatusLine tone="info">
@@ -270,7 +464,12 @@ export default function AppearancePanel({
             value === 0 ? "off" : `${Math.round((value / 0.3) * 100)}%`
           }
           hint="Turn it to zero for pure black, or up for a room with the lights low."
-          onChange={(ambient) => patch({ ambient })}
+          onChange={(ambient) => {
+            // One field only. Sending the whole appearance here is what used
+            // to flip a preset theme to custom just for touching the light.
+            const patch = { ambient };
+            stage(patch, previewAfter(appearance, patch));
+          }}
         />
       </Section>
 
@@ -288,33 +487,28 @@ export default function AppearancePanel({
             value === 1 ? "normal" : `${value < 1 ? "slower" : "faster"} ×${value.toFixed(2)}`
           }
           hint="Set it low if the movement is distracting. Set it high if you want her to feel more awake."
-          onChange={(motionSpeed) => patch({ motionSpeed })}
+          onChange={(motionSpeed) => {
+            const patch = { motionSpeed };
+            stage(patch, previewAfter(appearance, patch));
+          }}
         />
       </Section>
 
       <div className="px-6 py-4">
         <Actions>
-          <StatusLine tone={saved ? "ok" : "info"}>
-            {saving
-              ? "Saving…"
-              : saved
-                ? "Saved. The theme is applied everywhere, including the orb."
-                : "Changes apply immediately and save on their own."}
-          </StatusLine>
+          <StatusLine tone={status.tone}>{status.text}</StatusLine>
         </Actions>
         <div className="mt-3">
           <Button
             onClick={() => {
               const preset = THEME_PRESETS[0];
-              if (preset) {
-                patch({
-                  theme: preset.id,
-                  accent: preset.accent,
-                  accent2: preset.accent2,
-                  ambient: 0.13,
-                  motionSpeed: 1,
-                });
-              }
+              if (!preset) return;
+              const patch = {
+                theme: preset.id,
+                ambient: 0.13,
+                motionSpeed: 1,
+              };
+              void saveNow(patch, previewAfter(appearance, patch));
             }}
           >
             Reset appearance

@@ -78,6 +78,34 @@ export function findTheme(id: string): ThemePreset | undefined {
 }
 
 /**
+ * The preset a pair of channels corresponds to exactly, if any.
+ *
+ * Used to keep a stored theme id and its colours from drifting apart. Without
+ * it, a patch that changes only `ambient` leaves whatever id was there, and a
+ * theme id is a *claim about the colours* — "ember" while the channels say
+ * something else is a store that disagrees with itself. Nothing painted on
+ * screen depends on that field (the UI reads the colours), which is precisely
+ * why it can rot unnoticed until something does.
+ *
+ * Exact match, deliberately. "Close to ember" is not ember, and a near-miss
+ * promoted to a preset name would silently discard the user's own colour.
+ *
+ * One consequence worth knowing: a theme id is *derived*, not chosen. Picking
+ * a colour that happens to be exactly Ember's pair stores `ember`, not
+ * `custom`. If that pair is ever made reachable another way — building it up
+ * one channel at a time, for instance — the id follows the colours rather
+ * than the other way round, because the colours are what the screen renders.
+ */
+export function findThemeByAccents(
+  accent: string,
+  accent2: string,
+): ThemePreset | undefined {
+  return THEME_PRESETS.find(
+    (theme) => theme.accent === accent && theme.accent2 === accent2,
+  );
+}
+
+/**
  * `R G B` for a stored value, falling back to the default theme.
  * Returns the default rather than throwing: a hand-edited settings file
  * should cost a colour, not the app.

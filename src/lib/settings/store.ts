@@ -33,7 +33,7 @@
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync, renameSync } from "node:fs";
 import { join } from "node:path";
 
-import { DEFAULT_THEME_ID, findTheme, safeAccent } from "./themes";
+import { DEFAULT_THEME_ID, findTheme, findThemeByAccents, safeAccent } from "./themes";
 import { normaliseEndpoint } from "./endpoints";
 import {
   canonicalBaseUrl,
@@ -648,6 +648,15 @@ export function mergePatch(
     if (typeof p.motionSpeed === "number") {
       next.appearance.motionSpeed = num(p.motionSpeed, current.appearance.motionSpeed, 0.25, 2);
     }
+
+    // The theme id is a claim about the colours, so it is re-derived from them
+    // after every appearance write rather than carried along untouched. A
+    // patch that only moved the ambient slider used to leave the previous id
+    // in place, which is how a store ends up calling itself "ember" while the
+    // channels say something else. Nothing on screen reads this field, so the
+    // drift was invisible until the settings panel started reporting it.
+    const matched = findThemeByAccents(next.appearance.accent, next.appearance.accent2);
+    next.appearance.theme = matched ? matched.id : "custom";
   }
 
   if (patch.voice) {

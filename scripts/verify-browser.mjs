@@ -430,6 +430,14 @@ async function main() {
     /* ---------------- settings ---------------- */
     section("Settings, opened by a real click");
 
+    // Snapshot the appearance before touching it. The theme picker below is
+    // exercised for real, and the settings file is the user's own state, not
+    // a fixture — so what was there has to be read first and put back after.
+    const appearanceBefore = await fetch(`${base}/api/settings`, { cache: "no-store" })
+      .then((res) => res.json())
+      .then((payload) => payload.settings.appearance)
+      .catch(() => ({ theme: "xana", accent: "111 227 227", accent2: "156 140 255", ambient: 0.13, motionSpeed: 1 }));
+
     const opened = await evaluate(
       devtools,
       sessionId,
@@ -551,11 +559,27 @@ async function main() {
     );
     check("Escape closes the dialog", closed === false);
 
-    // Put the theme back so the repo is left as it was found.
+    // Put the appearance back so the repo is left as it was found.
+    //
+    // This used to hardcode `theme: "xana"`, which is only correct if that is
+    // what was there to begin with. On a machine where this script actually
+    // runs, that silently replaced the user's own theme every time — and
+    // because the settings file is real state rather than a fixture, the
+    // damage looked like the app forgetting a preference.
     await fetch(`${base}/api/settings`, {
       method: "PUT",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ settings: { appearance: { theme: "xana" } } }),
+      body: JSON.stringify({
+        settings: {
+          appearance: {
+            theme: appearanceBefore.theme,
+            accent: appearanceBefore.accent,
+            accent2: appearanceBefore.accent2,
+            ambient: appearanceBefore.ambient,
+            motionSpeed: appearanceBefore.motionSpeed,
+          },
+        },
+      }),
     });
 
     /* ---------------- a conversation ---------------- */
