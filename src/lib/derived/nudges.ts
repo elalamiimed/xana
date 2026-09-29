@@ -191,8 +191,12 @@ function carriedOver(input: NudgeInputs, now: Date): Nudge | undefined {
 const PROMOTABLE_FAMILIES = new Set(["sleep", "calendar", "focus"]);
 
 function patternAction(input: NudgeInputs): Nudge | undefined {
+  // 0.5, down from 0.7. The threshold moved because the figure did: pattern
+  // confidences are now derived from sample size (a Wilson lower bound) rather
+  // than partly asserted, so the whole scale sits lower and a 0.7 cut would
+  // have silently stopped promoting patterns that are just as sound as before.
   const p = input.patterns.find(
-    (x) => x.suggestion && x.confidence >= 0.7 && PROMOTABLE_FAMILIES.has(patternFamily(x.key)),
+    (x) => x.suggestion && x.confidence >= 0.5 && PROMOTABLE_FAMILIES.has(patternFamily(x.key)),
   );
   if (!p?.suggestion) return undefined;
   return nudge("suggest", p.suggestion, 55, p.action);

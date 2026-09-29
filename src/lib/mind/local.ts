@@ -874,6 +874,7 @@ export function localBriefingSections(
       analysis: reading.pattern.analysis,
       evidence: reading.pattern.evidence,
       confidence: reading.pattern.confidence,
+      basis: reading.pattern.basis,
       suggestion: reading.pattern.suggestion,
       detectedBy: "model",
     });
@@ -882,6 +883,7 @@ export function localBriefingSections(
       kind: "pattern",
       evidence: detector.evidence,
       confidence: detector.confidence,
+      basis: detector.basis,
       suggestion: detector.suggestion,
       detectedBy: "detector",
     });

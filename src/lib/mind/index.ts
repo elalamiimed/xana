@@ -317,7 +317,9 @@ export function renderLifeState(state: LifeState): string {
   if (state.patterns.length) {
     lines.push("PATTERNS (things you noticed, with evidence):");
     for (const p of state.patterns.slice(0, 3)) {
-      lines.push(`  - ${p.observation} [confidence ${p.confidence}; ${p.evidence.join("; ")}]`);
+      lines.push(
+        `  - ${p.observation} [${Math.round(p.confidence * 100)}% — ${p.basis}; evidence: ${p.evidence.join("; ")}]`,
+      );
     }
   }
 

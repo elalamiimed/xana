@@ -88,7 +88,10 @@ export async function analyseLifeState(input: AnalysisInput): Promise<Analysis |
     facts.push("MEASURED PATTERNS:");
     for (const p of patterns) {
       const evidence = p.evidence.length > 0 ? ` (evidence: ${p.evidence.join("; ")})` : "";
-      facts.push(`  - ${p.observation}${evidence}`);
+      // The basis travels with the figure, so the model can weigh a 62% that
+      // means "a 26-day run" differently from a 90% that means "the day is
+      // booked" — and so it cannot mistake either for a probability.
+      facts.push(`  - ${p.observation}${evidence} [${Math.round(p.confidence * 100)}% — ${p.basis}]`);
     }
   }
 
@@ -210,8 +213,9 @@ export function parseAnalysis(
         : (detector?.evidence ?? []),
       // From the detector, never from the model. It has no way to know how
       // strong the evidence is, and a number it made up would read as a
-      // measurement.
+      // measurement. The basis comes with it so the figure keeps its subject.
       confidence: detector?.confidence,
+      basis: detector?.basis,
       suggestion:
         typeof shape.pattern?.suggestion === "string" ? shape.pattern.suggestion.trim() : undefined,
     };

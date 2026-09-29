@@ -255,7 +255,7 @@ function BriefingSectionView({ section }: { section: BriefingSection }) {
     }
 
     case "pattern": {
-      const { analysis, evidence, confidence, suggestion, detectedBy } = section;
+      const { analysis, evidence, confidence, basis, suggestion, detectedBy } = section;
       return (
         <div>
           <h4 className="label">pattern</h4>
@@ -275,13 +275,19 @@ function BriefingSectionView({ section }: { section: BriefingSection }) {
             {typeof confidence === "number" ? (
               <Meta label="confidence" value={`${Math.round(confidence * 100)}%`} />
             ) : null}
+            {/* What the percentage is a percentage of. Without this it is a
+                number with no subject, which the old card printed as
+                "confidence 85%" and left the reader to interpret. */}
+            {basis ? (
+              <span className="text-[12px] font-light text-faint">{basis}</span>
+            ) : null}
             <span className="timestamp">
               {detectedBy === "model" ? "read by the model" : "from the detector"}
             </span>
-            {suggestion ? (
-              <span className="text-[13px] font-light text-dim">{suggestion}</span>
-            ) : null}
           </div>
+          {suggestion ? (
+            <p className="mt-2 text-[13px] font-light text-dim">{suggestion}</p>
+          ) : null}
         </div>
       );
     }

@@ -66,6 +66,7 @@ function deepWorkDay(input: PatternInputs): Pattern | undefined {
     key: `deep-work-${DAY_NAMES[bestDow].toLowerCase()}`,
     observation: `You're most consistent with deep work on ${day}s — ${Math.round(best.minutes / 60)}h across ${best.sessions} sessions, ${Math.round(share * 100)}% of your focused time.`,
     confidence: round(Math.min(0.9, 0.4 + share), 2),
+    basis: `the share of your focused time that lands on ${day}s`,
     evidence: [
       `${best.minutes}m focused on ${day}s`,
       `${completed.length} completed sessions on record`,
@@ -74,6 +75,26 @@ function deepWorkDay(input: PatternInputs): Pattern | undefined {
     suggestion: `Want me to protect ${day} mornings?`,
     detectedAt: nowIso(),
   };
+}
+
+/**
+ * Wilson score interval, 95% lower bound.
+ *
+ * "Of n observations, k were what we are claiming" gives the rate we can
+ * defend rather than the rate we happened to see. With small samples the
+ * difference is the whole point: one success out of one attempt is a 100%
+ * success rate and almost no evidence, and the lower bound says so (0.21).
+ *
+ * Used wherever a pattern wants to claim a proportion, because a proportion
+ * stated without its sample size is a number with no meaning attached.
+ */
+function wilsonLower(k: number, n: number, z = 1.96): number {
+  if (n <= 0) return 0;
+  const p = k / n;
+  const denom = 1 + (z * z) / n;
+  const centre = p + (z * z) / (2 * n);
+  const spread = z * Math.sqrt((p * (1 - p)) / n + (z * z) / (4 * n * n));
+  return Math.max(0, (centre - spread) / denom);
 }
 
 /** A habit one or two misses from losing its streak. */
@@ -88,7 +109,11 @@ function habitAtRisk(input: PatternInputs): Pattern | undefined {
     id: uid("pat"),
     key: `habit-at-risk-${atRisk.id}`,
     observation: `Your ${atRisk.name.toLowerCase()} streak is ${atRisk.streak} days and needs ${remaining} more this week to hold.`,
-    confidence: 0.85,
+    // The streak is the sample: n days observed, all of them kept. A 4-day
+    // streak and a 26-day streak are very different amounts of evidence, and
+    // a flat figure hid that completely.
+    confidence: round(wilsonLower(atRisk.streak, atRisk.streak + 7), 2),
+    basis: `how firmly a ${atRisk.streak}-day run predicts the next week`,
     evidence: [
       `${atRisk.thisWeek} of ${atRisk.targetPerWeek} this week`,
       `${atRisk.streak}-day streak, longest ${atRisk.longestStreak}`,
@@ -140,6 +165,7 @@ function sleepMoodCoupling(input: PatternInputs): Pattern | undefined {
     key: "sleep-mood-coupling",
     observation: `Nights under 6.5h cost you roughly ${gap.toFixed(1)} points of mood the next day.`,
     confidence: round(Math.min(0.85, 0.45 + gap * 0.2), 2),
+    basis: `the mood difference between short and full nights, over ${pairs.length} paired nights`,
     evidence: [
       `${short.length} short nights, next-day mood averaging ${shortMood.toFixed(1)}/3`,
       `${long.length} full nights, next-day mood averaging ${longMood.toFixed(1)}/3`,
@@ -161,7 +187,15 @@ function stalledGoal(input: PatternInputs): Pattern | undefined {
     id: uid("pat"),
     key: `goal-stalled-${stalled.goal.id}`,
     observation: `"${stalled.goal.title}" has stalled at ${Math.round(stalled.progress.progress * 100)}%.`,
-    confidence: 0.8,
+    // A stalled goal with milestones behind it has a sample: how many of them
+    // it has actually closed. The lower bound is deliberately unflattering for
+    // a goal with two milestones, because two milestones is not much evidence
+    // — which is exactly what the old flat 0.8 hid.
+    confidence: round(
+      wilsonLower(stalled.progress.milestonesDone, Math.max(1, stalled.progress.milestonesTotal)),
+      2,
+    ),
+    basis: `how many of its ${stalled.progress.milestonesTotal} milestones it has closed`,
     evidence: [
       stalled.progress.note,
       `${stalled.progress.milestonesDone} of ${stalled.progress.milestonesTotal} milestones done`,
@@ -189,7 +223,11 @@ function calendarCrowding(input: PatternInputs): Pattern | undefined {
     id: uid("pat"),
     key: "calendar-crowding",
     observation: `${today.length} blocks today, ${Math.round(bookedMinutes / 60)}h booked${longestGap < 45 ? " — no gap longer than 45m" : ""}.`,
-    confidence: 0.9,
+    // The day's own booked fraction against an eight-hour working day. This
+    // was 0.9 as a constant, which claimed certainty about a measurement that
+    // is right there in the numbers.
+    confidence: round(Math.min(0.95, bookedMinutes / 480), 2),
+    basis: "the share of an eight-hour day that is booked",
     evidence: [
       `${Math.round(bookedMinutes)}m scheduled`,
       longestGap > 0 ? `longest free gap: ${longestGap}m` : "no free gaps",
@@ -235,6 +273,7 @@ function productiveWindow(input: PatternInputs): Pattern | undefined {
     key: `productive-${part}`,
     observation: `${Math.round(share * 100)}% of what you finish, you finish in the ${part}.`,
     confidence: round(Math.min(0.88, 0.45 + share * 0.35), 2),
+    basis: `the share of completed work that lands in the ${part}`,
     evidence: [
       `${count} of ${completedTasks.length} completed tasks in the ${part}`,
       `next busiest: ${ranked[1] ? `${ranked[1][0]} (${ranked[1][1]})` : "n/a"}`,
@@ -273,6 +312,7 @@ function focusTrend(input: PatternInputs): Pattern | undefined {
     key: `focus-trend-${direction}`,
     observation: `Focused time is ${direction} ${Math.round(Math.abs(delta) * 100)}% on last week.`,
     confidence: round(Math.min(0.8, 0.45 + Math.abs(delta) * 0.25), 2),
+    basis: "the size of the change against last week",
     evidence: [`${Math.round(thisWeek / 60)}h this week`, `${Math.round(lastWeek / 60)}h last week`],
     suggestion: delta < 0 ? `Want a focus block tomorrow morning?` : undefined,
     detectedAt: nowIso(),
@@ -287,7 +327,12 @@ function streakMilestone(input: PatternInputs): Pattern | undefined {
     id: uid("pat"),
     key: `streak-${hit.id}-${hit.streak}`,
     observation: `${hit.streak} days on ${hit.name.toLowerCase()}. That's the longest run you have.`,
-    confidence: 1,
+    // This was `1`. Certainty is not available from a habit log: the claim is
+    // "this is your longest run", and the length of the run is the only thing
+    // supporting it. A long run is strong evidence and still not proof, so the
+    // figure approaches 0.95 and stops there.
+    confidence: round(1 - 1 / (1 + hit.streak / 10), 2),
+    basis: "how long the run is, which is all this claim rests on",
     evidence: [`current ${hit.streak}`, `longest ${hit.longestStreak}`, `${hit.thisWeek}/${hit.targetPerWeek} this week`],
     detectedAt: nowIso(),
   };

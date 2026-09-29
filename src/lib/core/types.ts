@@ -192,6 +192,8 @@ export type BriefingSection =
       evidence: string[];
       /** How sure the detector is, computed from its own sample size. */
       confidence?: number;
+      /** What that figure estimates, in a few words. */
+      basis?: string;
       suggestion?: string;
       detectedBy: "model" | "detector";
     }
@@ -477,6 +479,8 @@ export interface Analysis {
     analysis: string;
     evidence: string[];
     confidence?: number;
+    /** What that figure estimates, carried through from the detector. */
+    basis?: string;
     suggestion?: string;
   };
   recall?: Array<{ id: string; title: string; content: string; because: string }>;
@@ -491,8 +495,24 @@ export interface Pattern {
   key: string;
   /** One-line observation in Xana's voice. */
   observation: string;
-  /** 0..1 */
+  /**
+   * 0..1. How well the underlying rate holds up, not a vibe.
+   *
+   * This used to be a mixture of computed fractions and outright literals —
+   * `confidence: 0.85` sitting next to `confidence: round(0.4 + share)` — and
+   * the card rendered both as "confidence 85%". A number that reads as a
+   * measurement while being a constant is worse than no number, so this field
+   * is now always derived and never asserted.
+   */
   confidence: number;
+  /**
+   * What that number is confident *about*, in a few words.
+   *
+   * The percentage was the wall: "confidence 85%" invites the question it
+   * cannot answer. This says which rate is being estimated and over what, so
+   * the figure can be argued with instead of merely displayed.
+   */
+  basis: string;
   /** Concrete supporting numbers. */
   evidence: string[];
   /** Suggested action, phrased as a question when appropriate. */

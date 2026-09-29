@@ -81,6 +81,7 @@ state.patterns = [
     key: "habit-at-risk-h1",
     observation: "Your meditation streak is 26 days and needs 5 more this week to hold.",
     confidence: 0.62,
+    basis: "how firmly a 26-day run predicts the next week",
     evidence: ["2 of 7 this week", "26-day streak, longest 26"],
     suggestion: "Log it today?",
     detectedAt: new Date().toISOString(),
@@ -206,6 +207,69 @@ check(
 check(
   "recall is shown with its reason",
   Boolean(readRecall && readRecall.kind === "recall" && readRecall.items[0].because.length > 0),
+);
+
+console.log("\nNo figure without a subject\n");
+
+/**
+ * A confidence number has to be derived from something, and say what.
+ *
+ * `confidence: 0.85` sat next to `confidence: round(0.4 + share)` in the same
+ * detector and the card rendered both as "confidence 85%". A constant that
+ * reads as a measurement is worse than no measurement, so this walks every
+ * detector across different inputs and asserts two things: the figure moves
+ * when the data moves, and it carries a basis.
+ */
+const { detectPatterns } = await import("../src/lib/derived/patterns");
+
+const habit = (streak: number, thisWeek: number) =>
+  ({
+    id: `h${streak}`,
+    name: "Meditation",
+    targetPerWeek: 7,
+    thisWeek,
+    streak,
+    longestStreak: streak,
+    atRisk: true,
+    onPace: false,
+    completions: [],
+    health: { streak, thisWeek, targetPerWeek: 7, atRisk: true, onPace: false },
+  }) as never;
+
+const detect = (habits: unknown[]) =>
+  detectPatterns({
+    tasks: [],
+    events: [],
+    habits: habits as never,
+    goals: [],
+    health: [],
+    focus: [],
+    now: new Date(),
+  });
+
+const short = detect([habit(4, 2)]).find((p) => p.key.startsWith("habit-at-risk"));
+const long = detect([habit(60, 2)]).find((p) => p.key.startsWith("habit-at-risk"));
+
+check("a detector produces a finding", Boolean(short));
+check(
+  "every finding states what its figure measures",
+  detect([habit(4, 2)]).every((p) => typeof p.basis === "string" && p.basis.length > 10),
+  JSON.stringify(detect([habit(4, 2)]).map((p) => p.basis)),
+);
+check(
+  "a 4-day streak and a 60-day streak do not get the same figure",
+  Boolean(short && long && short.confidence !== long.confidence),
+  `4d=${short?.confidence} 60d=${long?.confidence}`,
+);
+check(
+  "the short streak is the less confident of the two",
+  Boolean(short && long && short.confidence < long.confidence),
+  `4d=${short?.confidence} 60d=${long?.confidence}`,
+);
+check(
+  "no detector claims certainty",
+  detect([habit(365, 7)]).every((p) => p.confidence < 1),
+  JSON.stringify(detect([habit(365, 7)]).map((p) => p.confidence)),
 );
 
 store.close();
