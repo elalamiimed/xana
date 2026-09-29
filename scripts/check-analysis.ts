@@ -175,9 +175,13 @@ check(
   "and no recall section is claimed",
   !noModel.some((s) => s.kind === "recall"),
 );
+// The detector's own sentence is shown, and it must not be mistaken for the
+// model's reading: the label is what distinguishes "measured" from "read".
+// Withholding the sentence entirely was worse — the section rendered bare
+// numbers with nothing to say what they were about.
 check(
-  "nothing in the briefing asserts an analysis",
-  !noModel.some((s) => s.kind === "pattern" && s.analysis !== undefined),
+  "the finding is attributed to the detector, never to the model",
+  Boolean(pattern && pattern.kind === "pattern" && pattern.detectedBy === "detector"),
 );
 
 console.log("\nThe briefing with one\n");

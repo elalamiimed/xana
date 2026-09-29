@@ -183,7 +183,7 @@ function BriefingSectionView({ section }: { section: BriefingSection }) {
     }
 
     case "focus": {
-      const { live, working, window } = section;
+      const { live, queued, window, session, weekMinutes } = section;
       return (
         <div>
           <h4 className="label">focus</h4>
@@ -198,10 +198,29 @@ function BriefingSectionView({ section }: { section: BriefingSection }) {
               ) : null}
             </div>
           ) : null}
-          {working ? (
+          {/* The focus log. This is time actually given to something, which is
+              a different claim from the next item on a list. */}
+          {session ? (
             <div className="mt-2">
-              <p className="text-[14px] font-light text-text">{working.title}</p>
-              {working.project ? <p className="mt-1 timestamp">{working.project}</p> : null}
+              <div className="flex flex-wrap items-baseline gap-3">
+                <span className="text-[14px] font-light text-text">{session.label}</span>
+                <span className="timestamp">
+                  {session.minutes}m
+                  {session.completed ? " · done" : ""}
+                </span>
+              </div>
+              {session.media ? (
+                <p className="mt-1 text-[13px] font-light text-dim">{session.media}</p>
+              ) : null}
+              {weekMinutes ? (
+                <p className="mt-1 timestamp">{span(weekMinutes)} focused this week</p>
+              ) : null}
+            </div>
+          ) : null}
+          {queued ? (
+            <div className="mt-2">
+              <p className="text-[14px] font-light text-text">{queued.title}</p>
+              <p className="mt-1 timestamp">next in the list</p>
             </div>
           ) : null}
           {window ? (

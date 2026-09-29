@@ -174,8 +174,20 @@ export type BriefingSection =
       live?: { title: string; endsAt: string; minutesLeft: number; location?: string };
       /** The best window today to do demanding work, from the forecast. */
       window?: { startHour: number; endHour: number; label: string; band: EnergyBand };
-      /** What the user is actually working on, from their own task list. */
-      working?: { id: string; title: string; project?: string };
+      /**
+       * The most recent focus session — what was actually being worked on,
+       * with how long was given to it.
+       *
+       * Distinct from `queued`: this is time already committed, and it comes
+       * from the focus log rather than from the task list. A briefing that
+       * showed only the task list was describing what someone intended rather
+       * than what they had done.
+       */
+      session?: { label: string; minutes: number; media?: string; completed: boolean };
+      /** Focused time this week, across every session. */
+      weekMinutes?: number;
+      /** The next thing in the list, when nothing is live or underway. */
+      queued?: { id: string; title: string; project?: string };
     }
   | {
       kind: "open";

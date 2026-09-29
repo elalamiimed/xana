@@ -15,7 +15,7 @@
  */
 
 import { localMind } from "@/lib/mind/local";
-import { localBriefingReply } from "@/lib/mind/local";
+import { localBriefingReply, localBriefingSections } from "@/lib/mind/local";
 import type { LifeState } from "@/lib/core/types";
 
 let passed = 0;
@@ -132,6 +132,120 @@ for (const utterance of ["brief me", "catch me up", "what's my day look like"]) 
     `text="${out.text}" cards=${(out.cards ?? []).length}`,
   );
 }
+
+/* ------------------------------------------------------------------ */
+/* The sections read the right source                                  */
+/* ------------------------------------------------------------------ */
+
+console.log("\nWhat each section is reading\n");
+
+/**
+ * Focus is the focus log, not the task list.
+ *
+ * The section used to print the top task and label it "working", which is a
+ * claim about what someone is doing drawn from what they wrote down. The focus
+ * log is the real answer — label, duration, media — and it was already in the
+ * life state, unread.
+ */
+const withLog = state({
+  focus: {
+    sessionsThisWeek: [
+      {
+        id: "f1",
+        label: "Review Sam's parser PR",
+        startedAt: new Date().toISOString(),
+        minutes: 45,
+        media: "Aurora",
+        completed: false,
+      },
+    ],
+    totalMinutes: 105,
+  } as never,
+  tasks: {
+    focus: [{ id: "t1", title: "Send Mom the photos", priority: 3, source: "local" }] as never,
+    overdue: [],
+    openCount: 1,
+    completedThisWeek: 0,
+  } as never,
+});
+
+const focusSection = localBriefingSections(withLog).find((s) => s.kind === "focus");
+check(
+  "the focus section reports the logged session",
+  Boolean(focusSection && focusSection.kind === "focus" && focusSection.session?.label === "Review Sam's parser PR"),
+  JSON.stringify(focusSection),
+);
+check(
+  "and its duration and media, which the task list cannot know",
+  Boolean(focusSection && focusSection.kind === "focus" && focusSection.session?.minutes === 45 && focusSection.session?.media === "Aurora"),
+);
+check(
+  "and the week's focused time",
+  Boolean(focusSection && focusSection.kind === "focus" && focusSection.weekMinutes === 105),
+);
+check(
+  "a queued task does not compete with a session in progress",
+  Boolean(focusSection && focusSection.kind === "focus" && focusSection.queued === undefined),
+  JSON.stringify(focusSection?.kind === "focus" ? focusSection.queued : null),
+);
+
+// With no log and nothing live, the queued task is the honest thing to show —
+// and it is labelled as what it is rather than as current work.
+const noLog = state({
+  focus: { sessionsThisWeek: [], totalMinutes: 0 } as never,
+  tasks: {
+    focus: [{ id: "t1", title: "Send Mom the photos", priority: 3, source: "local" }] as never,
+    overdue: [],
+    openCount: 1,
+    completedThisWeek: 0,
+  } as never,
+});
+const queuedOnly = localBriefingSections(noLog).find((s) => s.kind === "focus");
+check(
+  "with nothing logged, the next task is shown",
+  Boolean(queuedOnly && queuedOnly.kind === "focus" && queuedOnly.queued?.title === "Send Mom the photos"),
+);
+check(
+  "and it is not passed off as the session",
+  Boolean(queuedOnly && queuedOnly.kind === "focus" && queuedOnly.session === undefined),
+);
+
+/**
+ * A detector finding is never shown as bare numbers.
+ *
+ * The demo caught this: without a model the section rendered the evidence list
+ * alone — "current 7; longest 7; 3/7 this week" — with nothing saying what the
+ * numbers were about, because the detector's own sentence was not passed
+ * through.
+ */
+const withPattern = state({
+  patterns: [
+    {
+      id: "p1",
+      key: "habit-at-risk-h",
+      observation: "7 days on meditation. That's the longest run you have.",
+      confidence: 0.42,
+      basis: "how firmly a 7-day run predicts the next week",
+      evidence: ["3 of 7 this week"],
+      detectedAt: new Date().toISOString(),
+    },
+  ] as never,
+});
+
+const patternSection = localBriefingSections(withPattern).find((s) => s.kind === "pattern");
+check(
+  "a detector finding carries its sentence, not only its numbers",
+  Boolean(patternSection && patternSection.kind === "pattern" && /\w/.test(patternSection.analysis ?? "")),
+  JSON.stringify(patternSection),
+);
+check(
+  "and is labelled as the detector's",
+  Boolean(patternSection && patternSection.kind === "pattern" && patternSection.detectedBy === "detector"),
+);
+check(
+  "and states what its figure measures",
+  Boolean(patternSection && patternSection.kind === "pattern" && /\w/.test(patternSection.basis ?? "")),
+);
 
 console.log(`\n${passed} passed, ${failed} failed\n`);
 process.exit(failed === 0 ? 0 : 1);

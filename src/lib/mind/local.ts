@@ -827,8 +827,31 @@ export function localBriefingSections(
 
   const live = runningEvent(state, now);
   const window = nextFocusWindow(state, now);
-  const working = live ? undefined : state.tasks.focus[0];
-  if (live || window || working) {
+
+  /**
+   * What the focus log actually says.
+   *
+   * The section used to show the top task and call it "working", which is a
+   * claim about what someone is doing based on what they wrote down. The focus
+   * log is the real answer, and it was already in the life state — sessions
+   * carry a label, a duration and the media that was playing.
+   */
+  const latest = state.focus.sessionsThisWeek[0];
+  const session = latest
+    ? {
+        label: latest.label,
+        minutes: latest.minutes,
+        media: latest.media,
+        completed: latest.completed,
+      }
+    : undefined;
+  const weekMinutes = state.focus.totalMinutes > 0 ? state.focus.totalMinutes : undefined;
+
+  // Only when there is nothing live and nothing underway. A queued task shown
+  // beside a running session would be competing with the thing in progress.
+  const queued = live || session ? undefined : state.tasks.focus[0];
+
+  if (live || window || session || queued) {
     sections.push({
       kind: "focus",
       live: live
@@ -847,9 +870,9 @@ export function localBriefingSections(
             band: window.band,
           }
         : undefined,
-      working: working
-        ? { id: working.id, title: working.title, project: working.project }
-        : undefined,
+      session,
+      weekMinutes,
+      queued: queued ? { id: queued.id, title: queued.title, project: queued.project } : undefined,
     });
   }
 
@@ -879,8 +902,20 @@ export function localBriefingSections(
       detectedBy: "model",
     });
   } else if (detector) {
+    /**
+     * The detector's own sentence, not only its numbers.
+     *
+     * This was missing, and the demo caught it: without a model the section
+     * rendered the evidence list — "current 7; longest 7; 3/7 this week" —
+     * with no statement of what those numbers were about. `observation` is
+     * always a real sentence derived from the same data, so withholding it
+     * took away the only part that made the evidence legible. It is not
+     * templated prose: the numbers in it come from the measurement, and the
+     * label underneath says the detector wrote it rather than the model.
+     */
     sections.push({
       kind: "pattern",
+      analysis: detector.observation,
       evidence: detector.evidence,
       confidence: detector.confidence,
       basis: detector.basis,

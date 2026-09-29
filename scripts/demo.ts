@@ -294,7 +294,13 @@ function describeSections(sections: BriefingSection[]): string[] {
       case "focus": {
         const parts: string[] = [];
         if (section.live) parts.push(`now: ${section.live.title} (${section.live.minutesLeft}m left)`);
-        if (section.working) parts.push(`on: ${section.working.title}`);
+        if (section.session) {
+          parts.push(
+            `logged: ${section.session.label} ${section.session.minutes}m${section.session.completed ? " done" : ""}${section.session.media ? ` on ${section.session.media}` : ""}`,
+          );
+        }
+        if (section.weekMinutes) parts.push(`${humanDuration(section.weekMinutes)} this week`);
+        if (section.queued) parts.push(`queued: ${section.queued.title}`);
         if (section.window) parts.push(`best window ${section.window.startHour}:00–${section.window.endHour}:00`);
         return `focus     ${parts.join(" · ")}`;
       }
