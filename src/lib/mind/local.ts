@@ -835,8 +835,16 @@ export function localBriefingSections(
    * claim about what someone is doing based on what they wrote down. The focus
    * log is the real answer, and it was already in the life state — sessions
    * carry a label, a duration and the media that was playing.
+   *
+   * An unfinished session is the better answer when there is one: a session
+   * that was started and never completed is the closest thing the log has to
+   * "this is what you are on". Falling back to a completed one is honest only
+   * because the card labels it as the last thing rather than as current work,
+   * which the live payload made obvious — it read "writing the launch post"
+   * for a session that had already been closed.
    */
-  const latest = state.focus.sessionsThisWeek[0];
+  const sessions = state.focus.sessionsThisWeek;
+  const latest = sessions.find((s) => !s.completed) ?? sessions[0];
   const session = latest
     ? {
         label: latest.label,

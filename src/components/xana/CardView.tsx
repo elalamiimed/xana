@@ -199,19 +199,21 @@ function BriefingSectionView({ section }: { section: BriefingSection }) {
             </div>
           ) : null}
           {/* The focus log. This is time actually given to something, which is
-              a different claim from the next item on a list. */}
+              a different claim from the next item on a list — and a closed
+              session is a different claim again from one still open, so the
+              wording says which. */}
           {session ? (
             <div className="mt-2">
               <div className="flex flex-wrap items-baseline gap-3">
                 <span className="text-[14px] font-light text-text">{session.label}</span>
                 <span className="timestamp">
-                  {session.minutes}m
-                  {session.completed ? " · done" : ""}
+                  {session.completed ? `${session.minutes}m` : `${session.minutes}m so far`}
                 </span>
               </div>
-              {session.media ? (
-                <p className="mt-1 text-[13px] font-light text-dim">{session.media}</p>
-              ) : null}
+              <p className="mt-1 timestamp">
+                {session.completed ? "last session" : "in progress"}
+                {session.media ? ` · ${session.media}` : ""}
+              </p>
               {weekMinutes ? (
                 <p className="mt-1 timestamp">{span(weekMinutes)} focused this week</p>
               ) : null}

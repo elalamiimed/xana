@@ -27,6 +27,16 @@ const MARKERS = [
   ["endpoint preview line", "Requests go to"],
   ["the sentinel import", "__xana_keep__"],
   ["the composer slash hint", "Press / to jump here"],
+  // The briefing card's own wording. These are the markers that catch a client
+  // holding an old bundle: a stale page keeps rendering the previous card
+  // shape while the server sends the new one, which looks exactly like the
+  // feature not working. Reading the served chunks is the only way to tell
+  // those two apart from outside a browser.
+  ["briefing: focus session label", "in progress"],
+  ["briefing: queued task label", "next in the list"],
+  ["briefing: week total", "focused this week"],
+  ["briefing: pattern attribution", "read by the model"],
+  ["briefing: energy not reported", "Not reported yet"],
 ];
 
 const html = await (await fetch(base)).text();

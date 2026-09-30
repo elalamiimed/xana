@@ -56,7 +56,7 @@ function state(overrides: Partial<LifeState> = {}): LifeState {
     nudges: [],
     sources: [],
     memory: [],
-    focus: { sessionsThisWeek: 0, totalMinutes: 0, lastSession: undefined },
+    focus: { sessionsThisWeek: [], totalMinutes: 0, lastSession: undefined },
   } as unknown as LifeState;
   return { ...base, ...overrides } as LifeState;
 }
@@ -208,6 +208,48 @@ check(
 check(
   "and it is not passed off as the session",
   Boolean(queuedOnly && queuedOnly.kind === "focus" && queuedOnly.session === undefined),
+);
+
+/**
+ * A session still open is a different claim from one already closed.
+ *
+ * The live payload showed the flaw: it read "writing the launch post" for a
+ * session that had been completed, which reads as "this is what you are on".
+ * An unfinished session is preferred, and the renderer says which it is.
+ */
+const withOpenAndClosed = state({
+  focus: {
+    sessionsThisWeek: [
+      { id: "f2", label: "Review Sam's parser PR", startedAt: new Date().toISOString(), minutes: 45, completed: true },
+      { id: "f1", label: "Draft the launch post outline", startedAt: new Date().toISOString(), minutes: 60, completed: false },
+    ],
+    totalMinutes: 105,
+  } as never,
+});
+const openSession = localBriefingSections(withOpenAndClosed).find((s) => s.kind === "focus");
+check(
+  "an unfinished session is preferred over a closed one",
+  Boolean(openSession && openSession.kind === "focus" && openSession.session?.label === "Draft the launch post outline"),
+  JSON.stringify(openSession?.kind === "focus" ? openSession.session : null),
+);
+check(
+  "and it is reported as in progress, not as done",
+  Boolean(openSession && openSession.kind === "focus" && openSession.session?.completed === false),
+);
+
+const closedOnly = state({
+  focus: {
+    sessionsThisWeek: [
+      { id: "f1", label: "Review Sam's parser PR", startedAt: new Date().toISOString(), minutes: 45, completed: true },
+    ],
+    totalMinutes: 45,
+  } as never,
+});
+const closed = localBriefingSections(closedOnly).find((s) => s.kind === "focus");
+check(
+  "with only closed sessions, the last one is shown and marked completed",
+  Boolean(closed && closed.kind === "focus" && closed.session?.completed === true),
+  JSON.stringify(closed?.kind === "focus" ? closed.session : null),
 );
 
 /**
