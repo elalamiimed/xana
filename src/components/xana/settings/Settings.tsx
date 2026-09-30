@@ -7,6 +7,7 @@ import type { AppearanceSettings, SettingsPatch } from "@/lib/settings/types";
 import { Tabs } from "./controls";
 import AppearancePanel from "./AppearancePanel";
 import ModelPanel from "./ModelPanel";
+import PluginsPanel from "./PluginsPanel";
 import SourcesPanel from "./SourcesPanel";
 import VoicePanel from "./VoicePanel";
 import type { SettingsController } from "../useSettings";
@@ -31,7 +32,13 @@ import type { SettingsController } from "../useSettings";
  * a page they cannot see — is exactly the bug worth owning.
  */
 
-export type SettingsTab = "appearance" | "voice" | "model" | "sources" | "about";
+export type SettingsTab =
+  | "appearance"
+  | "voice"
+  | "model"
+  | "sources"
+  | "plugins"
+  | "about";
 
 export interface SettingsProps {
   open: boolean;
@@ -48,6 +55,7 @@ const TABS: readonly { id: SettingsTab; label: string; badge?: boolean }[] = [
   { id: "voice", label: "Voice" },
   { id: "model", label: "Model & key", badge: true },
   { id: "sources", label: "Connections" },
+  { id: "plugins", label: "Plugins" },
   { id: "about", label: "About" },
 ];
 
@@ -273,6 +281,8 @@ export default function Settings({
                     saving={controller.saving}
                   />
                 ) : null}
+
+                {tab === "plugins" ? <PluginsPanel /> : null}
 
                 {tab === "about" ? (
                   <AboutPanel settingsPath={view.settingsPath} />

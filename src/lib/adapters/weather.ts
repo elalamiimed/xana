@@ -1,9 +1,13 @@
 /**
- * Weather adapter — live by default.
+ * Weather adapter — live by default, once it is allowed to be.
  *
  * Open-Meteo needs no API key, which makes it the one integration Xana can run
- * for real out of the box. Location resolves from, in order:
- *   XANA_LAT/XANA_LON -> XANA_LOCATION (geocoded) -> IP geolocation -> a
+ * for real out of the box. It is still gated: the plugin declares `net.read`
+ * and `location`, and this adapter is never constructed until both are granted,
+ * so the IP geolocation below cannot happen behind the user's back.
+ *
+ * Location resolves from, in order:
+ *   the coordinates you set -> a place name (geocoded) -> IP geolocation -> a
  *   clearly-labelled synthetic fallback.
  */
 
@@ -79,17 +83,24 @@ function synthetic(reason: string): WeatherSnapshot {
 interface GeoResult { lat: number; lon: number; label: string }
 
 async function resolvePlace(): Promise<GeoResult | undefined> {
-  const lat = cred("XANA_LAT");
-  const lon = cred("XANA_LON");
+  // The plugin's own keys first, then the flat `XANA_*` names this feature used
+  // before plugins existed. Both are read because both are legitimate — the
+  // panel writes the qualified one, an exported variable is the old one — and
+  // reading only the qualified key is the bug this comment replaces: a place
+  // name saved in the panel did nothing, and the adapter fell through to IP
+  // geolocation instead, which is the one path the user was trying to avoid by
+  // naming their city.
+  const lat = cred("weather.latitude", "XANA_LAT");
+  const lon = cred("weather.longitude", "XANA_LON");
   if (lat.present && lon.present) {
     return {
       lat: Number(lat.value),
       lon: Number(lon.value),
-      label: cred("XANA_LOCATION_LABEL").value || "Home",
+      label: cred("weather.place", "XANA_LOCATION_LABEL").value || "Home",
     };
   }
 
-  const name = cred("XANA_LOCATION");
+  const name = cred("weather.place", "XANA_LOCATION", "XANA_LOCATION_LABEL");
   if (name.present) {
     try {
       const geo = await httpJson<{
@@ -131,10 +142,13 @@ export function weatherAdapter(): LifeAdapter {
       if (!place) {
         return {
           data: { weather: synthetic("no location") },
-          status: status(
-            "weather", "Weather", "offline", "synthetic",
-            "Set XANA_LAT/XANA_LON or XANA_LOCATION", Date.now() - t0,
-          ),
+          status: {
+            ...status(
+              "weather", "Weather", "offline", "synthetic",
+              "Set a latitude and longitude, or a place name", Date.now() - t0,
+            ),
+            synthetic: true,
+          },
         };
       }
 
@@ -166,7 +180,14 @@ export function weatherAdapter(): LifeAdapter {
       } catch (err) {
         return {
           data: { weather: synthetic(errorMessage(err)) },
-          status: status("weather", "Weather", "error", "synthetic", errorMessage(err), Date.now() - t0),
+          status: {
+            // `synthetic: true` because the numbers in the snapshot above are
+            // invented. The plugin layer shows this as "synthetic" rather than
+            // "cached", which is the honest distinction: a forecast that could
+            // not be fetched is not a forecast we have an old copy of.
+            ...status("weather", "Weather", "error", "synthetic", errorMessage(err), Date.now() - t0),
+            synthetic: true,
+          },
         };
       }
     },

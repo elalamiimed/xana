@@ -33,10 +33,20 @@ function toXanaPriority(p: number | undefined): Task["priority"] {
   }
 }
 
-export function tasksAdapter(): LifeAdapter {
-  const token = cred("XANA_TODOIST_TOKEN");
+/**
+ * Build the tasks adapter.
+ *
+ * `mayFetch` is the user's answer to "may Xana read your Todoist list". False
+ * means the remote branch is never reached, so a token sitting in the settings
+ * file fetches nothing until network access is granted — which is the whole
+ * point of holding the token under an `account` capability.
+ */
+export function tasksAdapter(opts: { mayFetch?: boolean } = {}): LifeAdapter {
+  const mayFetch = opts.mayFetch ?? false;
+  const token = cred("tasks.token", "XANA_TODOIST_TOKEN");
+  const remoteConfigured = mayFetch && token.present;
   const id = "tasks";
-  const label = token.present ? "Tasks (Todoist)" : "Tasks";
+  const label = remoteConfigured ? "Tasks (Todoist)" : "Tasks";
 
   const read = async (): Promise<{ data: { tasks: Task[] }; status: AdapterStatus }> => {
     const t0 = Date.now();
@@ -44,12 +54,14 @@ export function tasksAdapter(): LifeAdapter {
     const local = store.listTasks({ status: ["open", "doing"], limit: 300 });
     const tasks: Task[] = [...local];
 
-    if (!token.present) {
+    if (!remoteConfigured) {
       return {
         data: { tasks },
         status: status(
           id, label, "local", "local",
-          `${local.length} open · add XANA_TODOIST_TOKEN to sync Todoist`,
+          token.present && !mayFetch
+            ? `${local.length} open · a Todoist token is saved, waiting for permission`
+            : `${local.length} open · add a Todoist token to sync`,
           Date.now() - t0,
         ),
       };

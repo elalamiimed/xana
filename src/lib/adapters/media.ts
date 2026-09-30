@@ -62,10 +62,21 @@ function fromNowPlaying(raw: Record<string, unknown>): MediaContext | undefined 
   };
 }
 
-export function mediaAdapter(band: () => EnergyBand = () => "steady"): LifeAdapter {
-  const url = cred("XANA_NOWPLAYING_URL");
-  const file = cred("XANA_NOWPLAYING_FILE");
-  const configured = url.present || file.present;
+/**
+ * Build the media adapter.
+ *
+ * `mayFetch` gates the bridge lookup. The focus suggestion needs nothing — it
+ * is derived from the energy band — so this adapter is genuinely useful with
+ * every permission refused, and its ungated half is why the plugin is core.
+ */
+export function mediaAdapter(
+  opts: { band?: () => EnergyBand; mayFetch?: boolean } = {},
+): LifeAdapter {
+  const band = opts.band ?? (() => "steady");
+  const mayFetch = opts.mayFetch ?? false;
+  const url = cred("media.url", "XANA_NOWPLAYING_URL");
+  const file = cred("media.file", "XANA_NOWPLAYING_FILE");
+  const configured = (url.present || file.present) && mayFetch;
   const id = "media";
 
   const read = async (): Promise<{ data: { media: MediaContext }; status: AdapterStatus }> => {
@@ -77,7 +88,7 @@ export function mediaAdapter(band: () => EnergyBand = () => "steady"): LifeAdapt
         data: { media: { focusSuggestion: suggestion, source: "local" } },
         status: status(
           id, "Media", "local", "local",
-          "set XANA_NOWPLAYING_URL or XANA_NOWPLAYING_FILE for now-playing",
+          "set a now-playing endpoint or file",
           Date.now() - t0,
         ),
       };

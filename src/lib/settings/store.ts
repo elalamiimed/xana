@@ -43,9 +43,12 @@ import {
   shapeFromPath,
 } from "./providers";
 import {
+  CAPABILITY_KEYS,
   KEEP_KEY,
+  PLUGIN_SETTING_KEYS,
   SOURCE_GROUPS,
   type ModelSettings,
+  type PermissionSettings,
   type SecretView,
   type SettingsPatch,
   type SettingsView,
@@ -83,9 +86,11 @@ function defaultModelFor(shape: ModelSettings["provider"]): string {
 export type {
   AccentChannels,
   AppearanceSettings,
+  CapabilityKey,
   IdentitySettings,
   ModelProvider,
   ModelSettings,
+  PermissionSettings,
   SettingsPatch,
   SettingsView,
   SourceField,
@@ -111,6 +116,7 @@ export type {
 export { DEFAULT_PERSONA, KEEP_KEY, SOURCE_GROUPS } from "./types";
 export { PROVIDERS } from "./providers";
 export type { ProviderPreset } from "./providers";
+export { CAPABILITY_KEYS } from "./types";
 
 export const DEFAULT_SETTINGS: XanaSettings = {
   identity: { name: "", location: "", latitude: "", longitude: "" },
@@ -150,6 +156,16 @@ export const DEFAULT_SETTINGS: XanaSettings = {
     temperature: 0.7,
   },
   sources: {},
+  /**
+   * Nothing is granted on a fresh install.
+   *
+   * The empty object is the whole consent model in one line: no plugin reaches
+   * the network, no plugin reads a folder, until the user opens the Plugins
+   * panel and allows it. Contrast the model key, which is merely disabled —
+   * this one is structurally absent, so a bug in a plugin cannot read a
+   * default that happens to be permissive.
+   */
+  permissions: {},
 };
 
 /* ------------------------------------------------------------------ */
@@ -241,6 +257,21 @@ export function coerceSettings(raw: unknown): XanaSettings {
     if (typeof value === "string") cleanSources[key] = value;
   }
 
+  /**
+   * Grants, coerced the same way as everything else.
+   *
+   * Only the known capabilities survive, and only as booleans. The settings
+   * file is hand-editable by design, so this reads it as hostile input: a
+   * `"net.read": "yes"` from a user who assumed YAML-ish truthiness must not
+   * be a grant, because the grant check is `=== true` and a value that looks
+   * on in the editor but reads off in the code is the worst of both.
+   */
+  const permissions: PermissionSettings = {};
+  const rawPermissions = isRecord(root.permissions) ? root.permissions : {};
+  for (const key of CAPABILITY_KEYS) {
+    if (rawPermissions[key] === true) permissions[key] = true;
+  }
+
   return {
     identity: {
       name: str(identity.name, "").slice(0, 60),
@@ -277,6 +308,7 @@ export function coerceSettings(raw: unknown): XanaSettings {
       temperature: num(model.temperature, 0.7, 0, 2),
     },
     sources: cleanSources,
+    permissions,
   };
 }
 
@@ -457,6 +489,7 @@ export function settingsView(): SettingsView {
     },
     sourceSecrets,
     sourceValues,
+    permissions: settings.permissions,
     modelReady: resolved.apiKey.length > 0,
     effective: {
       provider: resolved.provider,
@@ -609,6 +642,7 @@ export function mergePatch(
     voice: { ...current.voice },
     model: { ...current.model },
     sources: { ...current.sources },
+    permissions: { ...current.permissions },
   };
 
   if (patch.identity) {
@@ -745,18 +779,101 @@ export function mergePatch(
     }
   }
 
+  /**
+   * Capability grants.
+   *
+   * Three details that matter more than they look:
+   *
+   *  - Only capabilities in `CAPABILITY_KEYS` are accepted, so a client cannot
+   *    write an arbitrary key into the permissions map and leave a file that
+   *    claims something the app can never honour.
+   *  - A non-boolean is dropped, not coerced. `"false"` is truthy, and the
+   *    check on the read side is `=== true`, so accepting strings here would
+   *    produce a file where `"net.read": "false"` reads as *granted* to anyone
+   *    inspecting the JSON and *not granted* to the code. Refusing the write is
+   *    the only outcome that cannot be misread.
+   *  - `false` is stored rather than deleted. Revoking a permission and never
+   *    having granted one are the same to the code, but not to the person
+   *    reading the file, and the audit trail is the point.
+   */
+  if (patch.permissions) {
+    for (const key of CAPABILITY_KEYS) {
+      const value = patch.permissions[key];
+      if (typeof value !== "boolean") continue;
+      next.permissions[key] = value;
+    }
+  }
+
   return next;
 }
 
 /** Only keys the app actually reads may be written, so a malformed patch
- *  cannot fill the settings file with junk. */
+ *  cannot fill the settings file with junk.
+ *
+ *  Two namespaces resolve here. The plugin keys are the live surface: every
+ *  value the Plugins panel writes goes through `savePluginSetting`. The
+ *  `SOURCE_GROUPS` keys are the older flat `XANA_*` names, kept resolvable
+ *  because they still work from the environment and a user who set one should
+ *  be able to clear it from the UI rather than by hand-editing JSON. */
 function isKnownSourceKey(key: string): boolean {
   for (const group of SOURCE_GROUPS) {
     for (const field of group.fields) {
       if (field.key === key) return true;
     }
   }
-  return false;
+  return (PLUGIN_SETTING_KEYS as readonly string[]).includes(key);
+}
+
+/* ------------------------------------------------------------------ */
+/* Plugin settings                                                    */
+/* ------------------------------------------------------------------ */
+
+export interface PluginSettingResult {
+  ok: boolean;
+  error?: string;
+}
+
+/**
+ * Write one plugin's non-secret settings.
+ *
+ * A separate entry point from the generic `sources` patch because it has two
+ * jobs the generic path does not: refusing keys no plugin declared, and
+ * clearing by empty string. In the flat sources map an empty value meant
+ * "delete"; here it means the same thing, and it has to, because clearing the
+ * vault folder is how a user turns notes off without revoking the permission
+ * they granted for it.
+ *
+ * Secrets go through here too. They are `0600` in a gitignored file, which is
+ * the same custody as the model API key — one file, one place to look, one
+ * thing to delete.
+ */
+export function savePluginSetting(values: Record<string, string>): PluginSettingResult {
+  const known = new Set<string>(PLUGIN_SETTING_KEYS);
+  const patch: SettingsPatch = { sources: {} };
+  const clear: string[] = [];
+
+  for (const [key, raw] of Object.entries(values)) {
+    if (!known.has(key)) continue;
+    const value = typeof raw === "string" ? raw.trim() : "";
+    if (value) (patch.sources as Record<string, string>)[key] = value.slice(0, 2000);
+    else clear.push(key);
+  }
+
+  if (clear.length > 0) patch.clearSources = clear;
+  const next = mergePatch(loadSettings(), patch);
+  const result = saveSettings(next);
+  return { ok: result.ok, error: result.error };
+}
+
+/**
+ * Whether a plugin setting is present, and where it came from.
+ *
+ * `value` is returned for non-secrets only by the caller's discipline; this
+ * helper is deliberately dumb so both the plugin code and the settings view
+ * can use it, and the view is the one that applies `maskSecret`.
+ */
+export function pluginSetting(key: string, legacyNames: readonly string[] = []): SettingCredential {
+  return credential(key, ...legacyNames);
 }
 
 /* ------------------------------------------------------------------ */

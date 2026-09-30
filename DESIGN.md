@@ -248,9 +248,15 @@ visible one-line caption sits beneath.
   0.55` after 20s of no interaction. Hover restores full opacity.
 - On an empty session the card area is empty — just the orb. That emptiness is
   the point.
-- Adapter status is a row of dots in the header; `--good` connected,
+- Plugin status is a row of dots in the header; `--good` connected,
   `--text-faint` local, `--warn` error. Tooltip on hover *or* focus, and the row
   carries an `aria-label` stating the counts — colour is never the only signal.
+- A plugin **waiting for permission** is a hollow ring (`ring-1 ring-faint`),
+  not an amber dot. It is neither healthy nor broken: nothing has failed and
+  there is a button to press. Painting it `--warn` would put it in the same class
+  as a rejected API key, which is how a user learns to ignore the dot that
+  matters. The header button carries a `--a-64` pixel beside it instead, and its
+  `aria-label` counts them separately from the failures.
 
 ### Settings
 
@@ -261,9 +267,17 @@ interface rather than a swatch that promises something.
 
 Sections: **Appearance** (palette, custom colours, ambient light, motion),
 **Voice** (spoken replies, voice, rate, pitch — each with a sample), **Model &
-key** (provider, model, key, a real test request, persona), **Connections** (the
-life-data sources, generated from a declarative list), **About** (where the file
-lives, and what she does without any of it).
+key** (provider, model, key, a real test request, persona), **Plugins** (one card
+per plugin: what leaves the machine, what you get, each capability with its
+reason and hosts, settings, and Allow / Withdraw), **Connections** (the older
+flat `XANA_*` keys, kept so an existing value can be cleared), **About** (where
+the file lives, and what she does without any of it).
+
+The Plugins card is the consent surface, so its order is a safety decision rather
+than a layout preference: what leaves the machine first, then what you get, then
+the capabilities in danger order (`remote.write` last), then the fields, then the
+buttons. A `remote.write` grant gets its own control — allowing reads and
+allowing changes are different decisions and must not share a click.
 
 It is a real dialog: `role="dialog"`, `aria-modal`, a focus trap, Escape to
 close, focus returned to whatever opened it, and the page behind locked from

@@ -9,6 +9,7 @@
 import { NextResponse } from "next/server";
 import type { ActionIntent } from "@/lib/core/types";
 import { executeAction } from "@/lib/actions/executor";
+import { finishAction } from "@/lib/actions/remote";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -53,6 +54,10 @@ export async function POST(request: Request): Promise<NextResponse> {
     );
   }
 
-  const outcome = executeAction(action);
+  // `executeAction` is synchronous and does the local write; `finishAction`
+  // awaits the remote mirror when the write has one. Splitting them here keeps
+  // the executor out of the network path, which matters because it also serves
+  // the seed script and the thirteen synchronous handlers in the local mind.
+  const outcome = await finishAction(executeAction(action));
   return NextResponse.json({ outcome }, { status: outcome.ok ? 200 : 422 });
 }

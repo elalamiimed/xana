@@ -82,12 +82,106 @@ export interface ModelSettings {
 
 export type SourceSettings = Record<string, string>;
 
+/**
+ * A capability grant, as stored: `{ "net.read": true }`.
+ *
+ * Imported as a loose shape rather than the plugin union, because this file
+ * must stay free of anything that could drag server code into the browser
+ * bundle and the plugin vocabulary imports the adapter layer. The plugin side
+ * narrows it with `PermissionGrants`, and the coercion below is what stops a
+ * hand-edited file from inventing a capability the app has no words for.
+ */
+export type PermissionSettings = Record<string, boolean>;
+
+/**
+ * The capabilities that may be written to the settings file.
+ *
+ * A second copy of the union in `lib/plugins/types.ts`, and the duplication is
+ * forced rather than lazy: this module must not import the plugin layer,
+ * because the plugin layer imports the adapter layer, because the adapter layer
+ * imports `node:fs` — and this module is the one the browser imports for its
+ * types. A single import here would fail the client build.
+ *
+ * Drift is a closed hole anyway, from both ends: `plugins/types.ts` declares
+ * `CapabilityKind` from this list, so a capability added to one and not the
+ * other is a typecheck error rather than a grant that silently does nothing.
+ */
+export const CAPABILITY_KEYS = [
+  "local.read",
+  "local.write",
+  "net.read",
+  "net.write",
+  "location",
+  "account",
+  "remote.write",
+] as const;
+
+export type CapabilityKey = (typeof CAPABILITY_KEYS)[number];
+
+/**
+ * The settings keys plugins own, in `plugin.field` form.
+ *
+ * Same forced duplication as `CAPABILITY_KEYS` and the same closure: every
+ * plugin's declared `fields`/`secrets` keys are checked against this list by
+ * `plugins/registry.ts`, which throws on a mismatch at import time. So a plugin
+ * that declares `calendar.icsUrl` and a list here that says `calendar.icsUrls`
+ * is a boot failure with the two names in the message, not a form field that
+ * silently never saves.
+ *
+ * The dotted namespace is deliberate. A flat `XANA_*` map was the old shape,
+ * and it made "which feature does this key belong to" a naming convention
+ * rather than a fact; a plugin's settings are now addressable by its own id.
+ */
+export const PLUGIN_SETTING_KEYS = [
+  // calendar
+  "calendar.icsUrls",
+  // weather
+  "weather.latitude",
+  "weather.longitude",
+  "weather.place",
+  // tasks
+  "tasks.token",
+  // notes
+  "notes.vault",
+  // health
+  "health.folder",
+  // now playing
+  "media.url",
+  "media.file",
+  // mail
+  "mail.url",
+  "mail.file",
+  // markets
+  "markets.symbols",
+  // google calendar (OAuth)
+  "google.clientId",
+  "google.clientSecret",
+  "google.refreshToken",
+  "google.accessToken",
+  "google.accessExpiresAt",
+  "google.calendarId",
+  "google.account",
+  "google.pendingState",
+  "google.pendingVerifier",
+  "google.pendingAt",
+] as const;
+
+export type PluginSettingKey = (typeof PLUGIN_SETTING_KEYS)[number];
+
 export interface XanaSettings {
   identity: IdentitySettings;
   appearance: AppearanceSettings;
   voice: VoiceSettings;
   model: ModelSettings;
   sources: SourceSettings;
+  /**
+   * Which capabilities the user has granted.
+   *
+   * Absent means nothing is granted, which is the correct default: a fresh
+   * install talks to no service until the user says so. Every plugin reads
+   * this before it does anything.
+   */
+  permissions: PermissionSettings;
 }
 
 /* ------------------------------------------------------------------ */
@@ -121,6 +215,8 @@ export interface SettingsView {
   sourceSecrets: Record<string, SecretView>;
   /** Non-secret source values, so the form is populated. */
   sourceValues: SourceSettings;
+  /** Capability grants, as stored. The plugin list reads these. */
+  permissions: PermissionSettings;
   /** Whether a usable model key exists in any layer. */
   modelReady: boolean;
   effective: ResolvedModelView;
@@ -149,6 +245,12 @@ export interface SettingsPatch {
   sources?: SourceSettings;
   /** Source keys to clear, so an empty string can mean "unset". */
   clearSources?: string[];
+  /**
+   * Capability grants to change. Only `true`/`false` are honoured, and only
+   * for capabilities the app knows about, so a patch cannot turn on a
+   * capability by typo or grant one that no plugin can use.
+   */
+  permissions?: PermissionSettings;
 }
 
 /* ------------------------------------------------------------------ */
@@ -219,110 +321,119 @@ export interface SourceGroup {
   fields: SourceField[];
 }
 
+/**
+ * Source credentials the settings surface can still write, described
+ * declaratively so the form is generated rather than hand-built.
+ *
+ * DEPRECATED, AND DELIBERATELY STILL HERE
+ *
+ * These are the flat `XANA_*` names from before Xana had plugins. Every one of
+ * them still resolves — an environment variable someone exported is not
+ * something an upgrade gets to ignore — and every one of them is still
+ * *clearable* from the UI, which is the only reason this list has not been
+ * deleted outright. A key a user can set but cannot unset is worse than a key
+ * with no form at all.
+ *
+ * New configuration does not go here. A plugin declares its own `config` in
+ * `lib/plugins/registry.ts`, keyed `plugin.field`, and the Plugins panel builds
+ * the form from that. The two lists are kept separate because they answer
+ * different questions: this one is "what is still in the environment", the
+ * plugin registry is "what can Xana do".
+ */
 export const SOURCE_GROUPS: readonly SourceGroup[] = [
   {
-    id: "weather",
-    label: "Weather",
-    blurb: "A free Open-Meteo lookup. Only your coordinates leave the machine.",
+    id: "legacy-weather",
+    label: "Weather (old keys)",
+    blurb:
+      "Set these in the Plugins panel instead. Shown here only so an older value can be cleared.",
     fields: [
-      { key: "XANA_LAT", label: "Latitude", hint: "Decimal degrees", kind: "number", example: "51.5072" },
-      { key: "XANA_LON", label: "Longitude", hint: "Decimal degrees", kind: "number", example: "-0.1276" },
-      { key: "XANA_LOCATION_LABEL", label: "Place name", hint: "Shown on the card", kind: "text", example: "London" },
+      { key: "XANA_LAT", label: "Latitude", hint: "Superseded by weather.latitude", kind: "number", example: "51.5072" },
+      { key: "XANA_LON", label: "Longitude", hint: "Superseded by weather.longitude", kind: "number", example: "-0.1276" },
+      { key: "XANA_LOCATION_LABEL", label: "Place name", hint: "Superseded by weather.place", kind: "text", example: "London" },
     ],
   },
   {
-    id: "calendar",
-    label: "Calendar",
-    blurb:
-      "Any number of read-only ICS feeds, comma separated. Google, Outlook and Fastmail all publish one under their calendar settings.",
+    id: "legacy-calendar",
+    label: "Calendar (old key)",
+    blurb: "Set this in the Plugins panel instead, under Calendar.",
     fields: [
       {
         key: "XANA_CALENDAR_ICS_URLS",
         label: "ICS feed URLs",
-        hint: "Comma separated. A webcal address works too.",
+        hint: "Superseded by calendar.icsUrls. Comma separated.",
         kind: "url",
         example: "https://calendar.google.com/calendar/ical/basic.ics",
       },
     ],
   },
   {
-    id: "tasks",
-    label: "Tasks",
-    blurb:
-      "Todoist is the only hosted task list Xana speaks natively. Without a token, tasks are local and still fully functional.",
+    id: "legacy-tasks",
+    label: "Tasks (old key)",
+    blurb: "Set this in the Plugins panel instead, under Todoist.",
     fields: [
       {
         key: "XANA_TODOIST_TOKEN",
         label: "Todoist API token",
-        hint: "Todoist, then Settings, then Integrations, then API token",
+        hint: "Superseded by tasks.token",
         kind: "secret",
       },
     ],
   },
   {
-    id: "knowledge",
-    label: "Notes",
-    blurb:
-      "Point Xana at a folder of Markdown and she will read it, and write to it when you ask her to remember something.",
+    id: "legacy-knowledge",
+    label: "Notes (old key)",
+    blurb: "Set this in the Plugins panel instead, under Notes folder.",
     fields: [
       {
         key: "XANA_OBSIDIAN_VAULT",
         label: "Vault folder",
-        hint: "An absolute path to a folder of .md files",
+        hint: "Superseded by notes.vault",
         kind: "path",
         example: "C:\\Users\\you\\Documents\\Vault",
       },
     ],
   },
   {
-    id: "health",
-    label: "Health",
-    blurb: "A folder of Apple Health or Google Fit exports. Read locally, never uploaded.",
+    id: "legacy-health",
+    label: "Health (old key)",
+    blurb: "Set this in the Plugins panel instead, under Health export.",
     fields: [
       {
         key: "XANA_HEALTH_DIR",
         label: "Export folder",
-        hint: "Where the JSON and CSV exports live",
+        hint: "Superseded by health.folder",
         kind: "path",
         example: "C:\\Users\\you\\Health",
       },
     ],
   },
   {
-    id: "media",
-    label: "Now playing",
-    blurb:
-      "A small JSON endpoint, or a file, describing what is playing. Useful with a scrobbler.",
+    id: "legacy-media",
+    label: "Now playing (old keys)",
+    blurb: "Set these in the Plugins panel instead, under Now playing.",
     fields: [
-      {
-        key: "XANA_NOWPLAYING_URL",
-        label: "Endpoint URL",
-        hint: "Returns a title and an artist",
-        kind: "url",
-        example: "http://127.0.0.1:9863/now",
-      },
-      { key: "XANA_NOWPLAYING_FILE", label: "or a file", hint: "The same JSON, read from disk", kind: "path" },
+      { key: "XANA_NOWPLAYING_URL", label: "Endpoint URL", hint: "Superseded by media.url", kind: "url" },
+      { key: "XANA_NOWPLAYING_FILE", label: "or a file", hint: "Superseded by media.file", kind: "path" },
     ],
   },
   {
-    id: "mail",
-    label: "Mail",
-    blurb:
-      "The same shape as now-playing: a URL or a file returning recent messages. Xana reads subjects, never bodies.",
+    id: "legacy-mail",
+    label: "Mail (old keys)",
+    blurb: "Set these in the Plugins panel instead, under Mail.",
     fields: [
-      { key: "XANA_MAIL_URL", label: "Endpoint URL", hint: "Returns a list of messages", kind: "url" },
-      { key: "XANA_MAIL_FILE", label: "or a file", hint: "The same JSON, read from disk", kind: "path" },
+      { key: "XANA_MAIL_URL", label: "Endpoint URL", hint: "Superseded by mail.url", kind: "url" },
+      { key: "XANA_MAIL_FILE", label: "or a file", hint: "Superseded by mail.file", kind: "path" },
     ],
   },
   {
-    id: "finance",
-    label: "Markets",
-    blurb: "Quotes from Stooq, which needs no key. Symbols are comma separated.",
+    id: "legacy-finance",
+    label: "Markets (old key)",
+    blurb: "Set this in the Plugins panel instead, under Markets.",
     fields: [
       {
         key: "XANA_FINANCE_SYMBOLS",
         label: "Symbols",
-        hint: "Stooq tickers, comma separated",
+        hint: "Superseded by markets.symbols",
         kind: "text",
         example: "aapl.us, msft.us, btcusd",
       },

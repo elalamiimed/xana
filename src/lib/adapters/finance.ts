@@ -56,7 +56,7 @@ export function parseStooqCsv(csv: string, symbol: string): Quote | undefined {
 }
 
 export function financeAdapter(): LifeAdapter {
-  const symbolsCred = cred("XANA_FINANCE_SYMBOLS");
+  const symbolsCred = cred("markets.symbols", "XANA_FINANCE_SYMBOLS");
   const symbols = (symbolsCred.present ? symbolsCred.value.split(/[,\s]+/) : DEFAULT_SYMBOLS).filter(Boolean);
   const enabled = process.env.XANA_FINANCE !== "off";
   const id = "finance";

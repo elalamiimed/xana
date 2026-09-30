@@ -25,6 +25,7 @@
     "verify:analysis-live": "node --import ./scripts/ts-loader.mjs scripts/check-analysis-live.ts",
     "verify:nudges": "node --import ./scripts/ts-loader.mjs scripts/check-nudges.ts",
     "verify:refresh": "node --import ./scripts/ts-loader.mjs scripts/check-refresh.ts",
+    "verify:plugins": "node --import ./scripts/ts-loader.mjs scripts/check-plugins.ts",
     "check:encoding": "node scripts/check-encoding.mjs",
     "check:bundle": "node scripts/check-bundle.mjs",
     "debug:key": "node scripts/debug-key.mjs",

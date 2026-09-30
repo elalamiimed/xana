@@ -28,6 +28,7 @@ import {
 } from "./llm";
 import { loadSettings } from "../settings/store";
 import { rememberUtterance } from "../derived/memory";
+import { finishAction } from "../actions/remote";
 
 export interface ThinkResult {
   message: Message;
@@ -63,6 +64,23 @@ export async function think(
     sessionId,
     modality: request.modality,
   });
+
+  /**
+   * 1a. Mirror the write remotely, if the user allowed that and the plugin
+   *     supports it. Today this is a calendar event going into Google.
+   *
+   * It runs *before* `refreshAfterAction` on purpose. The mirror can create a
+   * record in a calendar the read adapters also read, so refreshing first would
+   * assemble a life state that does not yet contain what she just booked, and
+   * the reply would be assembled from a stale schedule.
+   *
+   * `finishAction` is a no-op for every outcome without a remote counterpart,
+   * which is all of them except a calendar event, and it never throws or fails
+   * an action that already succeeded locally.
+   */
+  if (local.outcome) {
+    await finishAction(local.outcome);
+  }
 
   const acted = Boolean(local.outcome?.ok);
   const refreshed = acted ? await refreshAfterAction(lifeState) : lifeState;

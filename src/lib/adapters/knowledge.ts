@@ -85,7 +85,7 @@ export function readVault(vaultPath: string): Note[] {
 }
 
 export function knowledgeAdapter(): LifeAdapter {
-  const vault = cred("XANA_OBSIDIAN_VAULT");
+  const vault = cred("notes.vault", "XANA_OBSIDIAN_VAULT");
   const id = "knowledge";
   const label = vault.present ? "Notes (Obsidian)" : "Notes";
 
@@ -100,7 +100,7 @@ export function knowledgeAdapter(): LifeAdapter {
         data: { notes },
         status: status(
           id, label, "local", "local",
-          `${local.length} notes · set XANA_OBSIDIAN_VAULT to read a vault`,
+          `${local.length} notes · set a vault folder to read Markdown`,
           Date.now() - t0,
         ),
       };

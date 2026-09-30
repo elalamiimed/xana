@@ -106,7 +106,12 @@ async function main(): Promise<void> {
   say("xana", `${state.headline} (energy ${state.energy.score}/100, ${state.energy.band})`);
   check("assembles a life state from nothing", Boolean(state.generatedAt));
   check("energy is computed", state.energy.score > 0 && state.energy.score <= 100);
-  check("every adapter reported a status", state.sources.length === 8, `got ${state.sources.length}`);
+  // Nine, not eight: Google Calendar is a plugin of its own now, alongside the
+  // ICS calendar rather than folded into it. The assertion is about there being
+  // one status row per registered plugin, which is the property that matters —
+  // a plugin that is switched off must still report, or the UI loses a row and
+  // the user cannot tell "not configured" from "not there".
+  check("every plugin reported a status", state.sources.length === 9, `got ${state.sources.length}`);
 
   /* ---------------- 3. Capture ---------------- */
 
@@ -249,7 +254,7 @@ async function main(): Promise<void> {
     const mark = s.state === "connected" ? "●" : s.state === "local" ? "○" : "×";
     console.log(`  ${mark} ${s.label.padEnd(22)} ${s.mode.padEnd(10)} ${s.detail ?? ""}`);
   }
-  check("all eight sources accounted for", state.sources.length === 8);
+  check("all nine plugins accounted for", state.sources.length === 9);
 
   /* ---------------- Result ---------------- */
 

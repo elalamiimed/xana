@@ -85,10 +85,18 @@ export async function putSettings(request: Request): Promise<NextResponse> {
   // slice. Imported lazily because the gateway pulls in the whole adapter
   // graph, and a settings write that changes nothing relevant has no business
   // loading it.
+  //
+  // `permissions` is in this list for a reason that is easy to miss: revoking
+  // a capability leaves the *assembled state* holding data that was gathered
+  // under it. The adapter stops reading immediately, but without this the
+  // already-built LifeState would keep being served from the gateway cache for
+  // its TTL, so a user who withdraws access would watch the data linger — the
+  // exact thing revoking is supposed to stop.
   const affectsSources =
     patch.sources !== undefined ||
     patch.clearSources !== undefined ||
-    patch.identity !== undefined;
+    patch.identity !== undefined ||
+    patch.permissions !== undefined;
 
   if (affectsSources) {
     try {

@@ -84,8 +84,8 @@ async function main(): Promise<void> {
     check("has a headline", typeof lifeState.headline === "string");
     check("has energy", typeof (lifeState.energy as Record<string, unknown>)?.score === "number");
     check(
-      "reports eight sources",
-      Array.isArray(lifeState.sources) && (lifeState.sources as unknown[]).length === 8,
+      "reports nine plugins",
+      Array.isArray(lifeState.sources) && (lifeState.sources as unknown[]).length === 9,
       `${(lifeState.sources as unknown[])?.length}`,
     );
     check("is JSON-serialisable round trip", JSON.stringify(lifeState).length > 200);

@@ -4,10 +4,11 @@ A minimalist, Jarvis-inspired personal AI assistant. She is a calm, intelligent
 presence rather than a chatbot: dark, quiet, and always aware of the shape of
 your day. She thinks, remembers, and acts.
 
-She runs with **zero API keys**. Every integration degrades honestly — a source
-that is not configured reports itself as `local` or `offline` instead of
-pretending, and the parts that need no credentials (weather, market quotes)
-work out of the box.
+She runs with **zero API keys**, and with **nothing switched on**. Every
+integration is a plugin that asks permission before it does anything: a source
+that has not been allowed reports itself as `waiting for permission` rather than
+pretending, and everything that needs no network — tasks, reminders, habits,
+goals, memory, the briefing — works out of the box.
 
 ```bash
 npm install
@@ -16,7 +17,8 @@ npm run dev       # prints the URL it started on
 ```
 
 Then open the URL and press **Settings** (or `Ctrl+,`) to choose a theme, paste
-an API key, or connect a calendar. Nothing in there is required.
+an API key, or open **Plugins** and allow a connection. Nothing in there is
+required.
 
 `npm run dev` does **not** shell out to `next dev`. It starts the Next server
 programmatically from `scripts/dev.mjs`, which matters in two situations:
@@ -41,6 +43,11 @@ available as the stock CLI, for a normal machine.
 priorities. Natural-language capture ("remind me to call Mom Friday"). Calendar,
 reminders, routines and habit streaks in one store rather than four silos.
 Proactive nudges ranked by what changes the day.
+
+Everything local works with nothing granted. Weather and market quotes need a
+click first: they are the only two built-ins that cannot answer honestly without
+leaving the machine, and Open-Meteo would otherwise geolocate you by IP on the
+first page load.
 
 **Goals.** Short, mid and long horizons with milestones. Weekly and monthly
 reflections she writes herself. Progress as thin rings, never charts.
@@ -70,23 +77,75 @@ from your own system. Every one of those is a control, not a config file.
 ## Architecture
 
 ```
-  adapters ─┐
+  plugins ──┐
             ├─► LifeState ─► /xana/context ─► mind ─► UI cards
   derived  ─┤                     ▲
   memory   ─┘                     │
-                            actions (write-back)
+                            actions (write-back) ─► remote mirror
 ```
 
 | Layer | Location | Responsibility |
 |---|---|---|
 | **Core** | `src/lib/core/` | Domain types, SQLite store + vector recall, local embedder, time helpers, NL time parsing |
-| **Adapters** | `src/lib/adapters/` | One file per life-data source. Never throw; report mode honestly |
+| **Plugins** | `src/lib/plugins/` | One descriptor per feature, the capability gate, and the Google Calendar OAuth client |
+| **Adapters** | `src/lib/adapters/` | One file per life-data source. Never throw; report mode honestly; told what they may do |
 | **Derived** | `src/lib/derived/` | Energy forecast, goal pace, habit health, pattern detection, nudges, reflections, memory ingestion |
 | **Context** | `src/lib/context/gateway.ts` | The unified `/xana/context` gateway — one "life state" object |
-| **Actions** | `src/lib/actions/executor.ts` | Every write-back, in one place |
+| **Actions** | `src/lib/actions/` | Every write-back in one place, and the remote mirror that repeats a local write elsewhere |
 | **Settings** | `src/lib/settings/` | The typed settings store, theme presets, and the one function that turns client input into stored state |
 | **Mind** | `src/lib/mind/` | LLM client, local deterministic intent engine, prompt construction |
 | **UI** | `src/app/`, `src/components/xana/` | The orb, its 3D renderer, the composer, peripheral cards, the settings surface |
+
+### Plugins and permission
+
+Every life-data source is a **plugin** with a descriptor that declares what it
+needs. Nothing it wants to do happens until the matching capability has been
+granted in **Settings → Plugins**, and the grant is a value in the settings file
+you can read and revoke.
+
+```ts
+{
+  id: "weather",
+  needs: [
+    { kind: "net.read", reason: "Look up the forecast.",
+      hosts: ["api.open-meteo.com", "geocoding-api.open-meteo.com", "ipapi.co"] },
+    { kind: "location", reason: "Use the coordinates you set, or guess them from your IP." },
+  ],
+  config: [{ key: "weather.latitude", label: "Latitude", … }],
+}
+```
+
+The rule the whole thing rests on:
+
+> **A plugin with an ungranted capability is never called.** Not "is called and
+> checks", not "is called in a limited mode" — never called.
+
+The check lives in one function (`runPlugin` in `lib/plugins/automation.ts`), in
+front of the adapter. A blocked plugin has no adapter instance, so there is no
+function to call by accident. When a capability is revoked, the assembled life
+state and every adapter's cache are dropped together, so the data does not
+linger for a TTL after you withdraw access.
+
+Three things follow from that, and they are the whole design:
+
+- **Consent and configuration are different questions.** An ungranted plugin
+  reads `blocked`; a granted plugin with no URL yet reads `local` and says what
+  is missing. Neither looks like the other, and neither looks like a fault.
+- **Her own store is not a permission boundary.** Tasks, her own events, habits,
+  energy readings and memories live in `data/xana.db`, which she wrote. Those
+  plugins are `core` and always run — a fresh install has a working assistant,
+  not an empty one waiting on a permissions screen. The boot contract refuses
+  `core: true` on any descriptor whose *required* capabilities leave the
+  machine, so the flag cannot become an escape hatch.
+- **Adapters are told, not asked.** The plugin layer computes a `PluginGates`
+  (`{network, remote, localWrite}`) and hands it to the adapter factory. An
+  adapter never reads the permission store; when `network` is false the network
+  branch is not entered and no request object is built.
+
+`GET /api/plugins` returns every plugin with its capabilities, its reasons, and
+what it last managed to read. `POST /api/plugins` grants, revokes, connects and
+disconnects. `PUT /api/plugins/settings` writes a plugin's own fields. All three
+are also served under `/xana/plugins`.
 
 ### The two-engine mind
 
@@ -152,6 +211,11 @@ have.
 | `GET` | `/xana/settings` | Current settings, every secret masked (canonical) |
 | `GET` | `/api/settings` | Alias of the above |
 | `PUT` | `/api/settings` | Merge a settings patch. `{ testModel: true }` probes without saving |
+| `GET` | `/xana/plugins` | Every plugin: capabilities, reasons, settings presence, last read (canonical) |
+| `GET` | `/api/plugins` | Alias of the above |
+| `POST` | `/api/plugins` | `{ id, action }` — `grant`, `revoke`, `connect`, `disconnect` |
+| `PUT` | `/api/plugins/settings` | `{ values }` — one plugin's own fields, then rebuild its adapter |
+| `GET` | `/api/plugins/google/callback` | Where Google returns the browser. Exchanges the code, checks `state` |
 | `GET` | `/xana/cave` | My cave: the goal board with computed pace, and a page of memories |
 | `POST` | `/xana/cave` | `{ op, ...args }` — one of fourteen fixed goal and memory operations |
 
@@ -203,34 +267,72 @@ from the implementation.
 
 ## Configuration
 
-**Settings first.** Everything below can be set from the Settings panel, which
-writes `data/settings.json`. Environment variables still work, and are the right
-answer for a container or a shared machine — but a value set in the UI wins over
-one from the environment.
+**Settings first.** Everything below can be set from **Settings → Plugins**,
+which writes `data/settings.json`. Environment variables still work, and are the
+right answer for a container or a shared machine — but a value set in the UI wins
+over one from the environment.
+
+The old flat `XANA_*` names still resolve, so an exported variable keeps working.
+They are listed under **Settings → Connections** purely so an older value can be
+cleared; new configuration belongs in the plugin that owns it.
 
 | Variable | Effect when set |
 |---|---|
 | `XANA_LLM_API_KEY` | Enables the generative voice |
 | `XANA_LLM_BASE_URL` / `_MODEL` / `_PROVIDER` | Any OpenAI-compatible endpoint (OpenAI, DeepSeek, Groq, OpenRouter, Ollama, llama.cpp) or Anthropic |
-| `XANA_CALENDAR_ICS_URLS` | Live calendar from any published ICS feed (Google, Outlook, Fastmail). Comma-separated |
-| `XANA_TODOIST_TOKEN` | Merges Todoist tasks with the local list |
-| `XANA_OBSIDIAN_VAULT` | Reads a Markdown vault, stripping syntax before embedding |
-| `XANA_HEALTH_DIR` | Imports Apple Health / Google Fit JSON exports |
-| `XANA_NOWPLAYING_URL` / `_FILE` | Now-playing from any local bridge |
-| `XANA_MAIL_URL` / `_FILE` | Ambient mail signals as JSON |
-| `XANA_FINANCE_SYMBOLS` | Quote symbols (default: `^spx,^ndq,eurusd,gbpusd`) |
-| `XANA_LAT` / `XANA_LON` / `XANA_LOCATION_LABEL` | Pins the weather location |
+| `XANA_CALENDAR_ICS_URLS` | Live calendar from any published ICS feed (Google, Outlook, Fastmail). Comma-separated. Superseded by `calendar.icsUrls` |
+| `XANA_TODOIST_TOKEN` | Merges Todoist tasks with the local list. Superseded by `tasks.token` |
+| `XANA_OBSIDIAN_VAULT` | Reads a Markdown vault, stripping syntax before embedding. Superseded by `notes.vault` |
+| `XANA_HEALTH_DIR` | Imports Apple Health / Google Fit JSON exports. Superseded by `health.folder` |
+| `XANA_NOWPLAYING_URL` / `_FILE` | Now-playing from any local bridge. Superseded by `media.url` / `media.file` |
+| `XANA_MAIL_URL` / `_FILE` | Ambient mail signals as JSON. Superseded by `mail.url` / `mail.file` |
+| `XANA_FINANCE_SYMBOLS` | Quote symbols (default: `^spx,^ndq,eurusd,gbpusd`). Superseded by `markets.symbols` |
+| `XANA_LAT` / `XANA_LON` / `XANA_LOCATION_LABEL` | Pins the weather location. Superseded by `weather.latitude` / `weather.longitude` / `weather.place` |
 | `XANA_DATA_DIR` | Moves both the database and the settings file |
 
-**Why ICS instead of OAuth.** Google Calendar and Outlook both publish a private
-ICS URL. For a single-user local assistant that means real schedule data with no
-OAuth dance and no server-side token custody — the right trade at this scale.
+Environment variables do **not** grant permission. A token in your shell and an
+ungranted `net.read` means the token is read and nothing is fetched — the
+capability is stored in the settings file only, precisely so that reaching into
+your environment is not a way to widen what Xana may do.
+
+### Google Calendar
+
+Two ways in, and they are not equivalent.
+
+**An ICS feed** (the `calendar` plugin) is the right choice for reading. Google,
+Outlook and Fastmail all publish a private address under their calendar
+settings; paste it, allow `net.read`, and today's schedule appears. No OAuth app,
+no client secret, no token custody.
+
+**The `google-calendar` plugin** is for writing, and for a grant you can revoke
+from Google's side as well as Xana's. It creates events in your real calendar
+when you allow `remote.write`.
+
+1. In [Google Cloud Console](https://console.cloud.google.com/apis/credentials),
+   create a project and **enable the Google Calendar API**.
+2. Configure the OAuth consent screen. Add yourself as a test user if the app is
+   in Testing.
+3. Create a credential. **Desktop app** is simplest — it has no client secret and
+   the flow below is built for it. A **Web application** client works too; add
+   `http://127.0.0.1:4310/api/plugins/google/callback` as an authorized redirect
+   URI and paste the client secret as well.
+4. Paste the client ID in **Settings → Plugins → Google Calendar**, press
+   **Allow**, then **Connect**. A browser tab opens at Google; approving it
+   redirects back to this machine and the tab closes itself.
+
+Scopes are `calendar.readonly`, plus `calendar.events` if you allowed
+`remote.write` — not full `calendar`, which would also grant control of sharing
+and deletion. `access_type=offline` and `prompt=consent` are both sent, because
+Google only issues a refresh token on the first consent for a client and would
+otherwise hand back an access token that dies an hour later with no explanation.
+Disconnecting revokes the token at Google and clears it locally.
 
 **Where your key goes.** `data/settings.json`, written atomically and `0600`
 where the platform supports it. It is never sent back to the browser: the
 settings API returns a mask and a presence flag, and the UI sends a sentinel
 meaning "leave the stored key alone" whenever you did not retype the field. The
-write is one-way by design.
+write is one-way by design. Plugin secrets are the same — the plugins API reports
+presence, never a value, not even masked.
 
 ---
 
@@ -252,6 +354,15 @@ npm run verify:browser     # with the server running: a real browser
 - `npm run verify:orb` — the orb's scene and maths on the same TypeScript the
   canvas imports: sphere density, determinism, the presence table, the breath,
   projection, rotation, and frame-rate-independent easing.
+- `npm run verify:plugins` — the permission gate, on a scratch database with
+  `XANA_DATA_DIR` pointed at a temp directory. The assertions that matter are the
+  negative ones: with nothing granted, a `globalThis.fetch` stub counts **zero**
+  calls while every plugin is configured and every setting is filled in; with an
+  ICS URL saved and `net.read` refused, still zero; and after a revoke, the
+  adapter is rebuilt with `gates().network === false` rather than finishing the
+  fetch it was already warm for. Plus the PKCE S256 test vector, the
+  refresh-token preservation Google's repeat-consent behaviour depends on, and
+  that the boot contract actually throws on a descriptor it should reject.
 - `npm run verify:web` — the served application: rendered page, inlined theme
   tokens, the stylesheet as it comes through Tailwind, every endpoint, a live
   chat turn, and a settings round trip that changes the theme, proves the next
@@ -326,4 +437,17 @@ didn't follow that."
 - **Reflections are generated on demand**, not on a scheduler — ask for one, or
   the `reflect` action produces it. They are deterministic and local, so they
   read the same every time.
+- **The Google Calendar connect flow has not been completed against Google from
+  this machine.** Everything around it is tested: the PKCE verifier against the
+  RFC 7636 vector, the authorization URL's parameters, `state` mismatch and
+  expiry, the token exchange with a stubbed endpoint, refresh-token preservation,
+  and that a refused `remote.write` stops the write. What has not happened is a
+  real consent screen and a real refresh token, because the sandbox this was
+  built in has no browser. Treat the first connect as the test.
+- **Permissions are not access control.** There is one user, the server listens
+  on loopback, and anything that can reach these routes could read the SQLite
+  file directly. A capability describes what Xana is permitted to send off this
+  machine and what she is permitted to change. Claiming more than that would be
+  security theatre, and the settings file is readable by anyone who can read the
+  directory.
 

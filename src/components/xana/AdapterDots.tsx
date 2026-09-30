@@ -15,20 +15,30 @@ import type { AdapterStatus, LifeState } from "@/lib/core/types";
 
 const DOT_BASE = "h-1.5 w-1.5 shrink-0 rounded-full";
 
-/** `--good` connected, `--text-faint` local, `--warn` error or offline. */
+/**
+ * `--good` connected, `--text-faint` local, `--warn` error or offline,
+ * a hollow ring for blocked.
+ *
+ * Blocked gets a ring rather than a colour because it is not a severity. A
+ * plugin waiting for consent is neither healthy nor broken, and painting it
+ * amber would put it in the same class as a 401 — which is how a user learns
+ * to ignore the dot that matters. A ring reads as "not filled in yet".
+ */
 const STATE_DOT: Record<AdapterStatus["state"], string> = {
   connected: "bg-good",
   local: "bg-faint",
   offline: "bg-warn",
   error: "bg-warn",
+  blocked: "bg-transparent ring-1 ring-faint",
 };
 
-/** Worst news first: a broken adapter should not hide behind two healthy ones. */
+/** Worst news first, then the ones waiting on the user, then the quiet ones. */
 const STATE_ORDER: Record<AdapterStatus["state"], number> = {
   error: 0,
   offline: 1,
-  local: 2,
-  connected: 3,
+  blocked: 2,
+  local: 3,
+  connected: 4,
 };
 
 const STATE_WORDS: Record<AdapterStatus["state"], string> = {
@@ -36,21 +46,25 @@ const STATE_WORDS: Record<AdapterStatus["state"], string> = {
   local: "local only",
   offline: "offline",
   error: "error",
+  blocked: "waiting for permission",
 };
 
 function summarise(sources: readonly AdapterStatus[]): string {
   if (sources.length === 0) return "No adapters reported";
   let connected = 0;
   let local = 0;
+  let blocked = 0;
   let bad = 0;
   for (const source of sources) {
     if (source.state === "connected") connected += 1;
     else if (source.state === "local") local += 1;
+    else if (source.state === "blocked") blocked += 1;
     else bad += 1;
   }
   const parts: string[] = [];
   if (connected > 0) parts.push(`${connected} connected`);
   if (local > 0) parts.push(`${local} local`);
+  if (blocked > 0) parts.push(`${blocked} waiting for permission`);
   if (bad > 0) parts.push(`${bad} needing attention`);
   return `Adapters: ${parts.join(", ")}`;
 }
@@ -139,6 +153,9 @@ export function Header({ lifeState, presence, onOpenSettings, onOpenCave }: Head
   const broken = sources.filter(
     (source) => source.state === "error" || source.state === "offline",
   ).length;
+  // Kept apart from `broken` on purpose: a plugin waiting for consent is not
+  // a fault and must not raise the same amber flag a failed request does.
+  const waiting = sources.filter((source) => source.state === "blocked").length;
 
   return (
     <header className="flex h-[var(--header-h)] shrink-0 items-center justify-between gap-4 px-6">
@@ -189,7 +206,9 @@ export function Header({ lifeState, presence, onOpenSettings, onOpenCave }: Head
           aria-label={
             broken > 0
               ? `Settings. ${broken} ${broken === 1 ? "connection needs" : "connections need"} attention.`
-              : "Settings"
+              : waiting > 0
+                ? `Settings. ${waiting} ${waiting === 1 ? "plugin is" : "plugins are"} waiting for permission.`
+                : "Settings"
           }
           className="group relative flex items-center gap-2 rounded-full border border-hairline px-3 py-1.5 text-[12px] font-normal text-dim transition-colors duration-[var(--t-fast)] hover:border-hairline-2 hover:bg-surface-2 hover:text-text"
         >
@@ -207,6 +226,12 @@ export function Header({ lifeState, presence, onOpenSettings, onOpenCave }: Head
             <span
               aria-hidden="true"
               className="h-1 w-1 rounded-full bg-warn"
+            />
+          ) : waiting > 0 ? (
+            // A hairline mark, not a warning: something can be switched on.
+            <span
+              aria-hidden="true"
+              className="h-1 w-1 rounded-full bg-accent/60"
             />
           ) : null}
         </button>

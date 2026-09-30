@@ -281,10 +281,28 @@ function expandRrule(
   return start >= from && start < to ? [start] : [];
 }
 
-export function calendarAdapter(): LifeAdapter {
-  const icsCred = cred("XANA_CALENDAR_ICS_URLS", "XANA_CALENDAR_ICS_URL");
+/**
+ * Build the calendar adapter.
+ *
+ * `mayFetch` is the user's answer to "may Xana fetch the feed URLs you gave
+ * her". It is passed in rather than looked up, because an adapter has no
+ * business reading the permission store and — more to the point — because the
+ * decision has to be made in one place. When it is false the ICS branch is not
+ * taken at all: no request is constructed, so there is nothing to accidentally
+ * call. Her own events are read either way; they are in her own database.
+ */
+export function calendarAdapter(opts: { mayFetch?: boolean } = {}): LifeAdapter {
+  const mayFetch = opts.mayFetch ?? false;
+  // `calendar.icsUrls` is the plugin's own key. The `XANA_*` name beside it is
+  // the flat key this feature used before plugins existed: still read, so an
+  // exported environment variable keeps working, but no longer what the panel
+  // writes.
+  const icsCred = cred("calendar.icsUrls", "XANA_CALENDAR_ICS_URLS", "XANA_CALENDAR_ICS_URL");
+  // A feed URL with no permission to fetch it is treated as no feed at all, so
+  // the label, the branch below, and the status line all agree.
+  const icsConfigured = mayFetch && icsCred.present;
   const id = "calendar";
-  const label = icsCred.present ? "Calendar (ICS)" : "Calendar";
+  const label = icsConfigured ? "Calendar (ICS)" : "Calendar";
 
   const read = async (): Promise<{ data: { events: CalendarEvent[] }; status: AdapterStatus }> => {
     const t0 = Date.now();
@@ -296,12 +314,17 @@ export function calendarAdapter(): LifeAdapter {
     const local = store.eventsBetween(from.toISOString(), to.toISOString());
     const events: CalendarEvent[] = local.map((e) => ({ ...e, source: e.source || "local" }));
 
-    if (!icsCred.present) {
+    if (!icsConfigured) {
+      const blocked = icsCred.present && !mayFetch;
       return {
         data: { events },
         status: status(
           id, label, "local", "local",
-          `${local.length} events · add XANA_CALENDAR_ICS_URLS to sync Google/Outlook`,
+          blocked
+            ? "Feed URLs are saved. Allow network access to fetch them."
+            : local.length > 0
+              ? `${local.length} local events · paste an ICS feed URL, or connect Google Calendar, to sync`
+              : "Paste an ICS feed URL, or connect Google Calendar",
           Date.now() - t0,
         ),
       };

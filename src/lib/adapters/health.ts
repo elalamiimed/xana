@@ -178,7 +178,7 @@ function readdirSafe(p: string): boolean {
 }
 
 export function healthAdapter(): LifeAdapter {
-  const dir = cred("XANA_HEALTH_DIR");
+  const dir = cred("health.folder", "XANA_HEALTH_DIR");
   const id = "health";
   const label = dir.present ? "Health (import)" : "Health";
 
@@ -192,7 +192,7 @@ export function healthAdapter(): LifeAdapter {
         data: { health: local },
         status: status(
           id, label, "local", "local",
-          `${local.length} days · set XANA_HEALTH_DIR to import Apple Health / Google Fit exports`,
+          `${local.length} days · set an export folder to import Apple Health / Google Fit`,
           Date.now() - t0,
         ),
       };

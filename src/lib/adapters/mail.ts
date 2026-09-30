@@ -78,21 +78,37 @@ export function extractMailList(payload: unknown): RawMail[] {
   return [];
 }
 
-export function mailAdapter(knownPeople: () => string[] = () => []): LifeAdapter {
-  const url = cred("XANA_MAIL_URL");
-  const file = cred("XANA_MAIL_FILE");
-  const configured = url.present || file.present;
+/**
+ * Build the mail adapter.
+ *
+ * `mayFetch` gates the bridge lookup. This one reads a URL *or a file*, and
+ * both live under `local.read` in the descriptor — a decision worth naming: a
+ * local endpoint is still a thing Xana reaches out to, so it follows the same
+ * switch as a remote one rather than being quietly exempt because the host
+ * happens to be 127.0.0.1.
+ */
+export function mailAdapter(
+  opts: { knownPeople?: () => string[]; mayFetch?: boolean } = {},
+): LifeAdapter {
+  const knownPeople = opts.knownPeople ?? (() => []);
+  const mayFetch = opts.mayFetch ?? false;
+  const url = cred("mail.url", "XANA_MAIL_URL");
+  const file = cred("mail.file", "XANA_MAIL_FILE");
+  const configured = (url.present || file.present) && mayFetch;
   const id = "mail";
   const label = "Mail";
 
   const read = async (): Promise<{ data: { mail: MailSignal[] }; status: AdapterStatus }> => {
     const t0 = Date.now();
     if (!configured) {
+      const pending = (url.present || file.present) && !mayFetch;
       return {
         data: { mail: [] },
         status: status(
           id, label, "offline", "local",
-          "set XANA_MAIL_URL or XANA_MAIL_FILE for ambient mail signals",
+          pending
+            ? "a mail source is set, waiting for permission"
+            : "set a mail endpoint or file for ambient signals",
           Date.now() - t0,
         ),
       };

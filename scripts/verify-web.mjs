@@ -299,7 +299,9 @@ async function main() {
     check(`${path} responds 200`, res.status === 200, String(res.status));
     check(`${path} returns a life state`, Boolean(ls));
     if (ls) {
-      check(`${path} reports 8 sources`, ls.sources?.length === 8, String(ls.sources?.length));
+      // Nine plugin rows: one per registered plugin, including the ones that
+      // are switched off. A row per plugin means the UI can never lose one.
+      check(`${path} reports 9 plugins`, ls.sources?.length === 9, String(ls.sources?.length));
     }
   }
 

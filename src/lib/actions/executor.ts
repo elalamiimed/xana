@@ -167,6 +167,26 @@ function completeTask(taskId: string, store: XanaStore): ActionOutcome {
   };
 }
 
+/**
+ * Book an event.
+ *
+ * One place it lands here: her own database. Whether it *also* lands in the
+ * user's Google calendar is decided after this returns, by `mirrorToRemote` in
+ * `actions/remote.ts`, which the route layer awaits.
+ *
+ * That split is deliberate and worth understanding before moving it. The
+ * executor is synchronous and sits behind thirteen handlers in the local mind,
+ * all of which are synchronous dispatchers. Making it async to serve one
+ * plugin's write would have rippled through every one of them and through the
+ * seed and demo scripts, for a feature that only affects calendar events.
+ * Instead the remote write is a second step, named for what it is.
+ *
+ * `remoteEligible` is how the next step knows this event is a candidate. It is
+ * on the outcome rather than inferred from the effect, because "a calendar
+ * event was created" and "this event should be mirrored" are different
+ * questions: an event read from Google and re-created locally must not be
+ * pushed back.
+ */
 function createEvent(
   intent: Extract<ActionIntent, { type: "create_event" }>,
   store: XanaStore,
@@ -194,6 +214,18 @@ function createEvent(
     message: `Booked "${event.title}" ${when} at ${at}.${clash}`,
     ids: [event.id],
     refresh: ["calendar", "context"],
+    remoteEligible: {
+      plugin: "google-calendar",
+      kind: "event",
+      localId: event.id,
+      title: event.title,
+      start: intent.start,
+      end: intent.end,
+      location: intent.location,
+      when,
+      at,
+      clash,
+    },
   };
 }
 

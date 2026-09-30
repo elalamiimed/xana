@@ -572,10 +572,28 @@ export interface Nudge {
 export interface AdapterStatus {
   id: string;
   label: string;
-  /** "connected" | "local" | "offline" | "error" */
-  state: "connected" | "local" | "offline" | "error";
+  /**
+   * "connected" | "local" | "offline" | "error" | "blocked".
+   *
+   * `blocked` is a plugin whose capabilities the user has not granted. It is
+   * separate from `offline` because it is not a fault: nothing is broken and
+   * nothing needs fixing, there is a button to press. The header dots read the
+   * same vocabulary, so a blocked source shows as waiting rather than as down.
+   */
+  state: "connected" | "local" | "offline" | "error" | "blocked";
   /** Where the data came from: "live" | "local" | "synthetic". */
   mode: "live" | "local" | "synthetic";
+  /**
+   * True when the values behind this status are invented rather than read.
+   *
+   * The distinction `mode` cannot make on its own: an adapter that fails after
+   * a successful read reports `synthetic` while still holding the last real
+   * answer, and one that has never had a source reports `synthetic` while
+   * holding placeholder numbers. The plugin layer shows those differently —
+   * "cached" against "synthetic" — because "we could not refresh this" and
+   * "we made this up" are not the same thing to tell a user.
+   */
+  synthetic?: boolean;
   detail?: string;
   durationMs?: number;
 }
@@ -622,6 +640,35 @@ export interface ActionOutcome {
   ids?: string[];
   /** Card hints the UI should refresh. */
   refresh?: Array<"tasks" | "goals" | "habits" | "memory" | "calendar" | "context">;
+  /**
+   * This write should also be mirrored into a remote service, if the user has
+   * allowed it.
+   *
+   * Present only on writes that have a remote counterpart — today, a calendar
+   * event. The executor stays synchronous and does the local write; the route
+   * layer awaits `mirrorToRemote` with this descriptor, which is where the
+   * network call and the second permission check live. See
+   * `actions/remote.ts` for why the split is here rather than inside the
+   * executor.
+   */
+  remoteEligible?: RemoteEligible;
+}
+
+/** A local write that a plugin may be able to repeat somewhere else. */
+export interface RemoteEligible {
+  /** The plugin whose write capability governs this. */
+  plugin: string;
+  kind: "event";
+  /** The local record, so the remote id can be tied back to it. */
+  localId: string;
+  title: string;
+  start: string;
+  end: string;
+  location?: string;
+  /** Pre-formatted pieces, so the rewritten message matches the original. */
+  when: string;
+  at: string;
+  clash: string;
 }
 
 /* ------------------------------------------------------------------ */
