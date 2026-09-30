@@ -341,8 +341,8 @@ export interface GoalProgress {
   progress: number;
   milestonesDone: number;
   milestonesTotal: number;
-  /** "ahead" | "on-track" | "slipping" | "stalled" */
-  pace: "ahead" | "on-track" | "slipping" | "stalled";
+  /** "ahead" | "on-track" | "slipping" | "stalled" | "not-started" */
+  pace: "ahead" | "on-track" | "slipping" | "stalled" | "not-started";
   /** Days until targetDate; negative when overdue. */
   daysRemaining?: number;
   /** Human sentence explaining pace. */

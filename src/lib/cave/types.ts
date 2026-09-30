@@ -71,6 +71,11 @@ export function toneFor(entry: CaveGoal): GoalTone {
   if (goal.status === "paused") return "idle";
   if (progress.pace === "stalled") return "danger";
   if (progress.pace === "slipping") return "warn";
+  // Nothing started is a state worth seeing on the board rather than a neutral
+  // one. It is not an alarm — the goal may simply be new — but a card with no
+  // movement and a quarter of its window gone should not look identical to one
+  // that is tracking.
+  if (progress.pace === "not-started") return "warn";
   if (
     progress.daysRemaining !== undefined &&
     progress.daysRemaining <= 3

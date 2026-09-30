@@ -99,5 +99,74 @@ check("a section that did not arrive keeps its previous value", held.patterns.le
 check("and so does memory", held.memory.length === 1, String(held.memory.length));
 check("while the task list still follows the data", held.tasks.focus.length === 0);
 
+console.log("\nA goal with nothing done\n");
+
+/**
+ * "on-track" for a goal nobody has started is technically true and completely
+ * misleading — the only thing being tracked is the passage of time. All three
+ * goals read that way at 0%.
+ *
+ * The floor matters as much as the label: a goal written down this morning is
+ * not behind, it is new, and a board that says otherwise is unusable on the day
+ * it is set up.
+ */
+const { computeGoalProgress } = await import("../src/lib/derived/goals");
+const now = new Date("2026-06-01T12:00:00");
+
+/**
+ * `touchedAt` is the goal's last-movement stamp. It has to be recent or the
+ * 21-day staleness rule fires first and every case comes back "stalled" —
+ * which is what the first version of this fixture did, and it made the test
+ * look like it was testing the pace rules while actually testing nothing but
+ * the staleness floor.
+ */
+const goal = (
+  createdAt: string,
+  targetDate: string,
+  doneCount = 0,
+  of = 4,
+  touchedAt = "2026-05-28T00:00:00",
+) =>
+  ({
+    id: "g",
+    title: "g",
+    horizon: "short",
+    status: "active",
+    createdAt,
+    targetDate,
+    lastTouchedAt: touchedAt,
+    milestones: Array.from({ length: of }, (_, i) => ({
+      id: `m${i}`,
+      title: `m${i}`,
+      done: i < doneCount,
+      completedAt: i < doneCount ? "2026-05-28T00:00:00" : undefined,
+    })),
+  }) as never;
+
+// Five months in on a year-long goal, nothing done.
+const unstarted = computeGoalProgress(goal("2026-01-01T00:00:00", "2027-01-01"), now);
+check(
+  "an unstarted goal past a quarter of its window is not called on-track",
+  unstarted.pace === "not-started",
+  unstarted.pace,
+);
+check("and it says so in its own words", unstarted.note === "Nothing started yet.", unstarted.note);
+
+// Written down today: on track, because there is nothing yet to be behind on.
+const fresh = computeGoalProgress(goal("2026-06-01T00:00:00", "2027-01-01"), now);
+check("a goal created today is not accused of anything", fresh.pace === "on-track", fresh.pace);
+
+// One milestone done is a rate, and the ordinary rules apply to it again.
+const started = computeGoalProgress(goal("2026-01-01T00:00:00", "2027-01-01", 1), now);
+check(
+  "a goal with something done keeps the ordinary pace rules",
+  started.pace === "slipping",
+  started.pace,
+);
+
+// No target date means no window to be behind in.
+const undated = computeGoalProgress(goal("2026-01-01T00:00:00", "", 0), now);
+check("a goal with no deadline is left on the momentum rule", undated.pace !== "not-started", undated.pace);
+
 console.log(`\n${passed} passed, ${failed} failed\n`);
 process.exit(failed === 0 ? 0 : 1);

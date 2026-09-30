@@ -15,6 +15,9 @@ const PACE_NOTES: Record<GoalProgress["pace"], string> = {
   "on-track": "Tracking to plan.",
   slipping: "Slipping — behind where the calendar says you should be.",
   stalled: "Nothing has moved in a while.",
+  // "on-track" was a lie here: a goal can only be on track if it has left the
+  // station. Nothing done yet is not a rate, it is an absence of one.
+  "not-started": "Nothing started yet.",
 };
 
 export function computeGoalProgress(goal: Goal, now: Date = new Date()): GoalProgress {
@@ -71,6 +74,21 @@ export function computeGoalProgress(goal: Goal, now: Date = new Date()): GoalPro
     pace = "ahead";
   } else if (daysSinceProgress >= 21) {
     pace = "stalled";
+  } else if (progress === 0 && (elapsedFraction ?? 0) >= 0.25) {
+    /**
+     * Nothing done, and enough of the window gone to say so.
+     *
+     * This used to fall through to `on-track`, because `delta` is `0 -
+     * elapsedFraction`, which sits inside the "on-track" band for the first
+     * quarter of a goal's life. Every one of the user's goals read "on-track"
+     * at 0% — technically true and completely misleading, since the only thing
+     * being tracked was the passage of time.
+     *
+     * The quarter-window floor is deliberate: a goal written down this morning
+     * is not behind, it is new, and a label that says otherwise makes the
+     * board unusable on the day it is set up.
+     */
+    pace = "not-started";
   } else if (elapsedFraction !== undefined) {
     const delta = progress - elapsedFraction;
     if (delta < -0.12) pace = "slipping";
