@@ -163,7 +163,7 @@ export default function Settings({
             <h2 id="settings-title" className="text-[15px] font-normal tracking-[0.01em] text-text">
               Settings
             </h2>
-            <p className="mt-0.5 text-[12px] font-light text-faint">
+            <p className="mt-0.5 text-[12px] font-normal text-faint">
               {view
                 ? view.effective.active
                   ? `${view.effective.model} is answering.`

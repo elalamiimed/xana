@@ -224,14 +224,14 @@ export default function TasksRoom({ controller }: TasksRoomProps) {
                       void controller.run("task.delete", { id: task.id }, task.id);
                       setConfirming(null);
                     }}
-                    className="rounded-[var(--r-sm)] px-2 py-1 text-[11px] font-light text-danger hover:bg-surface-2"
+                    className="rounded-[var(--r-sm)] px-2 py-1 text-[11px] font-normal text-danger hover:bg-surface-2"
                   >
                     delete for good
                   </button>
                   <button
                     type="button"
                     onClick={() => setConfirming(null)}
-                    className="rounded-[var(--r-sm)] px-2 py-1 text-[11px] font-light text-dim hover:bg-surface-2"
+                    className="rounded-[var(--r-sm)] px-2 py-1 text-[11px] font-normal text-dim hover:bg-surface-2"
                   >
                     keep
                   </button>
@@ -241,7 +241,7 @@ export default function TasksRoom({ controller }: TasksRoomProps) {
                   type="button"
                   onClick={() => setConfirming(task.id)}
                   aria-label={`Delete ${task.title}`}
-                  className="shrink-0 rounded-[var(--r-sm)] px-2 py-1 text-[11px] font-light text-faint hover:bg-surface-2 hover:text-danger"
+                  className="shrink-0 rounded-[var(--r-sm)] px-2 py-1 text-[11px] font-normal text-faint hover:bg-surface-2 hover:text-danger"
                 >
                   delete
                 </button>

@@ -71,14 +71,14 @@ function AdapterDot({ source }: { source: AdapterStatus }) {
         role="tooltip"
         className="pointer-events-none absolute top-[14px] right-0 z-20 w-max max-w-[260px] rounded-[var(--r-md)] border border-hairline bg-surface px-3 py-2 opacity-0 transition-opacity duration-[var(--t-fast)] group-hover:opacity-100 group-focus-within:opacity-100"
       >
-        <span className="block text-[12px] font-light text-text">
+        <span className="block text-[12px] font-normal text-text">
           {source.label}
         </span>
-        <span className="mt-0.5 block text-[11px] font-light text-dim">
+        <span className="mt-0.5 block text-[11px] font-normal text-dim">
           {`${source.state} · ${source.mode}`}
         </span>
         {detail ? (
-          <span className="mt-0.5 block text-[11px] leading-relaxed font-light text-faint">
+          <span className="mt-0.5 block text-[11px] leading-relaxed font-normal text-faint">
             {detail}
           </span>
         ) : null}
@@ -168,7 +168,7 @@ export function Header({ lifeState, presence, onOpenSettings, onOpenCave }: Head
         <button
           type="button"
           onClick={onOpenCave}
-          className="flex items-center gap-2 rounded-full border border-hairline px-3 py-1.5 text-[12px] font-light text-dim transition-colors duration-[var(--t-fast)] hover:border-hairline-2 hover:bg-surface-2 hover:text-text"
+          className="flex items-center gap-2 rounded-full border border-hairline px-3 py-1.5 text-[12px] font-normal text-dim transition-colors duration-[var(--t-fast)] hover:border-hairline-2 hover:bg-surface-2 hover:text-text"
         >
           <svg width="13" height="13" viewBox="0 0 14 14" fill="none" aria-hidden="true">
             <path
@@ -191,7 +191,7 @@ export function Header({ lifeState, presence, onOpenSettings, onOpenCave }: Head
               ? `Settings. ${broken} ${broken === 1 ? "connection needs" : "connections need"} attention.`
               : "Settings"
           }
-          className="group relative flex items-center gap-2 rounded-full border border-hairline px-3 py-1.5 text-[12px] font-light text-dim transition-colors duration-[var(--t-fast)] hover:border-hairline-2 hover:bg-surface-2 hover:text-text"
+          className="group relative flex items-center gap-2 rounded-full border border-hairline px-3 py-1.5 text-[12px] font-normal text-dim transition-colors duration-[var(--t-fast)] hover:border-hairline-2 hover:bg-surface-2 hover:text-text"
         >
           <svg width="13" height="13" viewBox="0 0 14 14" fill="none" aria-hidden="true">
             <circle cx="7" cy="7" r="2.4" stroke="currentColor" strokeWidth="1.1" />

@@ -28,7 +28,7 @@ export default function GhostButton({
       type="button"
       onClick={onClick}
       disabled={disabled}
-      className="rounded-[var(--r-md)] border border-hairline px-3 py-1 text-[11px] font-light tracking-[0.02em] text-dim transition-colors duration-[var(--t-fast)] hover:border-accent/40 hover:text-accent disabled:opacity-40"
+      className="rounded-[var(--r-md)] border border-hairline px-3 py-1 text-[11px] font-normal tracking-[0.02em] text-dim transition-colors duration-[var(--t-fast)] hover:border-accent/40 hover:text-accent disabled:opacity-40"
     >
       {label}
     </button>

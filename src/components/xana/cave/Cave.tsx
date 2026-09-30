@@ -189,7 +189,7 @@ export default function Cave({ open, onClose, initialRoom = "goals" }: CaveProps
           <h2 id="cave-title" className="text-[15px] font-normal tracking-[0.01em] text-text">
             My cave
           </h2>
-          <p className="mt-0.5 text-[12px] font-light text-faint">{summary}</p>
+          <p className="mt-0.5 text-[12px] font-normal text-faint">{summary}</p>
         </div>
 
         <div className="flex items-center gap-3">
@@ -231,7 +231,7 @@ export default function Cave({ open, onClose, initialRoom = "goals" }: CaveProps
       {controller.error ? (
         <p
           role="alert"
-          className="shrink-0 border-b border-hairline bg-danger/10 px-6 py-2 text-[12px] font-light text-danger"
+          className="shrink-0 border-b border-hairline bg-danger/10 px-6 py-2 text-[12px] font-normal text-danger"
         >
           {controller.error}
         </p>
@@ -282,7 +282,7 @@ export default function Cave({ open, onClose, initialRoom = "goals" }: CaveProps
               </button>
             </div>
 
-            <p className="mt-3 max-w-[80ch] text-[12px] leading-relaxed font-light text-faint">
+            <p className="mt-3 max-w-[80ch] text-[12px] leading-relaxed font-normal text-faint">
               Drag a card between columns to change where it stands. Times and
               horizons can be set on the card itself, and “moved today” records
               progress on a goal that has no steps to tick.
@@ -303,7 +303,7 @@ export default function Cave({ open, onClose, initialRoom = "goals" }: CaveProps
 
       {/* ---------------- footer ---------------- */}
       <footer className="shrink-0 border-t border-hairline px-6 py-3">
-        <p className="text-[11px] font-light text-faint">
+        <p className="text-[11px] font-normal text-faint">
           {room === "goals"
             ? `${ordered.length} goal${ordered.length === 1 ? "" : "s"} in the cave. Everything here is stored locally in data/xana.db.`
             : room === "tasks"

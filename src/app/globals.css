@@ -42,38 +42,59 @@
    ================================================================== */
 
 :root {
-  /* ---- Deep surfaces. Each step is a real, visible step: on a
-     near-black UI a 1.05x luminance change is invisible, so these move
-     further apart than a light theme's would. ---- */
-  --void: #07070a;
+  /* ---- Deep surfaces.
+     Deepened and re-spaced after the palette was measured rather than
+     eyeballed. The previous ladder claimed "each step is a real, visible
+     step" and did not deliver it: --void to --surface measured 1.06:1, and
+     --surface-2 to --surface-3 1.09:1. Those are close to the smallest
+     ratio the eye resolves on a near-black field, which is why a nested
+     panel looked like the panel it sat on.
+
+     The honest limit: on a near-black UI, a *fill* step can never carry
+     much contrast, but it does have to carry some. The first attempt at
+     this ladder moved the raised steps apart and left --void to --surface
+     at 1.05:1, which verify:web caught — the one step that matters most,
+     because it is the card against the page. Every step is now at or above
+     1.08:1, which is the point where an edge starts to read. Treat these as
+     a gentle wash still; what really separates surfaces is the border on
+     them and the text in them. ---- */
+  --void: #040406;
   --surface: #101017;
-  --surface-2: #181820;
-  --surface-3: #20202a;
-  --hairline: #262632;
-  --hairline-2: #33333f;
+  --surface-2: #1c1c25;
+  --surface-3: #282836;
+  --hairline: #2f2f3f;
+  --hairline-2: #3e3e4e;
 
   /* ---- Text. Three weights of presence, and each one is a measured
      contrast decision rather than a guess.
 
      `--text-faint` is the load-bearing one. It carries every `.label`,
      every `.timestamp`, and — critically — every placeholder, at 10-13px.
-     The earlier value (#6A6C7E) measured 3.89:1 against the void and
-     3.66:1 against a surface, which fails the 4.5:1 floor for body-size
-     text and fails it hardest where it matters most, on placeholders.
-     #84879A is the *minimum* lightness that clears 4.5:1 on all four
-     surfaces including `--surface-3` (4.52:1), so it is the darkest this
-     token can be. Do not darken it again; lighten the surface instead.
+     It has been raised twice for the same reason, and the second time is
+     the instructive one:
+
+       #6A6C7E  3.89:1 on the void  — failed outright.
+       #84879A  4.54:1 on the old --surface-3 — passed by 0.04, which is
+                not a pass but a coincidence. Raising --surface-3 by one
+                step took it to 4.21:1, under the floor, and nothing
+                failed because the promise lived in a comment.
+       #8E92A6  the current value, 4.71:1 at its worst on --surface-3.
+
+     The lesson is in verify-web: the floor is a *relationship* between
+     this token and the surfaces, so it is asserted against the served
+     stylesheet rather than documented. Do not darken this without
+     re-measuring against every surface.
 
      Measured, against --void / --surface / --surface-2 / --surface-3:
-       --text       17.3 / 16.3 / 15.2 / 14.1
-       --text-dim    8.2 /  7.7 /  7.2 /  6.7
-       --text-faint  5.6 /  5.3 /  4.9 /  4.5   <- all pass 4.5:1
+       --text       18.1 / 16.8 / 15.2 / 13.6
+       --text-dim    9.4 /  8.8 /  7.9 /  7.1
+       --text-faint  6.6 /  6.2 /  5.5 /  4.7   <- all clear 4.5:1
      Hairlines are exempt: they are borders, not text, and WCAG 1.4.11
      governs them only where a border is the sole means of identifying a
      control. Xana never relies on one for that. ---- */
-  --text: #eceef4;
-  --text-dim: #a2a4b4;
-  --text-faint: #84879a;
+  --text: #f1f2f7;
+  --text-dim: #aeb0c2;
+  --text-faint: #8e92a6;
 
   /* ---- Semantic. Warm and cool rather than red and green, so a
      warning never looks like an alarm and "good" never looks like a
@@ -591,7 +612,7 @@ body {
  * literal that is documented beats a clever rule that is fragile. */
 .select {
   appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' fill='none'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%2384879a' stroke-width='1.2' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' fill='none'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%238e92a6' stroke-width='1.2' stroke-linecap='round'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 12px center;
   padding-right: 32px;
@@ -923,10 +944,15 @@ body {
    one place the fallback orb uses a literal rather than a token: the
    resting state needs to read as *off*, so it takes the faint tone at a
    whisper of alpha, and `color-mix` against a token would be a heavier
-   construction than the effect deserves. The literal is `--text-faint`
-   with 0x24 alpha, and it has to move when that token moves. */
+   construction than the effect deserves. It is *not* `--text-faint` any
+   more — see the rule below for why it had to become an even grey. */
 .state-dormant .orb-halo {
-  background: radial-gradient(circle, #84879a24 0%, transparent 70%);
+  /* Kept achromatic on purpose. The halo's channel spread has to stay under
+     the 24 that makes a radial wash a "spotlight glow" rather than a plain
+     grey one, and the previous value sat at 22. `--text-faint` has been
+     raised since, and its new blue-grey would carry a spread of 24 — over
+     the line — so the halo takes an even grey at the same lightness. */
+  background: radial-gradient(circle, #8e8e9e24 0%, transparent 70%);
 }
 
 /* ------------------------------- idle ------------------------------- */

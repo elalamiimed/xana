@@ -102,7 +102,7 @@ function ModelActionBar({
         <Button onClick={onTest} disabled={probing}>
           {probing ? "Asking the provider…" : "Test connection"}
         </Button>
-        <span className="text-[12px] font-light text-dim">
+        <span className="text-[12px] font-normal text-dim">
           {keyTyped
             ? "Includes the key you just typed."
             : dirty
@@ -340,7 +340,7 @@ export default function ModelPanel({ view, controller }: ModelPanelProps) {
               onClick={() => applyProvider(preset.id)}
               aria-pressed={activePreset === preset.id}
               title={preset.note}
-              className={`rounded-full border px-3 py-1.5 text-[12px] font-light transition-colors duration-[var(--t-fast)] ${
+              className={`rounded-full border px-3 py-1.5 text-[12px] font-normal transition-colors duration-[var(--t-fast)] ${
                 activePreset === preset.id
                   ? "border-accent/40 bg-accent/10 text-text"
                   : "border-hairline text-dim hover:border-hairline-2 hover:bg-surface-2 hover:text-text"
@@ -495,32 +495,32 @@ export default function ModelPanel({ view, controller }: ModelPanelProps) {
               screen can be in. */}
           <div className="mt-3 space-y-1.5">
             {keyPresent && !enabled && !clearKey ? (
-              <p role="alert" className="text-[12px] leading-relaxed font-light text-warn">
+              <p role="alert" className="text-[12px] leading-relaxed font-normal text-warn">
                 A key is stored, but <strong className="font-normal">Let a model answer</strong>{" "}
                 is switched off above, so nothing will call out and every reply
                 comes from her own engine. Switch it on to use this key.
               </p>
             ) : keyPresent ? (
-              <p className="text-[12px] font-light text-good">
+              <p className="text-[12px] font-normal text-good">
                 A key is stored ({model.apiKey.masked}
                 {model.apiKey.from === "env" ? ", from the environment" : ""}) and
                 the model is on. Replies will use it.
               </p>
             ) : (
-              <p className="text-[12px] font-light text-warn">
+              <p className="text-[12px] font-normal text-warn">
                 No key stored yet, so nothing will answer. Paste one above, then
                 press Save. Nothing is written until you do.
               </p>
             )}
             {apiKey.trim() ? (
-              <p className="text-[12px] font-light text-dim">
+              <p className="text-[12px] font-normal text-dim">
                 {keyPresent
                   ? "A new key is typed and will replace the stored one when you press Save."
                   : "Ready. Press Save to store it, which also switches the model on, or Test connection to check it first."}
               </p>
             ) : null}
             {clearKey ? (
-              <p className="text-[12px] font-light text-warn">
+              <p className="text-[12px] font-normal text-warn">
                 The stored key will be deleted when you save, and the model will
                 switch off.
               </p>
@@ -559,7 +559,7 @@ export default function ModelPanel({ view, controller }: ModelPanelProps) {
           {probe ? (
             <p
               role={probe.ok ? "status" : "alert"}
-              className={`mt-3 text-[12px] leading-relaxed font-light ${
+              className={`mt-3 text-[12px] leading-relaxed font-normal ${
                 probe.ok ? "text-good" : "text-danger"
               }`}
             >

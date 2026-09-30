@@ -105,7 +105,7 @@ async function main() {
     console.log(`  info  ${css.length} bytes of CSS`);
 
     const expectations = [
-      ["--void token", /--void:\s*#07070a/i],
+      ["--void token", /--void:\s*#040406/i],
       ["accent channel triplet", /--accent-rgb:\s*\d+\s+\d+\s+\d+/],
       ["secondary accent triplet", /--accent-2-rgb:/],
       ["the accent alpha ramp", /--a-14:/],
@@ -175,6 +175,80 @@ async function main() {
       !/#6a6c7e/i.test(css),
       "a literal of the old --text-faint is still in the stylesheet",
     );
+
+    /**
+     * CONTRAST, COMPUTED FROM THE SERVED STYLESHEET.
+     *
+     * The floors were documented for a year and then quietly broken by a
+     * change to an unrelated token: raising --surface-3 pushed --text-faint
+     * from 4.54:1 to 4.21:1, under the 4.5 the file promises. Nothing
+     * failed, because a comment cannot fail.
+     *
+     * The floor is a *relationship* between the text token and the surfaces
+     * it lands on, so it has to be checked as one — reading both values out
+     * of what the browser is actually served rather than out of the source.
+     */
+    const token = (name) => {
+      const m = new RegExp(`--${name}:\\s*(#[0-9a-f]{6})`, "i").exec(css);
+      return m ? m[1] : null;
+    };
+    const toRgb = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+    const channel = (c) => {
+      const v = c / 255;
+      return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+    };
+    const luminance = (rgb) => 0.2126 * channel(rgb[0]) + 0.7152 * channel(rgb[1]) + 0.0722 * channel(rgb[2]);
+    const contrast = (a, b) => {
+      const [hi, lo] = [luminance(toRgb(a)), luminance(toRgb(b))].sort((x, y) => y - x);
+      return (hi + 0.05) / (lo + 0.05);
+    };
+
+    const surfaces = ["void", "surface", "surface-2", "surface-3"].map((n) => [n, token(n)]);
+    for (const [name, floor] of [
+      ["text", 4.5],
+      ["text-dim", 4.5],
+      ["text-faint", 4.5],
+    ]) {
+      const colour = token(name);
+      if (!colour) {
+        check(`--${name} is defined`, false, "no hex value in the served CSS");
+        continue;
+      }
+      const worst = surfaces
+        .filter(([, hex]) => hex)
+        .map(([sn, hex]) => ({ sn, ratio: contrast(colour, hex) }))
+        .sort((a, b) => a.ratio - b.ratio)[0];
+      check(
+        `--${name} clears ${floor}:1 on every surface`,
+        worst.ratio >= floor,
+        `worst is ${worst.ratio.toFixed(2)}:1 on --${worst.sn} (needs ${floor})`,
+      );
+    }
+
+    // The ladder, not just the tokens. These steps being invisible is what
+    // made nested panels look flat, so the spacing is asserted rather than
+    // trusted to a comment.
+    const surfacePairs = [["void", "surface"], ["surface", "surface-2"], ["surface-2", "surface-3"]];
+    for (const [a, b] of surfacePairs) {
+      const [ha, hb] = [token(a), token(b)];
+      if (!ha || !hb) continue;
+      const step = contrast(ha, hb);
+      check(
+        `--${b} is a visible step above --${a}`,
+        step >= 1.08,
+        `${step.toFixed(2)}:1 between them`,
+      );
+    }
+    for (const name of ["hairline", "hairline-2"]) {
+      const colour = token(name);
+      if (!colour) continue;
+      const step = contrast(colour, token("surface"));
+      check(
+        `--${name} is visible on a surface`,
+        step >= 1.3,
+        `${step.toFixed(2)}:1 against --surface`,
+      );
+    }
 
     // A DEAD-CLASS CHECK, which is the one thing neither `tsc` nor any amount
     // of module testing can catch: a class string is just text, so a renamed

@@ -121,7 +121,7 @@ export default function SourcesPanel({
                 </Pill>
                 <span className="font-mono text-[11px] text-faint">{status.mode}</span>
                 {status.detail ? (
-                  <span className="text-[12px] font-light text-dim">{status.detail}</span>
+                  <span className="text-[12px] font-normal text-dim">{status.detail}</span>
                 ) : null}
               </div>
             ) : null}
@@ -147,7 +147,7 @@ export default function SourcesPanel({
                         </Pill>
                       ) : null}
                     </div>
-                    <p className="mt-1 text-[12px] leading-relaxed font-light text-faint">
+                    <p className="mt-1 text-[12px] leading-relaxed font-normal text-faint">
                       {field.hint}
                     </p>
 
@@ -223,7 +223,7 @@ export default function SourcesPanel({
                     </div>
 
                     {isCleared ? (
-                      <p className="mt-1.5 text-[12px] font-light text-warn">
+                      <p className="mt-1.5 text-[12px] font-normal text-warn">
                         Will be removed when you save.
                       </p>
                     ) : null}

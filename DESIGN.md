@@ -10,20 +10,55 @@ saturated.
 
 | Token | Value | Use |
 |---|---|---|
-| `--void` | `#07070A` | Page background. The dark she lives in. |
+| `--void` | `#040406` | Page background. The dark she lives in. |
 | `--surface` | `#101017` | Cards, panels, the input field. |
-| `--surface-2` | `#181820` | Raised/hover state of a surface. |
-| `--surface-3` | `#20202A` | The lightest step. Skeletons, pressed states. |
-| `--hairline` | `#262632` | 1px borders. Never brighter. |
-| `--hairline-2` | `#33333F` | Hover state of a hairline. |
+| `--surface-2` | `#1C1C25` | Raised/hover state of a surface. |
+| `--surface-3` | `#282836` | The lightest step. Skeletons, pressed states. |
+| `--hairline` | `#2F2F3F` | 1px borders. Never brighter. |
+| `--hairline-2` | `#3E3E4E` | Hover state of a hairline. |
 | `--accent-rgb` | `111 227 227` | Primary accent, as **channels**. Presence, focus, energy. |
 | `--accent-2-rgb` | `156 140 255` | Secondary accent. Acting, recall, the horizon wash. |
-| `--text` | `#ECEEF4` | Primary text. |
-| `--text-dim` | `#A2A4B4` | Secondary text, body of cards. |
-| `--text-faint` | `#6A6C7E` | Labels, timestamps, meta. |
+| `--text` | `#F1F2F7` | Primary text. |
+| `--text-dim` | `#AEB0C2` | Secondary text, body of cards. |
+| `--text-faint` | `#8E92A6` | Labels, timestamps, meta. The floor is 4.5:1. |
 | `--warn` | `#E0B279` | Nudges of tone `warn`. Muted amber, not red. |
 | `--good` | `#86D6A6` | Tone `celebrate`. Muted, not a success-green starburst. |
 | `--danger` | `#E08A8A` | A failed save or a refused key. The only red. |
+
+### Contrast and the type scale
+
+These are enforced, not documented. `npm run verify:web` reads the values out
+of the served stylesheet and fails if any of them stops holding.
+
+| Text | on void | on surface | on surface-2 | on surface-3 | floor |
+|---|---|---|---|---|---|
+| `--text` | 18.1 | 16.8 | 15.2 | 13.6 | 4.5 |
+| `--text-dim` | 9.4 | 8.8 | 7.9 | 7.1 | 4.5 |
+| `--text-faint` | 6.6 | 6.2 | 5.5 | **4.7** | 4.5 |
+
+A contrast ratio is a *relationship* between two tokens, not a property of
+one. `--text-faint` has now been raised twice: first from `#6A6C7E`, which
+measured 3.89:1 and failed outright, then from `#84879A`, which measured
+4.54:1 and passed by four hundredths — until an unrelated change to
+`--surface-3` took it to 4.21:1. Nothing caught that, because the promise was
+a comment. It is an assertion now.
+
+**Weight is part of legibility, not a style choice.** Every colour above can
+pass while the interface still reads as fog, because a 300-weight stroke at
+11px on a near-black field is roughly one pixel wide and the eye cannot resolve
+it however good the contrast is.
+
+| Size | Weight |
+|---|---|
+| 12px and below | `font-normal` (400) or heavier. `font-light` is not used. |
+| 13px | `font-light` at the lightest, and only on `--text` or `--text-dim`. |
+| 14px and above | `font-light` is fine. |
+
+The project previously used `font-light` on 90% of everything 13px and
+smaller. It is now 43%, and none of it is below 13px. Changing the weight of
+that much text is a visible change to the interface; it was made because the
+alternative was an interface its owner could not read.
+
 
 ### The structural rule
 

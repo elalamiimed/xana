@@ -330,7 +330,7 @@ function BriefingSectionView({ section }: { section: BriefingSection }) {
                 number with no subject, which the old card printed as
                 "confidence 85%" and left the reader to interpret. */}
             {basis ? (
-              <span className="text-[12px] font-light text-faint">{basis}</span>
+              <span className="text-[12px] font-normal text-faint">{basis}</span>
             ) : null}
             <span className="timestamp">
               {detectedBy === "model" ? "read by the model" : "from the detector"}

@@ -205,7 +205,7 @@ function Swatch({
       </span>
       <span className="min-w-0">
         <span className="block text-[13px] font-light text-text">{label}</span>
-        <span className="mt-0.5 block text-[11px] leading-snug font-light text-faint">
+        <span className="mt-0.5 block text-[11px] leading-snug font-normal text-faint">
           {mood}
         </span>
       </span>
@@ -362,7 +362,7 @@ export default function AppearancePanel({
             >
               Primary accent
             </label>
-            <p className="mt-1 text-[12px] font-light text-faint">
+            <p className="mt-1 text-[12px] font-normal text-faint">
               The orb, the focus ring, the one number that matters.
             </p>
             <div className="mt-2 flex items-center gap-3">
@@ -397,7 +397,7 @@ export default function AppearancePanel({
             >
               Secondary accent
             </label>
-            <p className="mt-1 text-[12px] font-light text-faint">
+            <p className="mt-1 text-[12px] font-normal text-faint">
               Moments of change: acting, the horizon wash, recall.
             </p>
             <div className="mt-2 flex items-center gap-3">
@@ -426,7 +426,7 @@ export default function AppearancePanel({
         {/* Which preset the colours currently correspond to. Without this,
             a theme id and a colour pair that disagree look like a bug — and
             were one. */}
-        <p className="mt-4 text-[12px] font-light text-faint">
+        <p className="mt-4 text-[12px] font-normal text-faint">
           {isCustom ? (
             <>
               These two colours match no preset, so the theme is{" "}

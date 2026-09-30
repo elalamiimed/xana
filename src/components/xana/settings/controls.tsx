@@ -67,13 +67,13 @@ export function Field({
         {label}
       </label>
       {hint ? (
-        <p id={htmlFor ? `${htmlFor}-hint` : undefined} className="mt-1 text-[12px] leading-relaxed font-light text-faint">
+        <p id={htmlFor ? `${htmlFor}-hint` : undefined} className="mt-1 text-[12px] leading-relaxed font-normal text-faint">
           {hint}
         </p>
       ) : null}
       <div className="mt-2">{children}</div>
       {error ? (
-        <p role="alert" className="mt-1.5 text-[12px] font-light text-danger">
+        <p role="alert" className="mt-1.5 text-[12px] font-normal text-danger">
           {error}
         </p>
       ) : null}
@@ -208,7 +208,7 @@ export function Switch({
           {label}
         </label>
         {hint ? (
-          <p className="mt-1 max-w-[46ch] text-[12px] leading-relaxed font-light text-faint">
+          <p className="mt-1 max-w-[46ch] text-[12px] leading-relaxed font-normal text-faint">
             {hint}
           </p>
         ) : null}
@@ -263,7 +263,7 @@ export function Slider({
         <span className="timestamp tabular-nums">{format(value)}</span>
       </div>
       {hint ? (
-        <p className="mt-1 text-[12px] leading-relaxed font-light text-faint">{hint}</p>
+        <p className="mt-1 text-[12px] leading-relaxed font-normal text-faint">{hint}</p>
       ) : null}
       <input
         id={id}
@@ -332,7 +332,7 @@ export function StatusLine({
   return (
     <p
       role={tone === "error" ? "alert" : "status"}
-      className={`text-[12px] leading-relaxed font-light ${colour}`}
+      className={`text-[12px] leading-relaxed font-normal ${colour}`}
     >
       {children}
     </p>
