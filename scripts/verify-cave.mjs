@@ -71,6 +71,7 @@ async function main() {
   check("the canonical /xana/cave answers too", canonical?.status === 200);
 
   check("the board is an array", Array.isArray(snapshot.goals));
+  check("the open task list comes back", Array.isArray(snapshot.tasks));
   check("memories come back as a page", Array.isArray(snapshot.memories?.items));
   check("memory stats are present", typeof snapshot.memories?.stats?.total === "number");
 
@@ -321,6 +322,87 @@ async function main() {
   const forgetAgain = await op("memory.forget", { id: memoryId });
   check("forgetting it twice is a 404, not a silent success", forgetAgain.status === 404);
 
+  /* ---------------- tasks, by hand ---------------- */
+  section("Tasks added by hand");
+
+  const taskTitle = `${marker} task`;
+  const taskMade = await op("task.create", {
+    title: taskTitle,
+    due: "2027-03-04",
+    project: marker,
+    priority: 2,
+    estimateMinutes: 30,
+  });
+  check("a task can be created without the chat parser", taskMade.status === 200, String(taskMade.status));
+  check("it comes back with the fields that were given", taskMade.body.task?.title === taskTitle);
+  check("the date is kept as a day", taskMade.body.task?.due === "2027-03-04", taskMade.body.task?.due);
+  check("the project is kept", taskMade.body.task?.project === marker);
+  check("the priority is kept", taskMade.body.task?.priority === 2);
+  check(
+    "and it is marked as the user's own, not Xana's",
+    taskMade.body.task?.source === "user",
+    taskMade.body.task?.source,
+  );
+  const taskId = taskMade.body.task?.id;
+
+  check(
+    "the response carries the whole open list, so the panel does not refetch",
+    Array.isArray(taskMade.body.tasks) && taskMade.body.tasks.some((t) => t.id === taskId),
+  );
+
+  const taskReread = await board();
+  check(
+    "and it survives a fresh read",
+    taskReread.tasks.some((t) => t.id === taskId),
+  );
+
+  // A title is the only thing required. Everything else has a sane default,
+  // because a form that demands four fields before accepting a name is a form
+  // nobody fills in.
+  const taskMinimal = await op("task.create", { title: `${marker} bare` });
+  check("a task with only a title is accepted", taskMinimal.status === 200);
+  check("and gets a default priority", taskMinimal.body.task?.priority === 3);
+  check("and no date", taskMinimal.body.task?.due === undefined, String(taskMinimal.body.task?.due));
+
+  const taskNoTitle = await op("task.create", { title: "   " });
+  check("a blank title is refused", taskNoTitle.status === 400, String(taskNoTitle.status));
+  const taskBadPriority = await op("task.create", { title: `${marker} p9`, priority: 9 });
+  check(
+    "an out-of-range priority is clamped rather than stored",
+    taskBadPriority.body.task?.priority === 3,
+    String(taskBadPriority.body.task?.priority),
+  );
+
+  const taskDone = await op("task.setStatus", { id: taskId, status: "done" });
+  check("a task can be completed", taskDone.status === 200);
+  check(
+    "and completing it removes it from the open list",
+    !taskDone.body.tasks.some((t) => t.id === taskId),
+  );
+
+  const taskBadStatus = await op("task.setStatus", { id: taskId, status: "exploded" });
+  check("an impossible status is refused", taskBadStatus.status === 400, String(taskBadStatus.status));
+  const taskMissing = await op("task.setStatus", { id: "task_nope", status: "done" });
+  check("a task that is not there is a 404", taskMissing.status === 404, String(taskMissing.status));
+
+  // Reopening matters: completing by accident must be undoable, and the open
+  // list is the only place the task would reappear.
+  const taskReopened = await op("task.setStatus", { id: taskId, status: "open" });
+  check("a completed task can be reopened", taskReopened.status === 200);
+  check(
+    "and it comes back to the open list",
+    taskReopened.body.tasks.some((t) => t.id === taskId),
+  );
+
+  const taskRemoved = await op("task.delete", { id: taskId });
+  check("a task can be deleted outright", taskRemoved.status === 200);
+  check(
+    "and it leaves the list",
+    !taskRemoved.body.tasks.some((t) => t.id === taskId),
+  );
+  const taskDeleteAgain = await op("task.delete", { id: taskId });
+  check("deleting it twice is a 404, not a silent success", taskDeleteAgain.status === 404);
+
   /* ---------------- cleanup ---------------- */
   section("Cleanup");
   let removed = 0;
@@ -339,6 +421,21 @@ async function main() {
   check(
     "nothing created by this script is left on the board",
     !finalBoard.goals.some((g) => g.goal.title?.startsWith(marker)),
+  );
+
+  // Every task whose title carries this run's marker goes, including the two
+  // edge-case probes above. The first version of this script only deleted the
+  // one it had kept the id for, and this assertion is what caught the rest.
+  let strayTasks = finalBoard.tasks.filter((t) => t.title?.startsWith(marker));
+  for (const task of strayTasks) {
+    await op("task.delete", { id: task.id });
+  }
+  const afterTaskCleanup = await board();
+  strayTasks = afterTaskCleanup.tasks.filter((t) => t.title?.startsWith(marker));
+  check(
+    "and no probe task is left open",
+    strayTasks.length === 0,
+    strayTasks.map((t) => t.title).join(", "),
   );
 
   return report();

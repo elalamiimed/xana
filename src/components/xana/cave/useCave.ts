@@ -18,6 +18,7 @@
 import { useCallback, useRef, useState } from "react";
 
 import type { CaveGoal, CaveSnapshot, MemoryPage } from "@/lib/cave/types";
+import type { Task } from "@/lib/core/types";
 
 export class CaveRequestError extends Error {
   constructor(message: string, readonly status: number) {
@@ -50,6 +51,8 @@ async function request<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
 
 export interface CaveController {
   goals: CaveGoal[];
+  /** The open task list, newest state as the server last reported it. */
+  tasks: Task[];
   memories: MemoryPage | null;
   /** False until the first read settles. */
   loading: boolean;
@@ -71,6 +74,7 @@ export interface CaveController {
 
 export function useCave(open: boolean): CaveController {
   const [goals, setGoals] = useState<CaveGoal[]>([]);
+  const [tasks, setTasks] = useState<Task[]>([]);
   const [memories, setMemories] = useState<MemoryPage | null>(null);
   const [loading, setLoading] = useState(false);
   const [pending, setPending] = useState<Set<string>>(new Set());
@@ -79,6 +83,7 @@ export function useCave(open: boolean): CaveController {
 
   const adopt = useCallback((payload: Partial<CaveSnapshot> & { memories?: unknown }) => {
     if (Array.isArray(payload.goals)) setGoals(payload.goals);
+    if (Array.isArray(payload.tasks)) setTasks(payload.tasks);
     const page = payload.memories as MemoryPage | undefined;
     if (page && Array.isArray(page.items)) {
       // An operation returns only the records it touched, so the fuller
@@ -134,6 +139,7 @@ export function useCave(open: boolean): CaveController {
 
   return {
     goals,
+    tasks,
     memories,
     loading: loading && !loaded.current,
     pending,

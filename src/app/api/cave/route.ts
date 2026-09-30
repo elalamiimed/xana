@@ -16,6 +16,7 @@ import {
   CaveError,
   isCaveOperation,
   listCaveGoals,
+  listCaveTasks,
   listMemories,
   runCaveOperation,
 } from "@/lib/cave/ops";
@@ -29,7 +30,11 @@ export async function GET(request: Request) {
 
   try {
     const memories = listMemories({ limit: memoryLimit }).memories;
-    return NextResponse.json({ goals: listCaveGoals(), memories });
+    return NextResponse.json({
+      goals: listCaveGoals(),
+      tasks: listCaveTasks(),
+      memories,
+    });
   } catch (err) {
     return failure(err);
   }
@@ -65,6 +70,9 @@ export async function POST(request: Request) {
           "milestone.setDone",
           "milestone.update",
           "milestone.delete",
+          "task.create",
+          "task.setStatus",
+          "task.delete",
           "memory.list",
           "memory.create",
           "memory.update",

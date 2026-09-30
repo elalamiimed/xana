@@ -610,6 +610,18 @@ export class XanaStore {
     return this.taskById(id);
   }
 
+  /**
+   * Remove a task outright.
+   *
+   * Distinct from setting the status to `dropped`, which already exists and
+   * means "I decided not to". This is for something typed by mistake or no
+   * longer real, where keeping a record of it would be a record of a typo.
+   */
+  deleteTask(id: string): boolean {
+    const result = this.db.prepare(`DELETE FROM tasks WHERE id = ?`).run(id);
+    return result.changes > 0;
+  }
+
   tasksCompletedSince(iso: string): Task[] {
     return (
       this.db

@@ -20,10 +20,10 @@
  */
 
 import { getStore } from "@/lib/core/store";
-import { nowIso } from "@/lib/core/time";
+import { nowIso, toDateKey } from "@/lib/core/time";
 import { computeGoalProgress, goalsWithProgress } from "@/lib/derived/goals";
 import { invalidateContext } from "@/lib/context/gateway";
-import type { Goal, GoalStatus, Milestone } from "@/lib/core/types";
+import type { Goal, GoalStatus, Milestone, Task, TaskStatus } from "@/lib/core/types";
 
 /* ------------------------------------------------------------------ */
 /* Shapes                                                             */
@@ -49,6 +49,8 @@ export interface CavePayload {
   goals?: CaveGoal[];
   goal?: CaveGoal;
   milestone?: Milestone;
+  tasks?: Task[];
+  task?: Task;
   memories?: unknown;
   removed?: string;
 }
@@ -494,6 +496,94 @@ export function createMemory(input: Record<string, unknown>): CavePayload {
 }
 
 /* ------------------------------------------------------------------ */
+/* Tasks                                                              */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The open list, as the cave sees it.
+ *
+ * Ordered the way the store orders every task list — priority, then anything
+ * without a date, then the nearest date — so the panel and the briefing agree
+ * about what is at the top. A second ordering here would be a second opinion
+ * about what matters.
+ */
+export function listCaveTasks(): Task[] {
+  return getStore().listTasks({ limit: 200 });
+}
+
+function cleanPriority(value: unknown): Task["priority"] | undefined {
+  const n = typeof value === "number" ? value : Number(value);
+  if (!Number.isInteger(n) || n < 1 || n > 4) return undefined;
+  return n as Task["priority"];
+}
+
+function cleanEstimate(value: unknown): number | undefined {
+  const n = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(n) || n <= 0) return undefined;
+  return Math.min(24 * 60, Math.round(n));
+}
+
+/**
+ * Add a task by hand.
+ *
+ * This exists because capture was chat-only. The chat parser handles "remind
+ * me to call Mom Friday" well, and that is the fastest path when the thought
+ * arrives as a sentence — but it cannot express priority, or a project, or
+ * "this is a two-hour job", and there was no form anywhere in the interface
+ * that could. A task list you can only add to by talking is a task list that
+ * stays empty when the talking does not fit.
+ *
+ * Everything except the title is optional, for the same reason the goal
+ * quick-add works that way: a form that demands four fields before it accepts
+ * a name is a form nobody fills in.
+ */
+export function createTask(input: Record<string, unknown>): CavePayload {
+  const title = cleanText(input.title, 200);
+  if (!title) throw new CaveError("A task needs a title.");
+
+  const task = getStore().createTask({
+    title,
+    due: cleanDate(input.due) ?? undefined,
+    project: cleanText(input.project, 60),
+    priority: cleanPriority(input.priority) ?? 3,
+    estimateMinutes: cleanEstimate(input.estimateMinutes),
+    source: "user",
+  });
+
+  invalidateContext();
+  return { task, tasks: listCaveTasks() };
+}
+
+/**
+ * Change a task's status.
+ *
+ * Only the status, deliberately. Title and date edits are the chat's job for
+ * now, and a half-built editor is worse than a focused one: this is here so a
+ * task can be ticked off and un-ticked, which is the thing done most often.
+ */
+export function setTaskStatus(input: Record<string, unknown>): CavePayload {
+  const id = bareId(input.id, "task");
+  const status = typeof input.status === "string" ? (input.status as TaskStatus) : undefined;
+  if (!status || !(["open", "doing", "done", "dropped"] as string[]).includes(status)) {
+    throw new CaveError("That is not a status a task can have.");
+  }
+  const task = getStore().updateTaskStatus(id, status);
+  if (!task) throw new CaveError("That task no longer exists.", 404);
+
+  invalidateContext();
+  return { task, tasks: listCaveTasks() };
+}
+
+export function deleteTask(input: Record<string, unknown>): CavePayload {
+  const id = bareId(input.id, "task");
+  const removed = getStore().deleteTask(id);
+  if (!removed) throw new CaveError("That task no longer exists.", 404);
+
+  invalidateContext();
+  return { removed: id, tasks: listCaveTasks() };
+}
+
+/* ------------------------------------------------------------------ */
 /* Dispatch                                                           */
 /* ------------------------------------------------------------------ */
 
@@ -507,6 +597,9 @@ const OPERATIONS = {
   "milestone.setDone": setMilestoneDone,
   "milestone.update": updateMilestone,
   "milestone.delete": deleteMilestone,
+  "task.create": createTask,
+  "task.setStatus": setTaskStatus,
+  "task.delete": deleteTask,
   "memory.list": listMemories,
   "memory.create": createMemory,
   "memory.update": updateMemory,

@@ -114,10 +114,30 @@ export default function AmbientCards({
   const pattern = state.patterns[0];
   const memory = state.memory[0];
 
+  /**
+   * Focus means what the focus log says, not the top of the task list.
+   *
+   * This row used to be the first three open tasks with their estimates and
+   * projects — a perfectly good *Open* list, wearing a heading that claims to
+   * answer "what am I on right now". Those are different questions: the task
+   * list is what you intend, the focus log is what you have given time to, and
+   * a panel that answers the second with the first is the panel that made this
+   * whole rebuilding effort necessary.
+   *
+   * An unfinished session is preferred, because a started-and-not-closed
+   * session is the closest thing the log has to "this is what you are on".
+   */
+  const sessions = state.focus.sessionsThisWeek;
+  const session = sessions.find((s) => !s.completed) ?? sessions[0];
+
+  /** The next few open tasks by the store's own order — priority, then date. */
+  const queued = state.tasks.focus.slice(0, 3);
+
   const hasRows =
     state.energy.score > 0 ||
     Boolean(next) ||
-    state.tasks.focus.length > 0 ||
+    Boolean(session) ||
+    queued.length > 0 ||
     nudges.length > 0 ||
     Boolean(pattern) ||
     Boolean(memory);
@@ -190,11 +210,40 @@ export default function AmbientCards({
             </Row>
           ) : null}
 
-          {/* Focus — what she would put in front of you, not the whole list. */}
-          {state.tasks.focus.length > 0 ? (
+          {/* Focus — the focus log, which is what you have actually given time
+              to. Falls back to the next task, labelled as the next task. */}
+          {session || queued.length > 0 ? (
             <Row label="Focus">
+              {session ? (
+                <>
+                  <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
+                    <span className="text-[15px] font-light text-text">{session.label}</span>
+                    <span className="timestamp">
+                      {session.completed ? `${session.minutes}m` : `${session.minutes}m so far`}
+                    </span>
+                  </div>
+                  <p className="mt-0.5 timestamp">
+                    {session.completed ? "last session" : "in progress"}
+                    {session.media ? ` · ${session.media}` : ""}
+                    {state.focus.totalMinutes > 0
+                      ? ` · ${Math.round(state.focus.totalMinutes / 60)}h this week`
+                      : ""}
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p className="text-[15px] font-light text-text">{queued[0].title}</p>
+                  <p className="mt-0.5 timestamp">next in the list</p>
+                </>
+              )}
+            </Row>
+          ) : null}
+
+          {/* Open — the work that is urgent or unfinished, from the real list. */}
+          {queued.length > 0 ? (
+            <Row label="Open">
               <ul className="space-y-1.5">
-                {state.tasks.focus.slice(0, 3).map((task) => (
+                {queued.map((task) => (
                   <li key={task.id} className="flex items-baseline gap-3">
                     <span className="min-w-0 flex-1 truncate text-[14px] font-light text-text">
                       {task.title}
@@ -203,24 +252,28 @@ export default function AmbientCards({
                       <span className="timestamp shrink-0">{task.project}</span>
                     ) : null}
                     {task.estimateMinutes ? (
-                      <span className="timestamp shrink-0">
-                        {`${task.estimateMinutes}m`}
-                      </span>
+                      <span className="timestamp shrink-0">{`${task.estimateMinutes}m`}</span>
+                    ) : null}
+                    {task.due ? (
+                      <span className="timestamp shrink-0">{relativeDay(task.due)}</span>
                     ) : null}
                   </li>
                 ))}
               </ul>
               <p className="mt-2 timestamp">
-                {state.tasks.openCount > state.tasks.focus.length
+                {state.tasks.openCount > queued.length
                   ? `${state.tasks.openCount} open in total`
                   : "Nothing else open"}
               </p>
             </Row>
           ) : null}
 
-          {/* Nudges — anything she wants to raise before being asked. */}
+          {/* Nudges — anything she wants to raise before being asked.
+              Labelled "Now" rather than "Open": these are things with a
+              moment attached — an event about to start, a streak that breaks
+              today — and "Open" now belongs to the unfinished work above. */}
           {nudges.length > 0 ? (
-            <Row label="Open">
+            <Row label="Now">
               <ul className="space-y-2">
                 {nudges.map((nudge) => (
                   <li

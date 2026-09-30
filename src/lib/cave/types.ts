@@ -13,9 +13,10 @@ import type {
   GoalStatus,
   MemoryKind,
   MemoryRecord,
+  Task,
 } from "@/lib/core/types";
 
-export type { Goal, GoalProgress, GoalStatus, MemoryKind, MemoryRecord };
+export type { Goal, GoalProgress, GoalStatus, MemoryKind, MemoryRecord, Task };
 
 /** A goal with its pace already computed by the server. */
 export interface CaveGoal {
@@ -34,9 +35,11 @@ export interface MemoryPage {
   stats: MemoryStats;
 }
 
-/** The GET payload: everything the two screens need to open. */
+/** The GET payload: everything the screens need to open. */
 export interface CaveSnapshot {
   goals: CaveGoal[];
+  /** The open task list. */
+  tasks: Task[];
   memories: MemoryPage;
 }
 

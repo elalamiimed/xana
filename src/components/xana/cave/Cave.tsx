@@ -7,6 +7,7 @@ import { compareGoals, toneFor } from "@/lib/cave/types";
 
 import CaveBoard from "./CaveBoard";
 import MemoryRoom from "./MemoryRoom";
+import TasksRoom from "./TasksRoom";
 import { useCave } from "./useCave";
 
 /**
@@ -25,7 +26,7 @@ import { useCave } from "./useCave";
  * actually type: a trailing date, and a leading horizon word.
  */
 
-export type CaveRoom = "goals" | "memory";
+export type CaveRoom = "goals" | "tasks" | "memory";
 
 export interface CaveProps {
   open: boolean;
@@ -36,6 +37,7 @@ export interface CaveProps {
 
 const ROOMS: readonly { id: CaveRoom; label: string }[] = [
   { id: "goals", label: "Goals" },
+  { id: "tasks", label: "Tasks" },
   { id: "memory", label: "Memory" },
 ] as const;
 
@@ -122,10 +124,23 @@ export default function Cave({ open, onClose, initialRoom = "goals" }: CaveProps
     };
   }, [open, onClose]);
 
-  /** A one-line summary of the board, so the room says something on arrival. */
+  /** A one-line summary of the room, so it says something on arrival. */
   const summary = useMemo(() => {
     const active = controller.goals.filter((g) => g.goal.status === "active");
-    if (active.length === 0) return "Nothing on the board yet.";
+    const openTasks = controller.tasks.length;
+
+    if (room === "tasks") {
+      return openTasks === 0
+        ? "Nothing open."
+        : `${openTasks} task${openTasks === 1 ? "" : "s"} open.`;
+    }
+
+    if (active.length === 0) {
+      return openTasks > 0
+        ? `Nothing on the board yet · ${openTasks} task${openTasks === 1 ? "" : "s"} open.`
+        : "Nothing on the board yet.";
+    }
+
     const risky = active.filter((g) => ["warn", "danger"].includes(toneFor(g))).length;
     const soonest = active
       .filter((g) => g.progress.daysRemaining !== undefined && g.progress.daysRemaining >= 0)
@@ -136,7 +151,7 @@ export default function Cave({ open, onClose, initialRoom = "goals" }: CaveProps
       parts.push(`nearest deadline ${soonest.progress.daysRemaining} days out`);
     }
     return `${parts.join(", ")}.`;
-  }, [controller.goals]);
+  }, [controller.goals, controller.tasks, room]);
 
   const addGoal = useCallback(async () => {
     const raw = quickAdd.trim();
@@ -266,6 +281,8 @@ export default function Cave({ open, onClose, initialRoom = "goals" }: CaveProps
               <CaveBoard controller={controller} query={query} onlyAtRisk={onlyAtRisk} />
             </div>
           </div>
+        ) : room === "tasks" ? (
+          <TasksRoom controller={controller} />
         ) : (
           <MemoryRoom controller={controller} />
         )}
@@ -276,7 +293,9 @@ export default function Cave({ open, onClose, initialRoom = "goals" }: CaveProps
         <p className="text-[11px] font-light text-faint">
           {room === "goals"
             ? `${ordered.length} goal${ordered.length === 1 ? "" : "s"} in the cave. Everything here is stored locally in data/xana.db.`
-            : "Forgetting is permanent, and she will not recall it again."}
+            : room === "tasks"
+              ? "Open tasks only — completing one removes it from this list. Everything here is stored locally in data/xana.db."
+              : "Forgetting is permanent, and she will not recall it again."}
         </p>
       </footer>
     </div>

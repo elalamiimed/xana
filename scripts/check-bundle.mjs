@@ -37,6 +37,14 @@ const MARKERS = [
   ["briefing: week total", "focused this week"],
   ["briefing: pattern attribution", "read by the model"],
   ["briefing: energy not reported", "Not reported yet"],
+  // The ambient panel is the briefing most people actually read — it is the
+  // region under the orb on a cold start. Its row labels are the ones that
+  // tell "this is what you are on" apart from "this is what is next".
+  ["ambient: focus in progress", "in progress"],
+  ["ambient: next task label", "next in the list"],
+  ["ambient: session is last not current", "last session"],
+  ["cave: task form", "What needs doing?"],
+  ["cave: tasks room", "Add a task"],
 ];
 
 const html = await (await fetch(base)).text();
