@@ -67,6 +67,18 @@ export interface ShellSettings {
 
 export function useShellSettings(
   sources: readonly { id: string; state: string; mode: string; detail?: string }[],
+  /**
+   * Called after My cave writes something.
+   *
+   * The cave has its own route and its own copy of the goals, tasks and
+   * memories, so a change made there leaves the briefing on this page reading
+   * whatever it loaded at mount. That is how a deleted task kept appearing:
+   * the database had one, the cave panel had one, and the briefing had three.
+   *
+   * Passed in rather than imported so this hook stays a shell concern and the
+   * page decides what "the data changed" means for it.
+   */
+  onDataChanged?: () => void,
 ): ShellSettings {
   const [open, setOpen] = useState(false);
   const [caveOpen, setCaveOpen] = useState(false);
@@ -76,7 +88,19 @@ export function useShellSettings(
   const openSettings = useCallback(() => setOpen(true), []);
   const closeSettings = useCallback(() => setOpen(false), []);
   const openCave = useCallback(() => setCaveOpen(true), []);
-  const closeCave = useCallback(() => setCaveOpen(false), []);
+
+  /**
+   * Closing the cave is the reliable moment to re-read.
+   *
+   * Refreshing on every keystroke inside it would fight the cave's own
+   * optimistic updates, and the cave is a full-screen room — nothing on this
+   * page is visible while it is open. So the refresh happens once, on the way
+   * out, which is exactly when the difference becomes visible.
+   */
+  const closeCave = useCallback(() => {
+    setCaveOpen(false);
+    onDataChanged?.();
+  }, [onDataChanged]);
 
   /**
    * Keep the live document in step with the saved appearance.

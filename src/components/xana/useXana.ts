@@ -87,6 +87,15 @@ export interface Xana {
   notice: string | null;
   send: (text: string, modality?: "text" | "voice") => Promise<void>;
   act: (intent: ActionIntent) => Promise<void>;
+  /**
+   * Re-read the life state.
+   *
+   * Needed by anything that writes outside the chat — My cave edits goals,
+   * tasks and memories through its own route, and the briefing here reads all
+   * three. Without this the panel keeps showing the state it had when the
+   * page loaded: the cave would say one task and the briefing would say three.
+   */
+  refreshContext: () => Promise<void>;
 }
 
 /* ------------------------------------------------------------------ */
@@ -94,17 +103,30 @@ export interface Xana {
 /* ------------------------------------------------------------------ */
 
 /**
- * Fold the /api/chat lifeState onto the last known one. That payload is a
- * snapshot rather than a patch, but optional sections can drop out of a
- * snapshot; keeping the deeper previous value for a section that came back
- * empty beats blanking a card while the user is reading it.
+ * Fold the /api/chat lifeState onto the last known one.
+ *
+ * The payload is a snapshot rather than a patch, and an optional section can
+ * genuinely be absent from it — a chat reply carries whatever the assembly
+ * happened to have. Where absence means "unknown", the deeper previous value
+ * is kept rather than blanking a card while it is being read.
+ *
+ * WHAT IS NOT FOLDED, AND WHY
+ *
+ * `tasks` used to be in this list, and that single line made deleting a task
+ * look broken. `incoming.tasks.focus.length ? incoming.tasks : previous.tasks`
+ * cannot tell "you just cleared your list" from "this section did not arrive",
+ * so an empty list was read as a missing one and the old tasks were put back.
+ * The database said one task; the panel said three.
+ *
+ * The task list is not optional. `buildLifeState` computes it every time, and
+ * an empty list is a fact about the user's day rather than a gap in the data.
+ * The moment a section can legitimately be empty, keeping the previous value
+ * is no longer defensive — it is a lie that survives refreshes.
  */
-function reduceLifeState(previous: LifeState, incoming: LifeState): LifeState {
+export function reduceLifeState(previous: LifeState, incoming: LifeState): LifeState {
   return {
     ...incoming,
-    calendar: incoming.calendar.today.length
-      ? incoming.calendar
-      : previous.calendar,
+    calendar: incoming.calendar.today.length ? incoming.calendar : previous.calendar,
     goals: incoming.goals.length ? incoming.goals : previous.goals,
     habits: incoming.habits.length ? incoming.habits : previous.habits,
     memory: incoming.memory.length ? incoming.memory : previous.memory,
@@ -401,5 +423,6 @@ export function useXana(): Xana {
     notice,
     send,
     act,
+    refreshContext,
   };
 }

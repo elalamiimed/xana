@@ -43,9 +43,15 @@ export default function Page() {
     notice,
     send,
     act,
+    refreshContext,
   } = useXana();
 
-  const shell = useShellSettings(lifeState?.sources ?? []);
+  // My cave writes through its own route, so the briefing here has to be told
+  // when something changed there. Without this the cave and the briefing
+  // disagree — a deleted task stays on the panel until a reload.
+  const shell = useShellSettings(lifeState?.sources ?? [], () => {
+    void refreshContext();
+  });
 
   const [ambientIdle, setAmbientIdle] = useState(false);
   const composer = useRef<ComposerHandle | null>(null);
