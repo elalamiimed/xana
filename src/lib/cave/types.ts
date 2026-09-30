@@ -8,6 +8,7 @@
  */
 
 import type {
+  CalendarEvent,
   Goal,
   GoalProgress,
   GoalStatus,
@@ -16,7 +17,7 @@ import type {
   Task,
 } from "@/lib/core/types";
 
-export type { Goal, GoalProgress, GoalStatus, MemoryKind, MemoryRecord, Task };
+export type { CalendarEvent, Goal, GoalProgress, GoalStatus, MemoryKind, MemoryRecord, Task };
 
 /** A goal with its pace already computed by the server. */
 export interface CaveGoal {
@@ -40,6 +41,8 @@ export interface CaveSnapshot {
   goals: CaveGoal[];
   /** The open task list. */
   tasks: Task[];
+  /** Today and tomorrow, which is the window the briefing asks about. */
+  events: CalendarEvent[];
   memories: MemoryPage;
 }
 

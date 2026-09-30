@@ -509,6 +509,25 @@ const handleLogEnergy: Handler = ({ text, sessionId }) => {
   return { text: "", outcome };
 };
 
+/**
+ * "had lunch", "ate breakfast", "just ate".
+ *
+ * Narrow on purpose. A meal word has to appear with the act of eating, so
+ * "lunch with Sam at 1" is a scheduling request rather than a claim to have
+ * eaten, and the briefing does not get a meal logged for a plan.
+ */
+const handleLogMeal: Handler = ({ text, sessionId }) => {
+  const ate = /\b(?:had|ate|eating|eaten|finished|done with|logging|log)\b/i.test(text);
+  const mealWord = /\b(breakfast|lunch|dinner|supper|snack)\b/i.exec(text)?.[1]?.toLowerCase();
+  const bare = /\b(?:just ate|i ate|already ate)\b/i.test(text);
+  if (!ate && !bare) return undefined;
+  if (!mealWord && !bare) return undefined;
+
+  const meal = mealWord === "supper" ? "dinner" : (mealWord as "breakfast" | "lunch" | "dinner" | "snack" | undefined);
+  const outcome = executeAction({ type: "log_meal", meal }, { sessionId });
+  return { text: "", outcome };
+};
+
 /** Energy, in its own words. */
 const handleEnergy: Handler = ({ text, lifeState }) => {
   if (!any(text, /\benergy\b/i, /\bhow am i (?:doing|feeling)\b/i, /\btired\b/i)) return undefined;
@@ -573,21 +592,31 @@ const handleHelp: Handler = ({ text }) => {
  * Order is precedence. Specific, unambiguous phrasing runs first; the fuzzy
  * fallbacks (observational replies) only get a turn once nothing matched.
  */
+/**
+ * Order matters, and it is the only place in this file where it does.
+ *
+ * `handleComplete` matches "finished X" and resolves X against the task list,
+ * so it has to run *after* the two handlers that read a fixed vocabulary —
+ * energy and meals. "finished dinner" is a meal, and "finished" on its own
+ * looks exactly like completing a task. Everything else here keys off nouns
+ * that do not collide, so the rest of the order is free.
+ */
 const HANDLERS: Handler[] = [
   handleReminder,
   handleNote,
   handleRemember,
-  handleComplete,
   handleProtect,
   handleFocus,
   handleGoal,
   handleHabit,
   handleReflect,
+  handleLogEnergy,
+  handleLogMeal,
+  handleComplete,
   handleEvent,
   handleTask,
   handleBrief,
   handleDayQuestion,
-  handleLogEnergy,
   handleEnergy,
   handleGoals,
   handleRecall,
@@ -749,7 +778,58 @@ function openWork(state: LifeState, now: Date) {
     .sort((a, b) => a.due.localeCompare(b.due))
     .slice(0, 3);
 
-  return { overdue, upcoming, openCount: state.tasks.openCount };
+  /**
+   * The day's biggest block.
+   *
+   * "Biggest" is duration rather than importance, because duration is the only
+   * thing the calendar actually knows. It is the event the day is built
+   * around, and a list of small tasks buries it.
+   */
+  const biggest = state.calendar.today
+    .filter((e) => !e.allDay)
+    .map((e) => ({
+      title: e.title,
+      start: e.start,
+      minutes: Math.max(0, Math.round((new Date(e.end).getTime() - new Date(e.start).getTime()) / 60_000)),
+      location: e.location,
+    }))
+    .sort((a, b) => b.minutes - a.minutes)[0];
+
+  return { overdue, upcoming, openCount: state.tasks.openCount, biggest };
+}
+
+/**
+ * The three things the energy score is made of.
+ *
+ * "Energy 43 steady" is a number nobody can argue with, because none of its
+ * working is visible. Sleep, meals and how booked the day is are the inputs,
+ * and they are the part a person can check against how they actually feel.
+ */
+function bodyInputs(state: LifeState, now: Date) {
+  const latest = state.health.latest;
+  const today = state.health.latest?.date === toDateKey(now) ? state.health.latest : undefined;
+
+  // A working day, not a calendar day: 16 waking hours is what there is to
+  // spend, and measuring against 24 would make every day look empty.
+  const wakingMinutes = 16 * 60;
+  const bookedMinutes = state.calendar.today
+    .filter((e) => !e.allDay)
+    .reduce(
+      (acc, e) =>
+        acc +
+        Math.max(0, Math.round((new Date(e.end).getTime() - new Date(e.start).getTime()) / 60_000)),
+      0,
+    );
+
+  return {
+    sleepHours: latest?.sleepHours,
+    meals: { logged: today?.meals ?? 0, of: 3 },
+    schedule: {
+      bookedMinutes,
+      freeMinutes: state.calendar.freeMinutes,
+      busyPercent: Math.min(100, Math.round((bookedMinutes / wakingMinutes) * 100)),
+    },
+  };
 }
 
 /**
@@ -776,6 +856,7 @@ function energySection(state: LifeState, now: Date) {
     reading,
     forecast: { score: state.energy.score, band: state.energy.band, note: state.energy.note },
     stale,
+    body: bodyInputs(state, now),
   };
 }
 

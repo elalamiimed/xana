@@ -103,6 +103,9 @@ export class XanaStore {
       // the one number in the app that comes from asking them.
       { table: "health_samples", column: "energy", definition: "INTEGER" },
       { table: "health_samples", column: "energy_at", definition: "TEXT" },
+      // Meals logged today, 0-3. A count rather than a list: the briefing
+      // asks whether they have eaten, not what.
+      { table: "health_samples", column: "meals", definition: "INTEGER" },
     ];
 
     for (const { table, column, definition } of additions) {
@@ -246,6 +249,7 @@ export class XanaStore {
         mood TEXT,
         energy INTEGER,
         energy_at TEXT,
+        meals INTEGER,
         source TEXT NOT NULL DEFAULT 'local'
       );
       CREATE INDEX IF NOT EXISTS idx_health_day ON health_samples(day DESC);
@@ -663,8 +667,20 @@ export class XanaStore {
     return ev;
   }
 
-  eventsBetween(fromIso: string, toIso: string): CalendarEvent[] {
-    return (
+  /**
+   * Remove an event.
+   *
+   * Needed because the schedule can now be written by hand, and anything a
+   * person types by hand they must be able to un-type. A calendar entry with
+   * no way to delete it is worse than no calendar: it sits in the briefing
+   * forever telling them about a class that moved.
+   */
+  deleteEvent(id: string): boolean {
+    const result = this.db.prepare(`DELETE FROM events WHERE id = ?`).run(id);
+    return result.changes > 0;
+  }
+
+  eventsBetween(fromIso: string, toIso: string): CalendarEvent[] {    return (
       this.db
         .prepare(`SELECT * FROM events WHERE start < ? AND end > ? ORDER BY start ASC`)
         .all(toIso, fromIso) as Row[]
@@ -1145,8 +1161,8 @@ export class XanaStore {
     const s: HealthSample = { ...sample, source: sample.source || "local" };
     this.db
       .prepare(
-        `INSERT INTO health_samples (day, sleep_hours, sleep_quality, steps, active_minutes, resting_heart_rate, mood, energy, energy_at, source)
-         VALUES (@day, @sleepHours, @sleepQuality, @steps, @activeMinutes, @restingHeartRate, @mood, @energy, @energyAt, @source)
+        `INSERT INTO health_samples (day, sleep_hours, sleep_quality, steps, active_minutes, resting_heart_rate, mood, energy, energy_at, meals, source)
+         VALUES (@day, @sleepHours, @sleepQuality, @steps, @activeMinutes, @restingHeartRate, @mood, @energy, @energyAt, @meals, @source)
          ON CONFLICT(day) DO UPDATE SET
            sleep_hours = COALESCE(excluded.sleep_hours, health_samples.sleep_hours),
            sleep_quality = COALESCE(excluded.sleep_quality, health_samples.sleep_quality),
@@ -1162,6 +1178,7 @@ export class XanaStore {
              WHEN excluded.energy IS NULL THEN health_samples.energy_at
              ELSE excluded.energy_at
            END,
+           meals = COALESCE(excluded.meals, health_samples.meals),
            source = excluded.source`,
       )
       .run({
@@ -1174,6 +1191,7 @@ export class XanaStore {
         mood: s.mood ?? null,
         energy: s.energy ?? null,
         energyAt: s.energyAt ?? null,
+        meals: s.meals ?? null,
         source: s.source,
       });
     return s;
@@ -1375,6 +1393,7 @@ function rowToHealth(row: Row): HealthSample {
     mood: row.mood ? (String(row.mood) as MoodLabel) : undefined,
     energy: row.energy == null ? undefined : Number(row.energy),
     energyAt: row.energy_at ? String(row.energy_at) : undefined,
+    meals: row.meals == null ? undefined : Number(row.meals),
     source: row.source ? String(row.source) : "local",
   };
 }

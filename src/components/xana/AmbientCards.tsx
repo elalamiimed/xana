@@ -72,6 +72,22 @@ function clockTime(iso: string): string | null {
   });
 }
 
+/** Minutes from `now` until an instant, floored at zero. */
+function minutesLeft(iso: string, now: Date): number {
+  const when = new Date(iso);
+  if (Number.isNaN(when.getTime())) return 0;
+  return Math.max(0, Math.round((when.getTime() - now.getTime()) / 60_000));
+}
+
+/** "1h 20m" / "45m" — the shape a duration wants in a narrow row. */
+function span(minutes: number): string {
+  const total = Math.max(0, Math.round(minutes));
+  if (total < 60) return `${total}m`;
+  const hours = Math.floor(total / 60);
+  const rest = total % 60;
+  return rest === 0 ? `${hours}h` : `${hours}h ${rest}m`;
+}
+
 /** Tones map onto the palette's existing colours — warn is amber, not red. */
 const NUDGE_TONE: Record<string, string> = {
   info: "text-dim",
@@ -113,6 +129,7 @@ export default function AmbientCards({
   const nudges = state.nudges.slice(0, 2);
   const pattern = state.patterns[0];
   const memory = state.memory[0];
+  const now = new Date();
 
   /**
    * Focus means what the focus log says, not the top of the task list.
@@ -133,9 +150,48 @@ export default function AmbientCards({
   /** The next few open tasks by the store's own order — priority, then date. */
   const queued = state.tasks.focus.slice(0, 3);
 
+  /* --- Energy's working, so the score is not a number you must trust. --- */
+  const todayHealth = state.health.latest;
+  const reported =
+    typeof todayHealth?.energy === "number"
+      ? { level: todayHealth.energy, at: todayHealth.energyAt ?? todayHealth.date }
+      : undefined;
+  const sleepHours = state.health.latest?.sleepHours;
+  const meals = { logged: todayHealth?.meals ?? 0, of: 3 };
+
+  const wakingMinutes = 16 * 60;
+  const bookedMinutes = state.calendar.today
+    .filter((e) => !e.allDay)
+    .reduce(
+      (acc, e) =>
+        acc +
+        Math.max(0, Math.round((new Date(e.end).getTime() - new Date(e.start).getTime()) / 60_000)),
+      0,
+    );
+  const busyPercent = Math.min(100, Math.round((bookedMinutes / wakingMinutes) * 100));
+
+  /** The event happening right now, if one is. Focus means this first. */
+  const live = state.calendar.today.find(
+    (e) => !e.allDay && new Date(e.start) <= now && new Date(e.end) > now,
+  );
+
+  /** The day's biggest block — what the day is actually about. */
+  const biggest = state.calendar.today
+    .filter((e) => !e.allDay)
+    .map((e) => ({
+      title: e.title,
+      start: e.start,
+      minutes: Math.max(
+        0,
+        Math.round((new Date(e.end).getTime() - new Date(e.start).getTime()) / 60_000),
+      ),
+    }))
+    .sort((a, b) => b.minutes - a.minutes)[0];
+
   const hasRows =
     state.energy.score > 0 ||
     Boolean(next) ||
+    Boolean(live) ||
     Boolean(session) ||
     queued.length > 0 ||
     nudges.length > 0 ||
@@ -159,30 +215,44 @@ export default function AmbientCards({
         <div className="label mb-1">Briefing</div>
 
         <div className="divide-y divide-hairline">
-          {/* Energy — the one number that shapes the rest of the day. */}
-          {state.energy.score > 0 ? (
-            <Row label="Energy">
-              <div className="flex items-baseline gap-3">
-                <span className="text-[15px] font-light text-text">
-                  {Math.round(state.energy.score)}
-                </span>
-                <span className="text-[13px] font-light text-dim">
-                  {state.energy.band}
-                </span>
-              </div>
-              {state.energy.note ? (
-                <p className="mt-1 text-[13px] leading-relaxed font-light text-dim">
-                  {state.energy.note}
-                </p>
-              ) : null}
-              <div className="mt-2 max-w-[240px]">
-                <Bar
-                  value={state.energy.score / 100}
-                  label={`Energy ${Math.round(state.energy.score)} out of 100, ${state.energy.band}`}
-                />
-              </div>
-            </Row>
-          ) : null}
+          {/* Energy — the score, and the three things it is made of: sleep,
+              meals and how booked the day is. A number with no visible working
+              is one a person can only trust or ignore. */}
+          <Row label="Energy">
+            <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
+              <span className="text-[15px] font-light text-text">
+                {Math.round(state.energy.score)}
+              </span>
+              <span className="text-[13px] font-light text-dim">{state.energy.band}</span>
+              {reported ? (
+                <span className="timestamp">you said {reported.level}/5</span>
+              ) : (
+                <span className="timestamp">not reported</span>
+              )}
+            </div>
+
+            {/* The inputs. Sleep is absent when nothing measured it, and says
+                so rather than showing a zero. */}
+            <div className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
+              <span className="timestamp">
+                {sleepHours !== undefined ? `${sleepHours.toFixed(1)}h sleep` : "sleep unrecorded"}
+              </span>
+              <span className="timestamp">{meals.logged} of {meals.of} meals</span>
+              <span className="timestamp">schedule {busyPercent}% booked</span>
+            </div>
+
+            {state.energy.note ? (
+              <p className="mt-1 text-[13px] leading-relaxed font-light text-dim">
+                {state.energy.note}
+              </p>
+            ) : null}
+            <div className="mt-2 max-w-[240px]">
+              <Bar
+                value={state.energy.score / 100}
+                label={`Energy ${Math.round(state.energy.score)} out of 100, ${state.energy.band}`}
+              />
+            </div>
+          </Row>
 
           {/* Next — with a day label, because "next" is often tomorrow. */}
           {next ? (
@@ -210,11 +280,25 @@ export default function AmbientCards({
             </Row>
           ) : null}
 
-          {/* Focus — the focus log, which is what you have actually given time
-              to. Falls back to the next task, labelled as the next task. */}
-          {session || queued.length > 0 ? (
+          {/* Focus — the current event as per the schedule, first. Falling
+              back to the focus log, then to the next task, each labelled as
+              what it actually is rather than as "what you are on". */}
+          {live || session || queued.length > 0 ? (
             <Row label="Focus">
-              {session ? (
+              {live ? (
+                <>
+                  <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
+                    <span className="text-[15px] font-light text-text">{live.title}</span>
+                    <span className="timestamp">
+                      {minutesLeft(live.end, now)} left
+                    </span>
+                  </div>
+                  <p className="mt-0.5 timestamp">
+                    on now
+                    {live.location ? ` · ${live.location}` : ""}
+                  </p>
+                </>
+              ) : session ? (
                 <>
                   <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
                     <span className="text-[15px] font-light text-text">{session.label}</span>
@@ -233,71 +317,85 @@ export default function AmbientCards({
               ) : (
                 <>
                   <p className="text-[15px] font-light text-text">{queued[0].title}</p>
-                  <p className="mt-0.5 timestamp">next in the list</p>
+                  <p className="mt-0.5 timestamp">nothing on now · next in the list</p>
                 </>
               )}
             </Row>
           ) : null}
 
-          {/* Open — the work that is urgent or unfinished, from the real list. */}
-          {queued.length > 0 ? (
+          {/* Open — the day's biggest block, then the urgent and unfinished
+              work. The nudges live here rather than in a row of their own: a
+              separate "Now" was a second name for the same question, which is
+              what the user said when they saw it. */}
+          {queued.length > 0 || nudges.length > 0 || biggest ? (
             <Row label="Open">
-              <ul className="space-y-1.5">
-                {queued.map((task) => (
-                  <li key={task.id} className="flex items-baseline gap-3">
-                    <span className="min-w-0 flex-1 truncate text-[14px] font-light text-text">
-                      {task.title}
-                    </span>
-                    {task.project ? (
-                      <span className="timestamp shrink-0">{task.project}</span>
+              {biggest ? (
+                <div className="mb-2">
+                  <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
+                    <span className="text-[15px] font-light text-text">{biggest.title}</span>
+                    <span className="timestamp">{span(biggest.minutes)}</span>
+                    {clockTime(biggest.start) ? (
+                      <span className="timestamp">{clockTime(biggest.start)}</span>
                     ) : null}
-                    {task.estimateMinutes ? (
-                      <span className="timestamp shrink-0">{`${task.estimateMinutes}m`}</span>
-                    ) : null}
-                    {task.due ? (
-                      <span className="timestamp shrink-0">{relativeDay(task.due)}</span>
-                    ) : null}
-                  </li>
-                ))}
-              </ul>
-              <p className="mt-2 timestamp">
-                {state.tasks.openCount > queued.length
-                  ? `${state.tasks.openCount} open in total`
-                  : "Nothing else open"}
-              </p>
-            </Row>
-          ) : null}
+                  </div>
+                  <p className="mt-0.5 timestamp">the biggest block today</p>
+                </div>
+              ) : null}
 
-          {/* Nudges — anything she wants to raise before being asked.
-              Labelled "Now" rather than "Open": these are things with a
-              moment attached — an event about to start, a streak that breaks
-              today — and "Open" now belongs to the unfinished work above. */}
-          {nudges.length > 0 ? (
-            <Row label="Now">
-              <ul className="space-y-2">
-                {nudges.map((nudge) => (
-                  <li
-                    key={nudge.id}
-                    className="flex flex-wrap items-baseline gap-x-3 gap-y-1"
-                  >
-                    <span
-                      className={`text-[14px] leading-relaxed font-light ${
-                        NUDGE_TONE[nudge.tone] ?? "text-dim"
-                      }`}
+              {queued.length > 0 ? (
+                <>
+                  <ul className="space-y-1.5">
+                    {queued.map((task) => (
+                      <li key={task.id} className="flex items-baseline gap-3">
+                        <span className="min-w-0 flex-1 truncate text-[14px] font-light text-text">
+                          {task.title}
+                        </span>
+                        {task.project ? (
+                          <span className="timestamp shrink-0">{task.project}</span>
+                        ) : null}
+                        {task.estimateMinutes ? (
+                          <span className="timestamp shrink-0">{`${task.estimateMinutes}m`}</span>
+                        ) : null}
+                        {task.due ? (
+                          <span className="timestamp shrink-0">{relativeDay(task.due)}</span>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="mt-2 timestamp">
+                    {state.tasks.openCount > queued.length
+                      ? `${state.tasks.openCount} open in total`
+                      : "Nothing else open"}
+                  </p>
+                </>
+              ) : null}
+
+              {nudges.length > 0 ? (
+                <ul className="mt-2 space-y-2">
+                  {nudges.map((nudge) => (
+                    <li
+                      key={nudge.id}
+                      className="flex flex-wrap items-baseline gap-x-3 gap-y-1"
                     >
-                      {nudge.text}
-                    </span>
-                    {nudge.action ? (
-                      <GhostButton
-                        label="show me"
-                        onClick={() => {
-                          if (nudge.action) onAct(nudge.action);
-                        }}
-                      />
-                    ) : null}
-                  </li>
-                ))}
-              </ul>
+                      <span
+                        className={`text-[13px] leading-relaxed font-light ${
+                          NUDGE_TONE[nudge.tone] ?? "text-dim"
+                        }`}
+                      >
+                        {nudge.text}
+                      </span>
+                      {nudge.action ? (
+                        <GhostButton
+                          label="show me"
+                          onClick={() => {
+                            if (nudge.action) onAct(nudge.action);
+                          }}
+                        />
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
             </Row>
           ) : null}
 

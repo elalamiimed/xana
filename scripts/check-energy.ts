@@ -239,6 +239,81 @@ check(
   morning.note,
 );
 
+/* ---- meals ----------------------------------------------------------- */
+
+console.log("\nMeals\n");
+
+const mealsLogged = () => store.healthSamples(1)[0]?.meals ?? 0;
+
+await say("had breakfast");
+check("breakfast is logged", mealsLogged() === 1, String(mealsLogged()));
+await say("just ate lunch");
+check("lunch takes it to two", mealsLogged() === 2, String(mealsLogged()));
+await say("finished dinner");
+check("dinner makes three", mealsLogged() === 3, String(mealsLogged()));
+await say("ate a snack");
+check("a snack does not push it past three", mealsLogged() === 3, String(mealsLogged()));
+
+// The narrowness matters: a meal word with a time is a plan, not a report, and
+// logging it would put a meal on the card the user has not eaten.
+const beforePlan = mealsLogged();
+await say("lunch with Sam at 1");
+check("planning lunch does not log one", mealsLogged() === beforePlan, `${beforePlan} -> ${mealsLogged()}`);
+await say("remind me to buy dinner ingredients");
+check("shopping for dinner does not log one", mealsLogged() === beforePlan, String(mealsLogged()));
+
+// The reply depends on how many are already logged, so this asserts the shape
+// rather than a number: it either counts or says the day is done, and it never
+// congratulates someone for eating.
+const mealReply = await say("had lunch");
+const mealText = mealReply.outcome?.message ?? "";
+check(
+  "the reply counts the meals rather than congratulating",
+  /of 3|all three/.test(mealText),
+  mealText,
+);
+check("and does not praise the user for eating", !/well done|nice|great|good job/i.test(mealText), mealText);
+
+/* ---- the briefing shows the working ---------------------------------- */
+
+console.log("\nEnergy's working, on the card\n");
+
+const bodyState = await buildLifeState({ force: true });
+const bodyCard = localMind({ text: "brief me", lifeState: bodyState }).cards?.find(
+  (c) => c.kind === "briefing",
+);
+const energySection =
+  bodyCard && bodyCard.kind === "briefing"
+    ? bodyCard.sections.find((s) => s.kind === "energy")
+    : undefined;
+
+check(
+  "the energy section carries sleep, meals and schedule",
+  Boolean(
+    energySection &&
+      energySection.kind === "energy" &&
+      energySection.body &&
+      typeof energySection.body.schedule.busyPercent === "number" &&
+      energySection.body.meals.of === 3,
+  ),
+  JSON.stringify(energySection?.kind === "energy" ? energySection.body : null),
+);
+check(
+  "and the meal count reflects what was logged",
+  Boolean(energySection && energySection.kind === "energy" && energySection.body.meals.logged === 3),
+  String(energySection?.kind === "energy" ? energySection.body.meals.logged : "?"),
+);
+check(
+  "the biggest block of the day is reported when there is one",
+  (() => {
+    const open = bodyCard && bodyCard.kind === "briefing"
+      ? bodyCard.sections.find((s) => s.kind === "open")
+      : undefined;
+    // No events in this fixture, so absence is the correct answer here.
+    return open?.kind === "open" ? open.biggest === undefined : false;
+  })(),
+);
+
 /* ---- the twice-daily ask --------------------------------------------- */
 
 console.log("\nAsking for it, twice a day\n");

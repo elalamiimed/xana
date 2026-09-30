@@ -126,6 +126,8 @@ export interface HealthSample {
   energy?: number;
   /** When they said it. A day can hold two readings, so the time matters. */
   energyAt?: string;
+  /** Meals logged today, 0-3. Counted, because the briefing asks about them. */
+  meals?: number;
   source: string;
 }
 
@@ -150,6 +152,21 @@ export type BriefingSection =
       forecast: { score: number; band: EnergyBand; note: string };
       /** True when the reading is stale enough to ask again. */
       stale: boolean;
+      /**
+       * The body's other inputs, which is what "energy" actually rests on.
+       *
+       * A single score with no visible working is a number someone has to
+       * either trust or ignore. These are the three things it is made of, and
+       * each is a fact the user can check against how they feel.
+       */
+      body: {
+        /** Last night, when the health data has it. */
+        sleepHours?: number;
+        /** Meals logged today, against the three a day is measured in. */
+        meals: { logged: number; of: number };
+        /** How much of the waking day the calendar has taken. */
+        schedule: { bookedMinutes: number; freeMinutes: number; busyPercent: number };
+      };
     }
   | {
       kind: "next";
@@ -195,6 +212,14 @@ export type BriefingSection =
       /** Not late, but soon — the next few things with a date on them. */
       upcoming: Array<{ id: string; title: string; due: string; daysAway: number }>;
       openCount: number;
+      /**
+       * The day's biggest single block.
+       *
+       * The largest event is usually the one the day is actually about — a
+       * class, an exam, a review — and it is the thing a list of small tasks
+       * buries. Named separately so it cannot be lost among them.
+       */
+      biggest?: { title: string; start: string; minutes: number; location?: string };
     }
   | {
       kind: "pattern";
@@ -575,6 +600,11 @@ export type ActionIntent =
    * or circadian rhythm — it is what they say it is.
    */
   | { type: "log_energy"; level: number; at?: string }
+  /**
+   * A meal eaten. Counted, not described — the briefing asks whether they have
+   * eaten today, and "2 of 3" answers that without a food diary.
+   */
+  | { type: "log_meal"; meal?: "breakfast" | "lunch" | "dinner" | "snack" }
   | { type: "remember"; kind: MemoryKind; title: string; content: string; entities?: string[]; tags?: string[] }
   | { type: "start_focus"; label: string; minutes: number }
   | { type: "protect_block"; title: string; start: string; end: string; reason?: string }

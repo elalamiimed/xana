@@ -23,7 +23,7 @@ import { getStore } from "@/lib/core/store";
 import { nowIso, toDateKey } from "@/lib/core/time";
 import { computeGoalProgress, goalsWithProgress } from "@/lib/derived/goals";
 import { invalidateContext } from "@/lib/context/gateway";
-import type { Goal, GoalStatus, Milestone, Task, TaskStatus } from "@/lib/core/types";
+import type { CalendarEvent, Goal, GoalStatus, Milestone, Task, TaskStatus } from "@/lib/core/types";
 
 /* ------------------------------------------------------------------ */
 /* Shapes                                                             */
@@ -51,6 +51,8 @@ export interface CavePayload {
   milestone?: Milestone;
   tasks?: Task[];
   task?: Task;
+  events?: CalendarEvent[];
+  event?: CalendarEvent;
   memories?: unknown;
   removed?: string;
 }
@@ -584,6 +586,89 @@ export function deleteTask(input: Record<string, unknown>): CavePayload {
 }
 
 /* ------------------------------------------------------------------ */
+/* Schedule                                                           */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Everything from now until the end of tomorrow, plus today's earlier events.
+ *
+ * The window is deliberate. "Next", "Focus" and "Open" in the briefing are all
+ * questions about right now, and a calendar that only ever showed today would
+ * be empty every evening — exactly when someone wants to know what tomorrow
+ * looks like.
+ */
+export function listCaveEvents(): CalendarEvent[] {
+  const now = new Date();
+  const from = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const to = new Date(from);
+  to.setDate(to.getDate() + 2);
+  return getStore().eventsBetween(new Date(from).toISOString(), to.toISOString());
+}
+
+/** `YYYY-MM-DDTHH:MM` from a date field and a time field, in local time. */
+function cleanMoment(date: unknown, time: unknown): string | null {
+  if (typeof date !== "string" || date.trim().length === 0) return null;
+  const day = /^(\d{4})-(\d{2})-(\d{2})/.exec(date.trim());
+  if (!day) return null;
+  const clock = typeof time === "string" && /^\d{2}:\d{2}$/.test(time.trim()) ? time.trim() : "09:00";
+  const at = new Date(`${day[1]}-${day[2]}-${day[3]}T${clock}:00`);
+  if (Number.isNaN(at.getTime())) return null;
+  return at.toISOString();
+}
+
+function cleanMinutes(value: unknown, fallback: number): number {
+  const n = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(n) || n <= 0) return fallback;
+  return Math.min(12 * 60, Math.round(n));
+}
+
+/**
+ * Put something in the schedule by hand.
+ *
+ * The schedule is what makes the briefing worth reading — "Next", "Focus" and
+ * "Open" are all questions about it — and until now the only way in was a
+ * published ICS feed or telling her in the chat. Neither covers the ordinary
+ * case: a class that repeats, a lecture moved to Thursday, a study block
+ * someone wants to hold themselves to.
+ *
+ * A time is required and an end is not: most things a person adds have a start
+ * and a guess at how long, so the duration has a default rather than a second
+ * required field.
+ */
+export function createEvent(input: Record<string, unknown>): CavePayload {
+  const title = cleanText(input.title, 200);
+  if (!title) throw new CaveError("An event needs a title.");
+
+  const start = cleanMoment(input.date, input.time);
+  if (!start) throw new CaveError("An event needs a date.");
+
+  const minutes = cleanMinutes(input.minutes, 60);
+  const end = new Date(new Date(start).getTime() + minutes * 60_000).toISOString();
+
+  const event = getStore().createEvent({
+    title,
+    start,
+    end,
+    location: cleanText(input.location, 120),
+    allDay: input.allDay === true,
+    source: "user",
+    xanaAuthored: false,
+  });
+
+  invalidateContext();
+  return { event, events: listCaveEvents() };
+}
+
+export function deleteEvent(input: Record<string, unknown>): CavePayload {
+  const id = bareId(input.id, "event");
+  const removed = getStore().deleteEvent(id);
+  if (!removed) throw new CaveError("That event no longer exists.", 404);
+
+  invalidateContext();
+  return { removed: id, events: listCaveEvents() };
+}
+
+/* ------------------------------------------------------------------ */
 /* Dispatch                                                           */
 /* ------------------------------------------------------------------ */
 
@@ -600,6 +685,8 @@ const OPERATIONS = {
   "task.create": createTask,
   "task.setStatus": setTaskStatus,
   "task.delete": deleteTask,
+  "event.create": createEvent,
+  "event.delete": deleteEvent,
   "memory.list": listMemories,
   "memory.create": createMemory,
   "memory.update": updateMemory,

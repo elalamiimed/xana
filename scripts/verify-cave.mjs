@@ -403,6 +403,67 @@ async function main() {
   const taskDeleteAgain = await op("task.delete", { id: taskId });
   check("deleting it twice is a 404, not a silent success", taskDeleteAgain.status === 404);
 
+  /* ---------------- the schedule, by hand ---------------- */
+  section("Schedule added by hand");
+
+  const dayKey = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const today = dayKey(new Date());
+
+  const eventMade = await op("event.create", {
+    title: `${marker} lecture`,
+    date: today,
+    time: "14:30",
+    minutes: 90,
+    location: "Room 4",
+  });
+  check("an event can be created by hand", eventMade.status === 200, String(eventMade.status));
+  check("it keeps the title", eventMade.body.event?.title === `${marker} lecture`);
+  check("and the location", eventMade.body.event?.location === "Room 4");
+  check(
+    "the duration becomes an end time",
+    new Date(eventMade.body.event.end).getTime() - new Date(eventMade.body.event.start).getTime() ===
+      90 * 60_000,
+  );
+  check(
+    "it is marked as the user's, and not as Xana's own writing",
+    eventMade.body.event?.source === "user" && eventMade.body.event?.xanaAuthored === false,
+    `${eventMade.body.event?.source}/${eventMade.body.event?.xanaAuthored}`,
+  );
+  check(
+    "the response carries the window, so the panel does not refetch",
+    Array.isArray(eventMade.body.events) &&
+      eventMade.body.events.some((e) => e.id === eventMade.body.event?.id),
+  );
+  const eventId = eventMade.body.event?.id;
+
+  const eventReread = await board();
+  check("and it survives a fresh read", eventReread.events.some((e) => e.id === eventId));
+
+  // A title and a date are the minimum. The duration has a default rather than
+  // being a second required field.
+  const eventDefaulted = await op("event.create", { title: `${marker} defaulted`, date: today });
+  check("an event with no time gets a default hour", eventDefaulted.status === 200);
+  check(
+    "which is an hour long",
+    new Date(eventDefaulted.body.event.end).getTime() -
+      new Date(eventDefaulted.body.event.start).getTime() ===
+      60 * 60_000,
+  );
+
+  const eventNoTitle = await op("event.create", { title: "  ", date: today });
+  check("a blank title is refused", eventNoTitle.status === 400, String(eventNoTitle.status));
+  const eventNoDate = await op("event.create", { title: `${marker} dateless` });
+  check("a missing date is refused", eventNoDate.status === 400, String(eventNoDate.status));
+
+  const eventRemoved = await op("event.delete", { id: eventId });
+  check("an event can be removed", eventRemoved.status === 200);
+  check(
+    "and it leaves the window",
+    !eventRemoved.body.events.some((e) => e.id === eventId),
+  );
+  const eventDeleteAgain = await op("event.delete", { id: eventId });
+  check("removing it twice is a 404", eventDeleteAgain.status === 404, String(eventDeleteAgain.status));
+
   /* ---------------- cleanup ---------------- */
   section("Cleanup");
   let removed = 0;
@@ -436,6 +497,19 @@ async function main() {
     "and no probe task is left open",
     strayTasks.length === 0,
     strayTasks.map((t) => t.title).join(", "),
+  );
+
+  // Same for the schedule: the "defaulted" probe has no id kept for it.
+  let strayEvents = afterTaskCleanup.events.filter((e) => e.title?.startsWith(marker));
+  for (const event of strayEvents) {
+    await op("event.delete", { id: event.id });
+  }
+  const afterEventCleanup = await board();
+  strayEvents = afterEventCleanup.events.filter((e) => e.title?.startsWith(marker));
+  check(
+    "and no probe event is left in the schedule",
+    strayEvents.length === 0,
+    strayEvents.map((e) => e.title).join(", "),
   );
 
   return report();

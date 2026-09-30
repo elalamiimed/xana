@@ -7,6 +7,7 @@ import { compareGoals, toneFor } from "@/lib/cave/types";
 
 import CaveBoard from "./CaveBoard";
 import MemoryRoom from "./MemoryRoom";
+import ScheduleRoom from "./ScheduleRoom";
 import TasksRoom from "./TasksRoom";
 import { useCave } from "./useCave";
 
@@ -26,7 +27,7 @@ import { useCave } from "./useCave";
  * actually type: a trailing date, and a leading horizon word.
  */
 
-export type CaveRoom = "goals" | "tasks" | "memory";
+export type CaveRoom = "goals" | "tasks" | "schedule" | "memory";
 
 export interface CaveProps {
   open: boolean;
@@ -38,6 +39,7 @@ export interface CaveProps {
 const ROOMS: readonly { id: CaveRoom; label: string }[] = [
   { id: "goals", label: "Goals" },
   { id: "tasks", label: "Tasks" },
+  { id: "schedule", label: "Schedule" },
   { id: "memory", label: "Memory" },
 ] as const;
 
@@ -126,6 +128,15 @@ export default function Cave({ open, onClose, initialRoom = "goals" }: CaveProps
 
   /** A one-line summary of the room, so it says something on arrival. */
   const summary = useMemo(() => {
+    if (room === "schedule") {
+      const today = controller.events.filter(
+        (e) => new Date(e.start).toDateString() === new Date().toDateString(),
+      ).length;
+      return today === 0
+        ? "Nothing scheduled today."
+        : `${today} thing${today === 1 ? "" : "s"} today.`;
+    }
+
     const active = controller.goals.filter((g) => g.goal.status === "active");
     const openTasks = controller.tasks.length;
 
@@ -151,7 +162,7 @@ export default function Cave({ open, onClose, initialRoom = "goals" }: CaveProps
       parts.push(`nearest deadline ${soonest.progress.daysRemaining} days out`);
     }
     return `${parts.join(", ")}.`;
-  }, [controller.goals, controller.tasks, room]);
+  }, [controller.goals, controller.tasks, controller.events, room]);
 
   const addGoal = useCallback(async () => {
     const raw = quickAdd.trim();
@@ -283,6 +294,8 @@ export default function Cave({ open, onClose, initialRoom = "goals" }: CaveProps
           </div>
         ) : room === "tasks" ? (
           <TasksRoom controller={controller} />
+        ) : room === "schedule" ? (
+          <ScheduleRoom controller={controller} />
         ) : (
           <MemoryRoom controller={controller} />
         )}
@@ -295,7 +308,9 @@ export default function Cave({ open, onClose, initialRoom = "goals" }: CaveProps
             ? `${ordered.length} goal${ordered.length === 1 ? "" : "s"} in the cave. Everything here is stored locally in data/xana.db.`
             : room === "tasks"
               ? "Open tasks only — completing one removes it from this list. Everything here is stored locally in data/xana.db."
-              : "Forgetting is permanent, and she will not recall it again."}
+              : room === "schedule"
+                ? "Today and tomorrow. What Next, Focus and Open read from."
+                : "Forgetting is permanent, and she will not recall it again."}
         </p>
       </footer>
     </div>

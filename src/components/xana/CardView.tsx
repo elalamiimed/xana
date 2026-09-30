@@ -119,7 +119,7 @@ function dueLabel(due: string): string | null {
 function BriefingSectionView({ section }: { section: BriefingSection }) {
   switch (section.kind) {
     case "energy": {
-      const { reading, forecast, stale } = section;
+      const { reading, forecast, stale, body } = section;
       return (
         <div>
           <h4 className="label">energy</h4>
@@ -139,6 +139,24 @@ function BriefingSectionView({ section }: { section: BriefingSection }) {
               </span>
             )}
           </div>
+          {/* What the score is made of. A number with no working is one a
+              person can only trust or ignore. */}
+          <ul className="mt-2 space-y-1">
+            <li className="timestamp">
+              {body.sleepHours !== undefined
+                ? `${body.sleepHours.toFixed(1)}h sleep`
+                : "sleep not recorded"}
+            </li>
+            <li className="timestamp">
+              {body.meals.logged} of {body.meals.of} meals
+            </li>
+            <li className="timestamp">
+              schedule {body.schedule.busyPercent}% booked
+              {body.schedule.freeMinutes > 0
+                ? ` · ${span(body.schedule.freeMinutes)} free`
+                : ""}
+            </li>
+          </ul>
           <div className="mt-2 flex flex-wrap items-baseline gap-3">
             <Meta label="forecast" value={`${forecast.score} ${forecast.band}`} />
             <span className="text-[13px] font-light text-dim">{forecast.note}</span>
@@ -242,10 +260,22 @@ function BriefingSectionView({ section }: { section: BriefingSection }) {
     }
 
     case "open": {
-      const { overdue, upcoming, openCount } = section;
+      const { overdue, upcoming, openCount, biggest } = section;
       return (
         <div>
           <h4 className="label">open</h4>
+          {/* The day's biggest block, singled out — it is what the day is
+              actually about, and a list of small tasks buries it. */}
+          {biggest ? (
+            <div className="mt-2">
+              <div className="flex flex-wrap items-baseline gap-3">
+                <span className="text-[14px] font-light text-text">{biggest.title}</span>
+                <span className="timestamp">{span(biggest.minutes)}</span>
+                <span className="timestamp">{formatTime(biggest.start)}</span>
+              </div>
+              <p className="mt-1 timestamp">the biggest block today</p>
+            </div>
+          ) : null}
           {overdue.length > 0 ? (
             <ul className="mt-2 space-y-1.5">
               {overdue.map((item) => (

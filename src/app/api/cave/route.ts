@@ -15,6 +15,7 @@ import { NextResponse } from "next/server";
 import {
   CaveError,
   isCaveOperation,
+  listCaveEvents,
   listCaveGoals,
   listCaveTasks,
   listMemories,
@@ -33,6 +34,7 @@ export async function GET(request: Request) {
     return NextResponse.json({
       goals: listCaveGoals(),
       tasks: listCaveTasks(),
+      events: listCaveEvents(),
       memories,
     });
   } catch (err) {
@@ -73,6 +75,8 @@ export async function POST(request: Request) {
           "task.create",
           "task.setStatus",
           "task.delete",
+          "event.create",
+          "event.delete",
           "memory.list",
           "memory.create",
           "memory.update",

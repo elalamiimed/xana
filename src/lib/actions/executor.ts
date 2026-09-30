@@ -72,6 +72,9 @@ export function executeAction(intent: ActionIntent, opts: ExecuteOptions = {}): 
       case "log_energy":
         return finish(logEnergy(intent.level, intent.at, store));
 
+      case "log_meal":
+        return finish(logMeal(intent.meal, store));
+
       case "remember":
         return finish(remember(intent, store, opts.sessionId));
 
@@ -360,6 +363,47 @@ const ENERGY_LABELS: Record<number, string> = {
   4: "sharp",
   5: "at your peak",
 };
+
+/** The day's three meals, which is what the briefing counts against. */
+const MEAL_ORDER = ["breakfast", "lunch", "dinner"] as const;
+
+/**
+ * A meal eaten.
+ *
+ * Counted rather than described, because the only question the briefing asks
+ * is whether they have eaten — "2 of 3" answers it, and a food diary would be
+ * a different product. A snack counts towards the day without pretending to be
+ * a meal, so it does not push the count past three.
+ *
+ * The reply names what happened rather than celebrating it. Being told "well
+ * done" for eating lunch is the kind of praise that makes a person stop
+ * telling you things.
+ */
+function logMeal(
+  meal: "breakfast" | "lunch" | "dinner" | "snack" | undefined,
+  store: XanaStore,
+): ActionOutcome {
+  const today = toDateKey();
+  const existing = store.healthSamples(1)[0];
+  const current = existing?.date === today ? (existing.meals ?? 0) : 0;
+
+  // A snack is worth noting and is not one of the three.
+  const counted = meal === "snack" ? current : Math.min(MEAL_ORDER.length, current + 1);
+  store.upsertHealth({ date: today, meals: counted, source: "user" });
+
+  const remaining = MEAL_ORDER.length - counted;
+  const named = meal ? `${meal[0].toUpperCase()}${meal.slice(1)}` : "Logged";
+
+  return {
+    ok: true,
+    effect: "meal.logged",
+    message:
+      remaining <= 0
+        ? `${named}. That is all three today.`
+        : `${named} — ${counted} of ${MEAL_ORDER.length}.`,
+    refresh: ["context"],
+  };
+}
 
 /**
  * One clause about what that reading means against the rest of the day.
