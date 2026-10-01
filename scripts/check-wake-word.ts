@@ -367,7 +367,19 @@ group("Error names map onto the policy the way the API means them", () => {
   check("an unsupported language is terminal", endFromError("language-not-supported") === "error-language");
   check("and it is fatal", planRestart("error-language", 0).fatal);
   check("with something the user can act on", /language/i.test(planRestart("error-language", 0).note));
+
+  // `network` means the browser's speech service is unreachable, which no amount
+  // of retrying fixes. Ten consecutive `network` errors with a working
+  // microphone is the diagnosis this case came from.
+  check("an unreachable speech service is its own case", endFromError("network") === "error-network");
+  check("and it does not retry", !planRestart("error-network", 0).restart);
+  check("it is fatal on the first failure", planRestart("error-network", 0).fatal);
+  check("the note names the way out", /local transcriber/i.test(planRestart("error-network", 0).note));
+  check("and not just the symptom", !/^network/i.test(planRestart("error-network", 0).note));
+
   check("an unknown error is transient, not fatal on sight", endFromError("something-new") === "error-other");
+  // The distinction that matters: unknown errors still retry, `network` does not.
+  check("an unknown error still retries once", planRestart("error-other", 1).restart);
 });
 
 /* ------------------------------------------------------------------ */

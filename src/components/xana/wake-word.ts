@@ -454,6 +454,7 @@ export type WakeEnd =
   | "error-service"
   | "error-audio"
   | "error-language"
+  | "error-network"
   | "error-other"
   | "stopped";
 
@@ -523,6 +524,27 @@ export function planRestart(end: WakeEnd, consecutiveFailures = 0): RestartDecis
         fatal: true,
         note: "This browser cannot recognise your language for dictation, so she cannot watch for her name. Change the browser's language, or use the mic button.",
       };
+    case "error-network":
+      /**
+       * Terminal, not transient, and this is a deliberate refusal to retry.
+       *
+       * The browser's recogniser does not transcribe anything itself — it sends
+       * the audio to a speech service. When that service is unreachable, every
+       * attempt fails with `network` immediately and identically, so retrying
+       * four times against a blocked socket only delays the truth and burns the
+       * user's patience. The diagnosis that produced this case showed ten
+       * consecutive `network` errors with a microphone that opened every time.
+       *
+       * The note names the way out rather than the symptom, because the browser
+       * engine has no local fallback of its own — the local transcriber is a
+       * separate engine the user has to select.
+       */
+      return {
+        restart: false,
+        delayMs: 0,
+        fatal: true,
+        note: "The browser cannot reach its speech service, so it cannot watch for her name — retrying will not help. Switch Settings → Voice → Transcription to the local transcriber, or use the mic button.",
+      };
     case "error-other":
       // A transient error is worth a backoff, but only a few times.
       return consecutiveFailures >= 4
@@ -550,6 +572,11 @@ export function endFromError(error: string): WakeEnd {
       return "error-audio";
     case "language-not-supported":
       return "error-language";
+    case "network":
+      // Its own case rather than falling through to "transient". See the note in
+      // `planRestart`: a blocked speech service never becomes reachable by
+      // waiting, so retrying is pure delay.
+      return "error-network";
     case "no-speech":
     case "aborted":
       // `no-speech` is a timeout, not a fault: the listener simply heard
