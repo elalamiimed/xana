@@ -148,13 +148,18 @@ const DESCRIPTORS: PluginDescriptor[] = [
     kind: "service",
     tagline: "The forecast for where you actually are.",
     dataNote:
-      "Sends your coordinates to api.open-meteo.com, or your city name to its geocoder. If neither is set, it asks ipapi.co to guess from your IP address — that is the one that reveals roughly where you are to a third party.",
+      "Sends your coordinates to api.open-meteo.com, or your city name to its geocoder. If neither is set, it asks ipwho.is — and freeipapi.com if that fails — to guess roughly where you are from your IP address, which is the one step that reveals your area to a third party.",
     provides: "Temperature, conditions, sunrise and sunset, and rain warnings.",
     needs: [
       {
         kind: "net.read",
-        reason: "Look up the forecast.",
-        hosts: ["api.open-meteo.com", "geocoding-api.open-meteo.com", "ipapi.co"],
+        reason: "Look up the forecast, and geocode a place name.",
+        hosts: [
+          "api.open-meteo.com",
+          "geocoding-api.open-meteo.com",
+          "ipwho.is",
+          "freeipapi.com",
+        ],
       },
       {
         kind: "location",

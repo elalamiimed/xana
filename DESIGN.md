@@ -248,10 +248,10 @@ visible one-line caption sits beneath.
   0.55` after 20s of no interaction. Hover restores full opacity.
 - On an empty session the card area is empty — just the orb. That emptiness is
   the point.
-- Plugin status is a row of dots in the header; `--good` connected,
+- Connection status is a row of dots in the header; `--good` connected,
   `--text-faint` local, `--warn` error. Tooltip on hover *or* focus, and the row
   carries an `aria-label` stating the counts — colour is never the only signal.
-- A plugin **waiting for permission** is a hollow ring (`ring-1 ring-faint`),
+- A connection **waiting for permission** is a hollow ring (`ring-1 ring-faint`),
   not an amber dot. It is neither healthy nor broken: nothing has failed and
   there is a button to press. Painting it `--warn` would put it in the same class
   as a rejected API key, which is how a user learns to ignore the dot that
@@ -267,17 +267,33 @@ interface rather than a swatch that promises something.
 
 Sections: **Appearance** (palette, custom colours, ambient light, motion),
 **Voice** (spoken replies, voice, rate, pitch — each with a sample), **Model &
-key** (provider, model, key, a real test request, persona), **Plugins** (one card
-per plugin: what leaves the machine, what you get, each capability with its
-reason and hosts, settings, and Allow / Withdraw), **Connections** (the older
-flat `XANA_*` keys, kept so an existing value can be cleared), **About** (where
-the file lives, and what she does without any of it).
+key** (provider, model, key, a real test request, persona), **Connections** (one
+card per connection: what leaves the machine, what you get, each capability with
+its reason and hosts, settings, and Allow / Withdraw), **About** (where the file
+lives, and what she does without any of it).
 
-The Plugins card is the consent surface, so its order is a safety decision rather
-than a layout preference: what leaves the machine first, then what you get, then
-the capabilities in danger order (`remote.write` last), then the fields, then the
-buttons. A `remote.write` grant gets its own control — allowing reads and
-allowing changes are different decisions and must not share a click.
+Connections is one list rather than two screens, grouped by what it takes to
+connect — **Your data**, **Services**, **Devices**, **Bundled** — and the
+grouping is the server's, shipped with the response. A kind with nothing in it is
+not rendered, because an empty heading promises something that is not there. The
+card says **answered by** against the provenance rather than "source", because one
+of the kinds is literally called a source and two meanings for one word on one
+screen is a caption the user has to decode.
+
+The connection card is the consent surface, so its order is a safety decision
+rather than a layout preference: what leaves the machine first, then what you
+get, then the capabilities in danger order (`remote.write` last), then the
+fields, then the buttons. A `remote.write` grant gets its own control — allowing
+reads and allowing changes are different decisions and must not share a click.
+
+At the foot of Connections, collapsed, sit the older flat `XANA_*` values — one
+disclosure generated from `SOURCE_GROUPS`, kept so a key that still resolves from
+the environment can also be cleared. The health card carries one block more,
+**From your phone**: the ingest URL, the header name, a body to paste, and the
+two platform paths. It is deliberately not a warning treatment — nothing there is
+broken or missing, it is an offer — and the one honest sentence about the network
+sits under it: she has to be reachable on your LAN for a phone to post, and the
+switch that makes her reachable exposes this interface too.
 
 It is a real dialog: `role="dialog"`, `aria-modal`, a focus trap, Escape to
 close, focus returned to whatever opened it, and the page behind locked from

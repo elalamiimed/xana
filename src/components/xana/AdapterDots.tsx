@@ -153,8 +153,8 @@ export function Header({ lifeState, presence, onOpenSettings, onOpenCave }: Head
   const broken = sources.filter(
     (source) => source.state === "error" || source.state === "offline",
   ).length;
-  // Kept apart from `broken` on purpose: a plugin waiting for consent is not
-  // a fault and must not raise the same amber flag a failed request does.
+  // Kept apart from `broken` on purpose: a connection waiting for consent is
+  // not a fault and must not raise the same amber flag a failed request does.
   const waiting = sources.filter((source) => source.state === "blocked").length;
 
   return (
@@ -207,7 +207,7 @@ export function Header({ lifeState, presence, onOpenSettings, onOpenCave }: Head
             broken > 0
               ? `Settings. ${broken} ${broken === 1 ? "connection needs" : "connections need"} attention.`
               : waiting > 0
-                ? `Settings. ${waiting} ${waiting === 1 ? "plugin is" : "plugins are"} waiting for permission.`
+                ? `Settings. ${waiting} ${waiting === 1 ? "connection is" : "connections are"} waiting for permission.`
                 : "Settings"
           }
           className="group relative flex items-center gap-2 rounded-full border border-hairline px-3 py-1.5 text-[12px] font-normal text-dim transition-colors duration-[var(--t-fast)] hover:border-hairline-2 hover:bg-surface-2 hover:text-text"

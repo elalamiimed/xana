@@ -1,20 +1,29 @@
 /**
- * The plugin endpoints, from the browser's side.
+ * The connection endpoints, from the browser's side.
  *
  * Three calls and one rule that differs from the rest of the app: a refused
- * consent action is not a transport failure. `POST /api/plugins` answers
- * 4xx/5xx with a readable `{ ok: false, message }` beside the current plugin
- * list — "Allow Google Calendar first, then connect." is the sentence the user
- * has to read, and throwing it away in favour of "that route answered 409"
- * would leave them with nothing to act on. So these helpers return the failure
- * payload when there is one, and throw only when the body is not something the
- * panel can render at all.
+ * consent action is not a transport failure. `POST /api/connections` answers
+ * 4xx/5xx with a readable `{ ok: false, message }` beside the current
+ * connection list — "Allow Google Calendar first, then connect." is the
+ * sentence the user has to read, and throwing it away in favour of "that route
+ * answered 409" would leave them with nothing to act on. So these helpers
+ * return the failure payload when there is one, and throw only when the body
+ * is not something the panel can render at all.
  *
  * Everything here narrows the response rather than trusting it, the same way
  * `../api.ts` does: a proxy error page or a half-written JSON body must not
  * crash the panel, and a missing count must not be quietly replaced with a
  * zero, because a summary that says "0 waiting for permission" when nobody
  * asked is worse than no summary.
+ *
+ * RENAMED, NOT REWRITTEN
+ *
+ * This file was `plugins.ts`, and the screen was called Plugins. The wire shape
+ * did not change when the two settings screens became one, so the old endpoint
+ * constants, the old error class and the old call names are exported as
+ * aliases at the foot of the file: an import written against the old vocabulary
+ * keeps compiling and reaches the same implementation. New code uses the names
+ * above.
  */
 
 import type {
@@ -24,39 +33,37 @@ import type {
   PluginAction,
   PluginActionResponse,
   PluginStatus,
-  PluginsResponse,
 } from "../../../lib/plugins/types";
 
 /** The canonical surface. `/api/plugins` still answers the same handlers. */
 export const CONNECTIONS_ENDPOINT = "/api/connections";
 export const CONNECTION_SETTINGS_ENDPOINT = "/api/connections/settings";
 
-/** Kept as the old names, so an older import keeps compiling. */
-export const PLUGINS_ENDPOINT = CONNECTIONS_ENDPOINT;
-export const PLUGIN_SETTINGS_ENDPOINT = CONNECTION_SETTINGS_ENDPOINT;
-
 /** The list the GET returns, plus the sentence that came back with a write. */
-export type PluginSettingsResponse = PluginsResponse & { ok: boolean; message: string };
+export type ConnectionSettingsResponse = ConnectionsResponse & {
+  ok: boolean;
+  message: string;
+};
 
-export class PluginsApiError extends Error {
+export class ConnectionsApiError extends Error {
   readonly endpoint: string;
   readonly status: number | null;
 
   constructor(endpoint: string, status: number | null, detail?: string) {
     super(detail && detail.trim().length > 0 ? detail : `${endpoint} did not answer`);
-    this.name = "PluginsApiError";
+    this.name = "ConnectionsApiError";
     this.endpoint = endpoint;
     this.status = status;
   }
 }
 
 /** A short sentence for the panel's error line. No stack, no status code. */
-export function describePluginsError(error: unknown): string {
-  if (error instanceof PluginsApiError) {
-    if (error.status === null) return "The plugin service is not answering";
+export function describeConnectionsError(error: unknown): string {
+  if (error instanceof ConnectionsApiError) {
+    if (error.status === null) return "The connection service is not answering";
     return error.message;
   }
-  return "Something in the plugin service did not answer";
+  return "Something in the connection service did not answer";
 }
 
 /* ------------------------------------------------------------------ */
@@ -81,7 +88,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * bargain: the server computed it from the same rows, so the panel renders it
  * rather than recomputing a total that could disagree with the cards below.
  */
-function asPluginsResponse(payload: unknown): PluginsResponse | null {
+function asConnectionsResponse(payload: unknown): ConnectionsResponse | null {
   if (!isRecord(payload)) return null;
   if (!Array.isArray(payload.plugins)) return null;
   if (typeof payload.awaitingConsent !== "number") return null;
@@ -124,7 +131,7 @@ async function send(endpoint: string, init: RequestInit): Promise<Response> {
     return await fetch(endpoint, { cache: "no-store", ...init });
   } catch {
     // Network-level failure: the server is mid-restart, or the route is gone.
-    throw new PluginsApiError(endpoint, null);
+    throw new ConnectionsApiError(endpoint, null);
   }
 }
 
@@ -132,15 +139,15 @@ async function send(endpoint: string, init: RequestInit): Promise<Response> {
 /* The calls                                                          */
 /* ------------------------------------------------------------------ */
 
-/** GET /api/plugins — every plugin, its capabilities, and its last read. */
-export async function getPlugins(): Promise<PluginsResponse> {
-  const response = await send(PLUGINS_ENDPOINT, {});
+/** GET /api/connections — every connection, its capabilities, and its last read. */
+export async function getConnections(): Promise<ConnectionsResponse> {
+  const response = await send(CONNECTIONS_ENDPOINT, {});
   const payload = await readJson(response);
-  const data = asPluginsResponse(payload);
+  const data = asConnectionsResponse(payload);
 
   if (!response.ok || !data) {
-    throw new PluginsApiError(
-      PLUGINS_ENDPOINT,
+    throw new ConnectionsApiError(
+      CONNECTIONS_ENDPOINT,
       response.status,
       messageOf(payload) ?? undefined,
     );
@@ -149,27 +156,27 @@ export async function getPlugins(): Promise<PluginsResponse> {
 }
 
 /**
- * POST /api/plugins — grant, revoke, connect, disconnect.
+ * POST /api/connections — grant, revoke, connect, disconnect.
  *
  * A refusal comes back as a value, not a throw, because a refusal here is a
  * decision the user can act on — usually "do the other step first" — and the
  * endpoint says which step in `message`.
  */
-export async function postPluginAction(
+export async function postConnectionAction(
   action: PluginAction,
 ): Promise<PluginActionResponse> {
-  const response = await send(PLUGINS_ENDPOINT, {
+  const response = await send(CONNECTIONS_ENDPOINT, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(action),
   });
 
   const payload = await readJson(response);
-  const data = asPluginsResponse(payload);
+  const data = asConnectionsResponse(payload);
   const message = messageOf(payload);
 
   if (!data) {
-    throw new PluginsApiError(PLUGINS_ENDPOINT, response.status, message ?? undefined);
+    throw new ConnectionsApiError(CONNECTIONS_ENDPOINT, response.status, message ?? undefined);
   }
 
   return {
@@ -185,29 +192,29 @@ export async function postPluginAction(
 }
 
 /**
- * PUT /api/plugins/settings — one plugin's fields, by qualified key.
+ * PUT /api/connections/settings — one connection's fields, by qualified key.
  *
  * `values` must contain only the keys the user actually typed into. The
  * endpoint cannot tell a deliberate value from an echoed one, so an untouched
  * field sent along "for completeness" is a field promoted out of the
  * environment and into the settings file.
  */
-export async function savePluginSettings(
+export async function saveConnectionSettings(
   values: Record<string, string>,
-): Promise<PluginSettingsResponse> {
-  const response = await send(PLUGIN_SETTINGS_ENDPOINT, {
+): Promise<ConnectionSettingsResponse> {
+  const response = await send(CONNECTION_SETTINGS_ENDPOINT, {
     method: "PUT",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ values }),
   });
 
   const payload = await readJson(response);
-  const data = asPluginsResponse(payload);
+  const data = asConnectionsResponse(payload);
   const message = messageOf(payload);
 
   if (!data) {
-    throw new PluginsApiError(
-      PLUGIN_SETTINGS_ENDPOINT,
+    throw new ConnectionsApiError(
+      CONNECTION_SETTINGS_ENDPOINT,
       response.status,
       message ?? undefined,
     );
@@ -219,3 +226,26 @@ export async function savePluginSettings(
     ...data,
   };
 }
+
+/* ------------------------------------------------------------------ */
+/* The old names                                                      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The pre-merge vocabulary, kept so an existing import does not break.
+ *
+ * These are aliases rather than copies: `PLUGINS_ENDPOINT` is
+ * `CONNECTIONS_ENDPOINT`, and `PluginsApiError` is the same class object, so
+ * `instanceof` still answers and a fix to one is a fix to both. Nothing new
+ * should import them — the merge left one screen and one name, and two names
+ * for one call is how the next reader ends up wondering which one is current.
+ */
+export const PLUGINS_ENDPOINT = CONNECTIONS_ENDPOINT;
+export const PLUGIN_SETTINGS_ENDPOINT = CONNECTION_SETTINGS_ENDPOINT;
+export const PluginsApiError = ConnectionsApiError;
+export const getPlugins = getConnections;
+export const postPluginAction = postConnectionAction;
+export const savePluginSettings = saveConnectionSettings;
+export const describePluginsError = describeConnectionsError;
+export type PluginsApiError = ConnectionsApiError;
+export type PluginSettingsResponse = ConnectionSettingsResponse;

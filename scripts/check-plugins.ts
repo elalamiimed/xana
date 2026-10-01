@@ -101,13 +101,26 @@ for (const name of INHERITED_ENV) delete process.env[name];
 /* ------------------------------------------------------------------ */
 
 const { emptySnapshot } = await import("../src/lib/adapters/types");
-const { setStore, XanaStore } = await import("../src/lib/core/store");
+const { setStore, XanaStore, defaultDbPath } = await import("../src/lib/core/store");
 const settings = await import("../src/lib/settings/store");
 const automation = await import("../src/lib/plugins/automation");
 const { PluginRegistry, getRegistry, resetRegistry } = await import("../src/lib/plugins/registry");
 const gcal = await import("../src/lib/plugins/google-calendar");
 const pluginTypes = await import("../src/lib/plugins/types");
 const { CAPABILITY_KEYS, PLUGIN_SETTING_KEYS } = await import("../src/lib/settings/types");
+const endpoint = await import("../src/lib/plugins/endpoint");
+/**
+ * The route modules, imported for their exported handler functions rather than
+ * their bodies. The pre-rename paths re-export the canonical ones, so comparing
+ * the two `GET`s is a proof that the alias cannot drift: it is the same function
+ * object, not a copy that happens to match today.
+ */
+const canonicalRoutes = await import("../src/app/api/connections/route");
+const aliasRoutes = await import("../src/app/api/plugins/route");
+const settingsRoutes = await import("../src/app/api/connections/settings/route");
+const settingsAliasRoutes = await import("../src/app/api/plugins/settings/route");
+const gatewayRoutes = await import("../src/app/xana/connections/route");
+const gatewayAliasRoutes = await import("../src/app/xana/plugins/route");
 
 const store = new XanaStore(path.join(DATA_DIR, "plugins.db"));
 setStore(store);
@@ -327,6 +340,31 @@ await group("Isolation and boot", () => {
     settings.settingsPath() === SETTINGS_FILE && settings.settingsPath().startsWith(DATA_DIR),
     settings.settingsPath(),
   );
+  /**
+   * The database half of the same promise, and the assertion whose absence let
+   * the code and the README disagree for a long time: `defaultDbPath()` resolved
+   * `<project>/data/xana.db` from the module's own location and ignored
+   * `XANA_DATA_DIR`, so a script that set the variable got a scratch settings
+   * file and the user's real life. `setStore()` below is still what this file
+   * uses for isolation — an explicit path cannot be got wrong — but the variable
+   * has to mean what it says.
+   */
+  check(
+    "the database path follows XANA_DATA_DIR too, not the project",
+    defaultDbPath() === path.join(DATA_DIR, "xana.db"),
+    defaultDbPath(),
+  );
+  {
+    const override = process.env.XANA_DATA_DIR;
+    process.env.XANA_DATA_DIR = "   ";
+    const blank = defaultDbPath();
+    process.env.XANA_DATA_DIR = override;
+    check(
+      "and a blank value means unset, not the working directory",
+      !blank.startsWith(DATA_DIR) && blank.endsWith(path.join("data", "xana.db")),
+      blank,
+    );
+  }
   check(
     "nothing is granted on a fresh settings file",
     Object.values(automation.grants()).every((value) => value !== true),
@@ -395,6 +433,124 @@ await group("The shape of the gate", () => {
 });
 
 /* ------------------------------------------------------------------ */
+/* The connection surface, as the panel reads it                       */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The rename's contract, checked on the assembled rows rather than on the
+ * descriptor list, because `/api/connections` is what the panel actually reads.
+ *
+ * A row without a `kind` would be a card the panel cannot file; a group whose
+ * counts do not add up is a heading that contradicts the cards beneath it; a
+ * config key outside `PLUGIN_SETTING_KEYS` is a field that accepts typing and
+ * never saves. None of those are visible in a descriptor, which is why they are
+ * asserted here on the response — and the response is assembled behind the same
+ * `refuse` stub as everything else, so "drawing the connections screen makes no
+ * request" is a check and not an assumption.
+ */
+await group("The connection surface", async () => {
+  const response = await withFetch(refuse, async () => endpoint.connectionsResponse());
+  const KINDS = pluginTypes.CONNECTION_KIND_ORDER;
+  const known = new Set<string>(KINDS);
+  const filed = response.groups.reduce((total, item) => total + item.plugins.length, 0);
+
+  check(
+    "every row carries a kind the vocabulary knows",
+    response.plugins.every((row) => known.has(row.kind)),
+    response.plugins.map((row) => `${row.id}:${row.kind}`).join(", "),
+  );
+  check(
+    "the groups are all four kinds, in the order the UI lists them",
+    response.groups.length === KINDS.length &&
+      response.groups.every((group, index) => group.kind === KINDS[index]),
+    response.groups.map((group) => group.kind).join(", "),
+  );
+  check(
+    "every group carries a label and a blurb, so no heading is ever blank",
+    response.groups.every((group) => group.label.length > 0 && group.blurb.length > 0),
+    response.groups.map((group) => `${group.kind}=${group.label}`).join(", "),
+  );
+  check(
+    "each group's counts add up to its own cards",
+    response.groups.every((group) => group.ready + group.pending === group.plugins.length),
+    response.groups
+      .map((group) => `${group.kind}:${group.ready}+${group.pending}/${group.plugins.length}`)
+      .join(", "),
+  );
+  check(
+    "and every row is filed in exactly one group",
+    filed === response.plugins.length,
+    `${response.plugins.length} rows, ${filed} filed`,
+  );
+  check(
+    "the kind list on the wire matches the vocabulary, labels and blurbs included",
+    response.kinds.length === KINDS.length &&
+      response.kinds.every((item) => item.label.length > 0 && item.blurb.length > 0),
+    response.kinds.map((item) => `${item.kind}=${item.label}`).join(", "),
+  );
+  check(
+    "the two header counts are honest totals over the rows",
+    response.awaitingConsent === response.plugins.filter((row) => row.missing.length > 0).length &&
+      response.unconfigured ===
+        response.plugins.filter((row) => row.missing.length === 0 && row.missingConfig.length > 0).length,
+    `${response.awaitingConsent} waiting, ${response.unconfigured} unconfigured`,
+  );
+
+  /* ---- the two connections this session added --------------------- */
+
+  const crypto = response.plugins.find((row) => row.id === "crypto");
+  check("crypto is a connection", crypto !== undefined);
+  check("crypto sits under services", crypto?.kind === "service", String(crypto?.kind));
+  check(
+    "and it asks for the CoinGecko host, as the only capability it leaves with",
+    crypto?.capabilities.some(
+      (capability) =>
+        capability.kind === "net.read" && capability.hosts?.includes("api.coingecko.com") === true,
+    ) === true,
+    JSON.stringify(crypto?.capabilities.map((capability) => [capability.kind, capability.hosts])),
+  );
+  check(
+    "crypto's coin list is optional, because the adapter has a usable default",
+    crypto?.config.every((item) => item.required === false) === true,
+    JSON.stringify(crypto?.config.map((item) => [item.key, item.required])),
+  );
+
+  const health = response.plugins.find((row) => row.id === "health");
+  const healthKeys = health?.config.map((item) => item.key) ?? [];
+  check(
+    "health declares the folder and the phone's two fields, and nothing else",
+    healthKeys.length === 3 &&
+      ["health.folder", "health.deviceToken", "health.ingest"].every((key) => healthKeys.includes(key)),
+    healthKeys.join(", "),
+  );
+  check(
+    "every declared config key is one the settings layer will store",
+    response.plugins.every((row) =>
+      row.config.every((item) => (PLUGIN_SETTING_KEYS as readonly string[]).includes(item.key)),
+    ),
+    response.plugins
+      .flatMap((row) => row.config.map((item) => item.key))
+      .filter((key) => !(PLUGIN_SETTING_KEYS as readonly string[]).includes(key))
+      .join(", "),
+  );
+
+  /* ---- the pre-rename paths are the same functions, not copies ---- */
+
+  check(
+    "/api/plugins re-exports the canonical GET and POST",
+    aliasRoutes.GET === canonicalRoutes.GET && aliasRoutes.POST === canonicalRoutes.POST,
+  );
+  check(
+    "/api/plugins/settings re-exports the canonical PUT",
+    settingsAliasRoutes.PUT === settingsRoutes.PUT,
+  );
+  check(
+    "/xana/plugins re-exports /xana/connections",
+    gatewayAliasRoutes.GET === gatewayRoutes.GET && gatewayAliasRoutes.POST === gatewayRoutes.POST,
+  );
+});
+
+/* ------------------------------------------------------------------ */
 /* 1-2. The gate: nothing granted                                     */
 /* ------------------------------------------------------------------ */
 
@@ -449,8 +605,9 @@ await group("With nothing granted, no plugin reaches the network", async () => {
   /**
    * A refused plugin is `blocked` — not `offline`. `AdapterDots` counts
    * `state === "blocked"` rows to write "N waiting for permission", and it
-   * renders the very array built here, so `offline` would render nine broken
-   * adapters instead of a consent prompt.
+   * renders the very array built here, so `offline` would render every gated
+   * adapter as broken instead of as a consent prompt. The count is deliberately
+   * not written down: it is the register's size, and it has changed twice.
    */
   const gatedRows = blocked.snapshot.statuses.filter((row) => gatedIds().has(row.id));
   check(

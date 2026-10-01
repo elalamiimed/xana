@@ -52,6 +52,18 @@ state from adapter caches that still predated the write, so Xana would say
 "Noted — call Mom" and then show a task list without it. If you add a cache
 anywhere in the read path, it must be reachable from `invalidateContext()`.
 
+**The same bug exists one layer up, and it survived longer.** A *permission*
+change is a configuration change, and it used to drop the epoch and the adapter
+caches while leaving the assembled state in place — so granting `net.read` and
+reading the state within the gateway's four-second window returned the state as
+it was before the grant. The panel's own question, "did that permission do
+anything", answered no. `afterConfigChange()` in `lib/plugins/automation.ts` now
+calls `invalidateContext()` too, dynamically, for the reason that file gives: a
+static import of the gateway from the plugin layer would close a cycle for the
+sake of one function. Bounded at four seconds, invisible in the panel, and worth
+fixing anyway — a permission that appears not to have applied invites a second
+click.
+
 ### 4. Memory ingestion is idempotent by key
 
 `ingestSnapshot()` walks a freshly collected snapshot and writes durable
@@ -144,9 +156,10 @@ browser caches and devtools sessions. Without the sentinel, the only way to
 "leave it alone" would be to round-trip the mask back — which would store
 `••••••••1a2b` as the key and fail at the next message with a baffling 401.
 
-Consequence for any new secret field: it goes in `SOURCE_GROUPS` with
-`kind: "secret"`, and the form treats it as replace-or-keep. There is no path
-that reads a secret back out.
+Consequence for any new secret field: a connection declares it in its
+descriptor's `config` with `kind: "secret"` — the legacy flat keys in
+`SOURCE_GROUPS` follow the same rule — and the form treats it as replace-or-keep.
+There is no path that reads a secret back out.
 
 ### 11. The model must be switched on, not merely present
 
@@ -158,6 +171,48 @@ key in their environment is the kind of behaviour that is very hard to forgive.
 The same reasoning is why the model panel's test button runs against the
 **unsaved** form: the point is to validate what is on screen, and it should cost
 nothing but a request to do so.
+
+### 12. One surface, one name: Connections
+
+`plugins` and `connections` were two settings screens under two names. "Plugins"
+held the permission cards and the API keys; "Connections" held the legacy flat
+`XANA_*` values. Neither was the place you looked for everything she can reach,
+and a key could be set on one screen that the other never mentioned.
+
+They are one list now, grouped by what it takes to connect — your data, a
+service, a device, or something bundled — because that is the user's actual
+question on opening the screen: what does this cost me in configuration. The
+grouping is computed on the server, in `ConnectionGroup` (`lib/plugins/types.ts`),
+and shipped with the response, so a heading cannot end up disagreeing with the
+cards under it.
+
+The old names still answer. `GET`/`POST /api/plugins`,
+`PUT /api/plugins/settings`, `GET /api/plugins/google/callback` and
+`/xana/plugins` re-export the canonical handlers, and the client's old function
+names are aliases rather than copies. The rename was for the user, not for the
+wire: a bookmark or a script written before it should keep working. Two names for
+one behaviour is only a problem when the second one is a second implementation,
+and none of these are.
+
+### 13. The phone's token is the authorisation, not a capability
+
+`POST /api/health/ingest` needs no grant, deliberately rather than by omission.
+`local.read` describes Xana reading a folder the user named; it does not describe
+a request arriving from the network, so requiring it here would be a permission
+that means nothing and gets clicked through.
+
+What protects the endpoint is the token: generated on this machine, held only in
+`data/settings.json` and on the phone, and compared with `timingSafeEqual` on
+equal-length buffers. It is never echoed by the ingest response; the connections
+card does show the stored value, deliberately, because it exists to be copied onto
+another device. The switch
+(`health.ingest`) is off by default, so a fresh install has no endpoint that
+accepts anything — and the token is checked *before* the switch, so an
+unauthenticated caller cannot use the route to learn whether ingest is on at all.
+
+The consequence for anyone extending this: an unauthenticated device path is a
+token-shaped problem. If a second device needs in, it gets its own token and the
+same constant-time comparison, not a new capability kind.
 
 ---
 
@@ -242,6 +297,27 @@ nothing but a request to do so.
   skip with the reason rather than a failure. **It has never been executed
   successfully**, in this environment or any other — its logic is unverified.
   Everything else in `npm run check` and `verify:web` has been run.
+- **Some hosts are unreachable from this sandbox, and the code cannot tell you
+  which.** `github.com`, `api.coingecko.com`, `stooq.com` and
+  `www.googleapis.com:443` do not answer here; `api.open-meteo.com`, `ipwho.is`,
+  `freeipapi.com` and `api.todoist.com` do. Crypto and Markets are therefore
+  verified against a stubbed `fetch` (`npm run verify:crypto`) rather than live
+  prices, and the Google connect flow stays unrun against Google for this reason
+  as well as the missing browser.
+- **A host that answers 403 to `fetch` looks exactly like a host that is
+  down.** `ipapi.co` was the weather plugin's only IP-geolocation provider, and
+  it now serves a Cloudflare interstitial to a Node request: `HTTP 403`, an HTML
+  body, no JSON. The adapter swallowed that as "no location" and the user saw a
+  synthetic fallback blaming their missing coordinates. Two things came out of
+  it, and both generalize: **name two providers** on any keyless fallback that
+  matters, and when a provider is swapped, swap it in the descriptor's `hosts`
+  and `dataNote` in the same edit — the consent prompt is the only place a user
+  is told which third party learns where they are.
+- **A phone cannot reach a loopback server.** `npm run dev` binds `127.0.0.1`, so
+  `HOSTNAME=0.0.0.0 npm run dev` is the only way a phone on the same network can
+  POST to `/api/health/ingest` — and that same switch exposes this interface,
+  settings and all, to that network. The ingest route authenticates itself with a
+  device token; nothing else on that surface does.
 - **`serverExternalPackages: ["better-sqlite3"]` is redundant** — Next 16
   auto-externalises it — but it is kept as documentation of intent.
 
@@ -251,12 +327,14 @@ nothing but a request to do so.
 
 | Task | Where | Watch out for |
 |---|---|---|
-| New data source | `src/lib/adapters/`, register in `registry.ts`, add its fields to `SOURCE_GROUPS` | Return a status; never throw; declare the true mode |
+| New connection | A descriptor in `src/lib/plugins/registry.ts`, an adapter in `src/lib/adapters/`, and its settings keys in `PLUGIN_SETTING_KEYS` | Return a status; never throw; declare the true mode; pick the `kind` honestly, because it decides which group the consent card sits under |
+| New secret | The descriptor's `config`, with `kind: "secret"` | Presence, never a value, on the way back to the browser |
+| New device / ingest path | `src/lib/plugins/health-bridge.ts` as the model | The token is the authorisation; check it before revealing whether the feature is on; never echo it |
 | New action | `ActionIntent` in `core/types.ts`, then the executor's switch | The exhaustive `never` default will fail the typecheck until handled |
 | New pattern | `src/lib/derived/patterns.ts` | Minimum sample, `evidence` strings, and a `patternFamily` prefix |
 | New nudge | `src/lib/derived/nudges.ts` | Give it a priority and, where possible, an `ActionIntent` |
 | New card | `Card` union in `core/types.ts` | `CardView` has a `never`-typed default; the local mind's `leadInFor` needs a line |
-| New config | `SOURCE_GROUPS` in `settings/types.ts` | The form generates itself; absent must be a normal state, not an error |
+| New legacy `XANA_*` name | `SOURCE_GROUPS` in `settings/types.ts` | Frozen. It exists so names that already resolve can be cleared; new configuration belongs to a connection's `config` |
 | New theme | `THEME_PRESETS` in `settings/themes.ts` | Two channel triplets. Tune by eye, not by hue rotation |
 | New presence state | `PRESENCE_STYLE` in `orb/scene.ts` | Every field is a target the renderer eases toward |
 | New motion | A token in `globals.css`, multiplied by `var(--motion)` | It has to stop under `prefers-reduced-motion` |
@@ -265,7 +343,9 @@ The `never`-typed defaults in `executor.ts`, `CardView.tsx` and `leadInFor` are
 deliberate: adding a variant without handling it fails `npm run typecheck`
 rather than silently doing nothing at runtime.
 
-A note on the settings form: it is generated from `SOURCE_GROUPS`, so a new
-integration needs no UI work at all. That is the intended shape — if you find
-yourself hand-writing a field in `SourcesPanel.tsx`, the field list is the thing
-to change instead.
+A note on the settings form: a connection's fields are generated from its
+descriptor's `config`, so a new integration needs no UI work at all. That is the
+intended shape — if you find yourself hand-writing a field in
+`ConnectionsPanel.tsx`, the descriptor is the thing to change instead. The
+collapsed older-keys block at the foot of that panel is the one part still
+generated from `SOURCE_GROUPS`, and nothing new should be added to it.

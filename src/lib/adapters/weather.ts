@@ -116,16 +116,62 @@ async function resolvePlace(): Promise<GeoResult | undefined> {
     }
   }
 
-  try {
-    const ip = await httpJson<{ latitude?: number; longitude?: number; city?: string }>(
-      "https://ipapi.co/json/",
-      { timeoutMs: 4000 },
-    );
-    if (typeof ip.latitude === "number" && typeof ip.longitude === "number") {
-      return { lat: ip.latitude, lon: ip.longitude, label: ip.city ?? "Your area" };
+  /**
+   * The IP lookup is the last resort, and it used to be a dead end.
+   *
+   * It asked `ipapi.co`, which now answers every request with a Cloudflare
+   * challenge page — HTTP 403, `<!DOCTYPE html>… Just a moment…` — so a fresh
+   * install that granted `net.read` and `location` and set no coordinates got
+   * "Synthetic — set a latitude and longitude" and no forecast, with nothing in
+   * the status row to explain that the *provider* had stopped serving. Two
+   * hosts are tried instead, and both are keyless and HTTPS:
+   *
+   *   ipwho.is        latitude/longitude/city, 1,000 lookups a day
+   *   freeipapi.com   the same fields under different names, as the fallback
+   *
+   * One lookup every fifteen minutes at most — the adapter's own TTL — is
+   * nowhere near either limit, and the second host exists because a single
+   * unauthenticated endpoint that can start refusing traffic is exactly the
+   * fragility this path already demonstrated. A failure of both is reported by
+   * the caller as "no location", which is honest: nothing was found, as opposed
+   * to "the weather service is down".
+   */
+  const providers: Array<() => Promise<GeoResult | undefined>> = [
+    async () => {
+      const ip = await httpJson<{
+        success?: boolean;
+        latitude?: number;
+        longitude?: number;
+        city?: string;
+      }>("https://ipwho.is/", { timeoutMs: 4000 });
+      // `success: false` arrives with HTTP 200 for a reserved or malformed IP,
+      // so the body is checked rather than only the status.
+      if (ip.success === false) return undefined;
+      if (typeof ip.latitude === "number" && typeof ip.longitude === "number") {
+        return { lat: ip.latitude, lon: ip.longitude, label: ip.city ?? "Your area" };
+      }
+      return undefined;
+    },
+    async () => {
+      const ip = await httpJson<{
+        latitude?: number;
+        longitude?: number;
+        cityName?: string;
+      }>("https://freeipapi.com/api/json", { timeoutMs: 4000 });
+      if (typeof ip.latitude === "number" && typeof ip.longitude === "number") {
+        return { lat: ip.latitude, lon: ip.longitude, label: ip.cityName ?? "Your area" };
+      }
+      return undefined;
+    },
+  ];
+
+  for (const provider of providers) {
+    try {
+      const found = await provider();
+      if (found) return found;
+    } catch {
+      /* try the next one */
     }
-  } catch {
-    /* no location available */
   }
   return undefined;
 }

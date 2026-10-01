@@ -69,6 +69,7 @@ async function main(): Promise<void> {
   const stateRoute = await import("../src/app/api/state/route");
   const chatRoute = await import("../src/app/api/chat/route");
   const actionRoute = await import("../src/app/api/action/route");
+  const { getRegistry } = await import("../src/lib/plugins/registry");
 
   /* ---------------- GET /xana/context ---------------- */
 
@@ -83,10 +84,15 @@ async function main(): Promise<void> {
     check("has a generatedAt", typeof lifeState.generatedAt === "string");
     check("has a headline", typeof lifeState.headline === "string");
     check("has energy", typeof (lifeState.energy as Record<string, unknown>)?.score === "number");
+    // One status row per registered connection, including the ones that are
+    // switched off. The expected count comes from the register rather than a
+    // literal: a literal tests the register's contents (and went stale the day
+    // crypto was added) instead of the property — the UI can never lose a row.
     check(
-      "reports nine plugins",
-      Array.isArray(lifeState.sources) && (lifeState.sources as unknown[]).length === 9,
-      `${(lifeState.sources as unknown[])?.length}`,
+      "reports one status row per connection",
+      Array.isArray(lifeState.sources) &&
+        (lifeState.sources as unknown[]).length === getRegistry().list().length,
+      `${(lifeState.sources as unknown[])?.length} rows for ${getRegistry().list().length} connections`,
     );
     check("is JSON-serialisable round trip", JSON.stringify(lifeState).length > 200);
   }

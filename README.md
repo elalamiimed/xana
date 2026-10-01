@@ -17,8 +17,7 @@ npm run dev       # prints the URL it started on
 ```
 
 Then open the URL and press **Settings** (or `Ctrl+,`) to choose a theme, paste
-an API key, or open **Plugins** and allow a connection. Nothing in there is
-required.
+an API key, or open **Connections** and allow one. Nothing in there is required.
 
 `npm run dev` does **not** shell out to `next dev`. It starts the Next server
 programmatically from `scripts/dev.mjs`, which matters in two situations:
@@ -44,12 +43,13 @@ priorities. Natural-language capture ("remind me to call Mom Friday"). Calendar,
 reminders, routines and habit streaks in one store rather than four silos.
 Proactive nudges ranked by what changes the day.
 
-Everything local works with nothing granted. Weather and market quotes need a
-click first: they are the only two built-ins that cannot answer honestly without
-leaving the machine, and Open-Meteo would otherwise geolocate you by IP on the
-first page load. A vault folder, a health export directory, a now-playing file
-and a mail bridge are asked for too, because they are files outside Xana's own
-database.
+Everything local works with nothing granted. Weather and quotes — markets and
+crypto — need a click first: they are the built-ins whose answer has to come from
+off the machine, and Open-Meteo would otherwise geolocate you by IP on the first
+page load. A vault folder, a health export directory, a now-playing file and a
+mail bridge are asked for too, because they are files outside Xana's own
+database. So is a phone that posts a day of health readings: the token you paste
+into it is the whole of that permission, and there is no capability to grant.
 
 **Goals.** Short, mid and long horizons with milestones. Weekly and monthly
 reflections she writes herself. Progress as thin rings, never charts.
@@ -89,7 +89,7 @@ from your own system. Every one of those is a control, not a config file.
 | Layer | Location | Responsibility |
 |---|---|---|
 | **Core** | `src/lib/core/` | Domain types, SQLite store + vector recall, local embedder, time helpers, NL time parsing |
-| **Plugins** | `src/lib/plugins/` | One descriptor per feature, the capability gate, and the Google Calendar OAuth client |
+| **Plugins** | `src/lib/plugins/` | One descriptor per connection, the capability gate, the grouping vocabulary, and the Google Calendar OAuth client |
 | **Adapters** | `src/lib/adapters/` | One file per life-data source. Never throw; report mode honestly; told what they may do |
 | **Derived** | `src/lib/derived/` | Energy forecast, goal pace, habit health, pattern detection, nudges, reflections, memory ingestion |
 | **Context** | `src/lib/context/gateway.ts` | The unified `/xana/context` gateway — one "life state" object |
@@ -98,19 +98,40 @@ from your own system. Every one of those is a control, not a config file.
 | **Mind** | `src/lib/mind/` | LLM client, local deterministic intent engine, prompt construction |
 | **UI** | `src/app/`, `src/components/xana/` | The orb, its 3D renderer, the composer, peripheral cards, the settings surface |
 
-### Plugins and permission
+### Connections and permission
 
-Every life-data source is a **plugin** with a descriptor that declares what it
+Every life-data source is a **connection** with a descriptor that declares what it
 needs. Nothing it wants to do happens until the matching capability has been
-granted in **Settings → Plugins**, and the grant is a value in the settings file
-you can read and revoke.
+granted in **Settings → Connections**, and the grant is a value in the settings
+file you can read and revoke.
+
+The code still says *plugin* where it means the mechanism rather than the screen:
+`src/lib/plugins/` holds the descriptors, and `runPlugin` is the gate. That is the
+one word the rename left alone, and it is why the file paths below still read
+`plugins` while nothing in the interface does.
+
+One list, grouped by what it takes to connect, because that is the question
+someone opening the screen actually has:
+
+- **Your data** — an ICS feed, her own calendar, a notes folder, a health export,
+  Google Calendar. Things you already have; most need no key.
+- **Services** — weather, Todoist, markets, crypto. Reached over the internet.
+- **Devices** — now playing, mail. Something you run or carry that reports to her
+  on your own network.
+- **Bundled** — what is part of Xana rather than a subscription, so there is
+  nothing to connect and nothing to pay.
+
+The health connection carries a second door that is not a capability at all: a
+device-token POST endpoint for a phone, described under
+[Phone health](#phone-health).
 
 ```ts
 {
   id: "weather",
+  kind: "service",     // which group the card sits in: source | service | device | library
   needs: [
-    { kind: "net.read", reason: "Look up the forecast.",
-      hosts: ["api.open-meteo.com", "geocoding-api.open-meteo.com", "ipapi.co"] },
+    { kind: "net.read", reason: "Look up the forecast, and geocode a place name.",
+      hosts: ["api.open-meteo.com", "geocoding-api.open-meteo.com", "ipwho.is", "freeipapi.com"] },
     { kind: "location", reason: "Use the coordinates you set, or guess them from your IP." },
   ],
   config: [{ key: "weather.latitude", label: "Latitude", … }],
@@ -164,10 +185,19 @@ file edited from outside the app still stops the fetch, and `checkConfigDrift`
 rebuilds the adapter rather than leaving a warm one holding a permission that has
 since been withdrawn.
 
-`GET /api/plugins` returns every plugin with its capabilities, its reasons, and
-what it last managed to read. `POST /api/plugins` grants, revokes, connects and
-disconnects. `PUT /api/plugins/settings` writes a plugin's own fields. All three
-are also served under `/xana/plugins`.
+`GET /api/connections` returns every connection with its capabilities, its
+reasons, what it last managed to read, the group it belongs to, and the two
+counts the panel header shows. `POST /api/connections` grants, revokes, connects
+and disconnects. `PUT /api/connections/settings` writes a connection's own
+fields. `/xana/connections` serves the same GET and POST under the gateway
+namespace; the settings write has no `/xana` twin.
+
+The pre-rename addresses still answer — `/api/plugins`, `/api/plugins/settings`,
+`/api/plugins/google/callback` and `/xana/plugins` — by re-exporting the
+canonical handlers rather than reimplementing them. The name was public when it
+changed, so a bookmark or a script written against it should keep working; a copy
+would have been two behaviours to keep in step, and the second one is the one
+that goes stale.
 
 ### The two-engine mind
 
@@ -233,11 +263,17 @@ have.
 | `GET` | `/xana/settings` | Current settings, every secret masked (canonical) |
 | `GET` | `/api/settings` | Alias of the above |
 | `PUT` | `/api/settings` | Merge a settings patch. `{ testModel: true }` probes without saving |
-| `GET` | `/xana/plugins` | Every plugin: capabilities, reasons, settings presence, last read (canonical) |
-| `GET` | `/api/plugins` | Alias of the above |
-| `POST` | `/api/plugins` | `{ id, action }` — `grant`, `revoke`, `connect`, `disconnect` |
-| `PUT` | `/api/plugins/settings` | `{ values }` — one plugin's own fields, then rebuild its adapter |
-| `GET` | `/api/plugins/google/callback` | Where Google returns the browser. Exchanges the code, checks `state` |
+| `GET` | `/api/connections` | Every connection: capabilities, reasons, settings presence, last read, its group, and the two counts |
+| `POST` | `/api/connections` | `{ id, action }` — `grant`, `revoke`, `connect`, `disconnect` |
+| `PUT` | `/api/connections/settings` | `{ values }` — one connection's own fields, then rebuild its adapter |
+| `GET` | `/api/connections/google/callback` | Where Google returns the browser. Exchanges the code, checks `state` |
+| `GET` | `/xana/connections` | The same GET and POST handlers under the gateway namespace |
+| `POST` | `/api/health/ingest` | A phone posts a day of health readings (`X-Device-Token`, no session, no capability) |
+| `POST` | `/xana/health/ingest` | The same ingest on the gateway path |
+| `GET` | `/api/plugins` | Pre-rename alias of `/api/connections`; `POST` answers there too |
+| `PUT` | `/api/plugins/settings` | Pre-rename alias of `/api/connections/settings` |
+| `GET` | `/api/plugins/google/callback` | Pre-rename alias of the callback, kept for a redirect URI already registered |
+| `GET` | `/xana/plugins` | Pre-rename alias of `/xana/connections`; `POST` answers there too |
 | `GET` | `/xana/cave` | My cave: the goal board with computed pace, and a page of memories |
 | `POST` | `/xana/cave` | `{ op, ...args }` — one of fourteen fixed goal and memory operations |
 
@@ -289,14 +325,15 @@ from the implementation.
 
 ## Configuration
 
-**Settings first.** Everything below can be set from **Settings → Plugins**,
+**Settings first.** Everything below can be set from **Settings → Connections**,
 which writes `data/settings.json`. Environment variables still work, and are the
 right answer for a container or a shared machine — but a value set in the UI wins
 over one from the environment.
 
 The old flat `XANA_*` names still resolve, so an exported variable keeps working.
-They are listed under **Settings → Connections** purely so an older value can be
-cleared; new configuration belongs in the plugin that owns it.
+They live in a collapsed block at the foot of that screen — **Older XANA_*
+environment values** — purely so an older value can be cleared; new configuration
+belongs to the connection that owns it.
 
 | Variable | Effect when set |
 |---|---|
@@ -309,6 +346,7 @@ cleared; new configuration belongs in the plugin that owns it.
 | `XANA_NOWPLAYING_URL` / `_FILE` | Now-playing from any local bridge. Superseded by `media.url` / `media.file` |
 | `XANA_MAIL_URL` / `_FILE` | Ambient mail signals as JSON. Superseded by `mail.url` / `mail.file` |
 | `XANA_FINANCE_SYMBOLS` | Quote symbols (default: `^spx,^ndq,eurusd,gbpusd`). Superseded by `markets.symbols` |
+| `XANA_CRYPTO_COINS` | CoinGecko ids (default: `bitcoin,ethereum,solana`, up to eight). Superseded by `crypto.coins` |
 | `XANA_LAT` / `XANA_LON` / `XANA_LOCATION_LABEL` | Pins the weather location. Superseded by `weather.latitude` / `weather.longitude` / `weather.place` |
 | `XANA_DATA_DIR` | Moves both the database and the settings file |
 
@@ -316,6 +354,23 @@ Environment variables do **not** grant permission. A token in your shell and an
 ungranted `net.read` means the token is read and nothing is fetched — the
 capability is stored in the settings file only, precisely so that reaching into
 your environment is not a way to widen what Xana may do.
+
+### Crypto
+
+Coin prices, with no key and no account. CoinGecko serves one `simple/price` call
+for a list of ids, and nothing else is sent — which is why this is a connection of
+its own rather than a second symbol list under Markets: a ticker list is a
+portfolio, a coin list is a price check, and the two are read from different
+places.
+
+Set `crypto.coins` to CoinGecko ids — `bitcoin`, `ethereum`, `solana` by default,
+up to eight, separated by commas or spaces. Each coin contributes one line to the
+same `finance[]` signals Markets writes to, so the briefing, the prompt and the
+ambient card pick it up with no separate plumbing: the price in dollars, the 24h
+move, and `up`/`down`/`flat` at half a percent either way. The list is cached for
+five minutes, because the free endpoint rate-limits by the minute and a price that
+is five minutes old is still an honest price. A day the endpoint does not answer
+is a status row saying why, not an empty line pretending the coins did not move.
 
 ### Google Calendar
 
@@ -326,9 +381,9 @@ Outlook and Fastmail all publish a private address under their calendar
 settings; paste it, allow `net.read`, and today's schedule appears. No OAuth app,
 no client secret, no token custody.
 
-**The `google-calendar` plugin** is for writing, and for a grant you can revoke
-from Google's side as well as Xana's. It creates events in your real calendar
-when you allow `remote.write`.
+**The `google-calendar` connection** is for writing, and for a grant you can
+revoke from Google's side as well as Xana's. It creates events in your real
+calendar when you allow `remote.write`.
 
 1. In [Google Cloud Console](https://console.cloud.google.com/apis/credentials),
    create a project and **enable the Google Calendar API**.
@@ -336,9 +391,11 @@ when you allow `remote.write`.
    in Testing.
 3. Create a credential. **Desktop app** is simplest — it has no client secret and
    the flow below is built for it. A **Web application** client works too; add
-   `http://127.0.0.1:4310/api/plugins/google/callback` as an authorized redirect
-   URI and paste the client secret as well.
-4. Paste the client ID in **Settings → Plugins → Google Calendar**, press
+   `http://127.0.0.1:4310/api/connections/google/callback` as an authorized
+   redirect URI and paste the client secret as well. The pre-rename path
+   `/api/plugins/google/callback` still finishes a sign-in, so a Google Cloud
+   project that already registered it does not have to change.
+4. Paste the client ID in **Settings → Connections → Google Calendar**, press
    **Allow**, then **Connect**. A browser tab opens at Google; approving it
    redirects back to this machine and the tab closes itself.
 
@@ -353,17 +410,74 @@ Disconnecting revokes the token at Google and clears it locally.
 where the platform supports it. It is never sent back to the browser: the
 settings API returns a mask and a presence flag, and the UI sends a sentinel
 meaning "leave the stored key alone" whenever you did not retype the field. The
-write is one-way by design. Plugin secrets are the same — the plugins API reports
-presence, never a value, not even masked.
+write is one-way by design. Connection secrets are the same — `/api/connections`
+reports presence, never a value, not even masked.
+
+### Phone health
+
+Apple Health and Google Fit have no key to paste: HealthKit is on-device only, and
+Google Fit needs OAuth and a cloud round trip. So the phone posts a day's sample
+to Xana instead. No app to install, no account to connect, no folder to keep in
+sync.
+
+The health connection's card carries the three things this needs — where to post,
+which header, and a body to paste — and a shortcut with one `Get Contents of URL`
+action is the whole client.
+
+- **URL** — `http://<this machine on your network>:4310/api/health/ingest`, or
+  `/xana/health/ingest`
+- **Header** — `X-Device-Token: <the token>`; a `token` field in the body works too
+- **Body** — `{"date":"2026-02-01","sleepHours":7.4,"steps":8420,"restingHeartRate":54,"mood":"good"}`
+
+An array of those, or `{samples: [...]}`, posts a batch; one POST may carry 500
+samples. The keys are the ones the export parser already tolerates, so a body can
+be piped from an export straight into a POST, and a day sent twice is updated
+rather than counted twice — which is what makes a shortcut safe to run on a
+schedule.
+
+**iPhone.** In Shortcuts: Get Health Sample, then Get Contents of URL, method
+POST, request body JSON, the body above, and a header named `X-Device-Token`.
+**Android.** Health Sync or Health Connect can write an export folder, and
+Tasker's HTTP Request action posts the same URL, header and body. With no phone at
+all, point `health.folder` at the export folder and she reads the files directly.
+
+**The token is a bearer secret.** Anyone holding it can write health rows to this
+machine. No capability is involved — the token *is* the grant, and a permission
+that meant "read a folder you named" would describe nothing that happens when a
+request arrives from the network. Put a long random string in
+`health.deviceToken`, save, and paste the same string into the phone: the card
+shows the stored value because this one exists to be copied onto another device.
+Xana can mint a 32-byte one herself when a post presents a token and none is
+stored yet, but the field is the reliable way to get a value to copy. Either way
+it lives in `data/settings.json`, is compared in constant time, and is never
+returned by the ingest endpoint; a wrong or *short* token gets the same three
+words back, because the time it takes to say no must not say how much of the token
+was right.
+
+Set `health.ingest` to `on` to accept posts at all — it is off by default, so a
+fresh install has no endpoint that accepts anything, and the token is checked
+before the switch so an unauthenticated caller cannot use the route to find out
+whether it is on. A phone surfaces the refusals as they come: `400 No device
+token`, `403 That token is not right.`, `409 Phone ingest is off.`, and a body
+with nothing usable in it is a `400` that says how many entries were rejected.
+
+**Reaching her from the phone.** `npm run dev` listens on loopback, which a phone
+cannot reach. Start her with `HOSTNAME=0.0.0.0 npm run dev` to listen on every
+interface, and use this machine's address on your network rather than the one
+printed. That switch exposes this interface — settings included — to the local
+network, so it is for a network you trust: the ingest route authenticates itself,
+and nothing else on that surface does.
 
 ---
 
 ## Verifying it
 
 ```bash
-npm run check              # typecheck + demo + route smoke + orb maths
-npm run verify:web         # with the server running: the real HTTP surface
-npm run verify:browser     # with the server running: a real browser
+npm run check                # typecheck + demo + route smoke + orb maths
+npm run verify:web           # with the server running: the real HTTP surface
+npm run verify:browser       # with the server running: a real browser
+npm run verify:crypto        # the keyless quote path, on a stubbed CoinGecko
+npm run verify:health-bridge # the phone door: token, statuses, day upserts
 ```
 
 - `npm run typecheck` — `tsc --noEmit`, strict, no `any`, no `@ts-ignore`.
@@ -385,6 +499,19 @@ npm run verify:browser     # with the server running: a real browser
   fetch it was already warm for. Plus the PKCE S256 test vector, the
   refresh-token preservation Google's repeat-consent behaviour depends on, and
   that the boot contract actually throws on a descriptor it should reject.
+- `npm run verify:crypto` — the crypto connection with `globalThis.fetch` stubbed,
+  because CoinGecko is unreachable from the sandbox this was built in: the ids are
+  filtered, capped and deduped; the price bands and the trend thresholds hold; a
+  body with nothing usable in it is an `error` row rather than a `$NaN` line; a
+  rejected request and a dead connection both report instead of throwing; and the
+  descriptor as pasted still satisfies the boot contract.
+- `npm run verify:health-bridge` — the phone door, and the negative cases are the
+  point: a token that is wrong, a *prefix* of the right one, and the right one
+  with a character changed are each refused with the same sentence; a refusal
+  writes no row, checked by counting rows before and after rather than by reading
+  the status code; `400`, `403` and `409` land on the conditions they name; a valid
+  day ingests and the same day posted again updates instead of duplicating; and
+  both ingest paths run the identical handler.
 - `npm run verify:web` — the served application: rendered page, inlined theme
   tokens, the stylesheet as it comes through Tailwind, every endpoint, a live
   chat turn, and a settings round trip that changes the theme, proves the next
@@ -459,6 +586,24 @@ didn't follow that."
 - **Reflections are generated on demand**, not on a scheduler — ask for one, or
   the `reflect` action produces it. They are deterministic and local, so they
   read the same every time.
+- **Crypto and Markets cannot be observed live from the sandbox this was built
+  in.** `api.coingecko.com`, `stooq.com`, `github.com` and
+  `www.googleapis.com:443` are unreachable here, while `api.open-meteo.com`,
+  `ipwho.is`, `freeipapi.com` and `api.todoist.com` answer. Neither quote
+  connection has been watched returning a real price: both are verified against
+  the documented response shape through a stubbed `fetch` (`npm run verify:crypto`),
+  and the same missing route is half the reason the Google flow below is unrun.
+  Weather *was* watched end to end here: with `net.read` and `location` granted
+  and no coordinates set, the IP fallback resolved `ipwho.is` and the card read
+  `connected · live · Huizhou`.
+- **The weather IP fallback asks two hosts, because one of them is now behind a
+  challenge.** It used to ask `ipapi.co` alone, which answers a Node `fetch`
+  with a Cloudflare interstitial — HTTP 403 and an HTML body — so a fresh install
+  with nothing configured got no forecast and a status row that blamed the
+  missing coordinates rather than the provider. `ipwho.is` (1,000 lookups a day,
+  no key) is asked first and `freeipapi.com` second; both are named in the
+  consent prompt, since a host list that omits one is a lie of omission. The
+  adapter's own 15-minute TTL means at most 96 lookups a day.
 - **The Google Calendar connect flow has not been completed against Google from
   this machine.** Everything around it is tested: the PKCE verifier against the
   RFC 7636 vector, the authorization URL's parameters, `state` mismatch and

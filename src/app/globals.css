@@ -103,6 +103,20 @@
   --good: #86d6a6;
   --danger: #e08a8a;
 
+  /* ---- The browser's own surfaces, themed from the same channels.
+     A caret and a native checkbox tick are drawn by the browser, not by any
+     component, and their defaults are a system blue that belongs to no theme.
+     They are the cheapest evidence that a page was built rather than
+     assembled, and they are the two a token system forgets first. Both
+     resolve from `--accent-rgb` here rather than from a Tailwind class, so a
+     theme change recolours them without anything naming them.
+
+     Set on the root element rather than on `body`: both properties are
+     inherited, and a utility class on one field should still be able to
+     override this without a specificity fight. ---- */
+  caret-color: rgb(var(--accent-rgb));
+  accent-color: rgb(var(--accent-rgb));
+
   /* ---- Accents. The two below are the *defaults*; the settings
      layer overrides them inline on <html>. ---- */
   --accent-rgb: 111 227 227;

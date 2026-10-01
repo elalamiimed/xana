@@ -781,7 +781,32 @@ export function writePluginSettings(values: Record<string, string>): { ok: boole
   return result;
 }
 
-/** Drop cached data and force a rebuild after any configuration change. */
+/**
+ * Drop cached data and force a rebuild after any configuration change.
+ *
+ * Three layers stand between a settings write and the next read, and all three
+ * have to be dropped or the change takes effect at a time nobody can predict:
+ *
+ *  1. the epoch, which is what makes the next `runPlugin` rebuild its adapter
+ *     with the new gates;
+ *  2. every entry's cached slice, so a warm adapter cannot answer from the
+ *     configuration it was built with;
+ *  3. **the assembled life state**, which is a fourth cache sitting in front of
+ *     both. This one was missing, and the gap was real: granting `net.read` and
+ *     reading the state within the gateway's four-second window returned the
+ *     state as it was *before* the grant, so the panel's own test of "did that
+ *     permission do anything" answered no. Bounded at four seconds and easy to
+ *     miss, which is exactly why it is worth the lines — a permission that
+ *     appears not to have applied invites a second click.
+ *
+ * The import is dynamic for the same reason it is in `health-bridge.ts`: the
+ * gateway pulls in the whole adapter graph, and this module sits underneath it.
+ * A static import here would make this the newest link in a cycle for the sake
+ * of one function. The call is fire-and-forget: the write is already durable,
+ * and a gateway that cannot be loaded is one that will read from SQLite on its
+ * next cold assembly anyway. There is no `await` for a caller to forget, and no
+ * rejection left unhandled.
+ */
 function afterConfigChange(): void {
   epoch += 1;
   // Record the signature we just wrote, so the drift check below does not
@@ -792,6 +817,11 @@ function afterConfigChange(): void {
     /* the next check will settle it */
   }
   for (const entry of entries.values()) entry.invalidate();
+  void import("../context/gateway")
+    .then(({ invalidateContext }) => invalidateContext())
+    .catch(() => {
+      /* the row is durable; the next cold read picks the change up */
+    });
 }
 
 /** A snapshot containing nothing. Re-exported so callers need one import. */

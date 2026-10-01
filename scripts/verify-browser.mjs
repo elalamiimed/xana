@@ -27,7 +27,18 @@ import { mkdirSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 
-const base = process.argv[2] ?? "http://127.0.0.1:4311";
+/**
+ * Where to point the browser.
+ *
+ * The third argument wins, then `PORT` (which is what `npm run dev` itself
+ * honours), then 4310 — the port `scripts/dev.mjs` starts on and prints. It
+ * used to default to 4311, which nothing in this project serves: the script
+ * found a browser, drove it at an address with no Xana on it, and every check
+ * downstream would have failed for a reason that had nothing to do with the
+ * app. It was never noticed because the environment here cannot launch a
+ * browser at all, so the wrong default was never exercised.
+ */
+const base = process.argv[2] ?? `http://127.0.0.1:${process.env.PORT ?? "4310"}`;
 const OUT_DIR = join(process.cwd(), "data", "shots");
 const PORT = 9222;
 

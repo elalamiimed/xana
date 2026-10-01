@@ -21,6 +21,7 @@ import { executeAction } from "../src/lib/actions/executor";
 import { localMind } from "../src/lib/mind/local";
 import { parseDuration, parseWhen, stripWhen } from "../src/lib/core/nlp";
 import { formatTime, humanDuration, toDateKey } from "../src/lib/core/time";
+import { getRegistry } from "../src/lib/plugins/registry";
 import type { BriefingSection } from "../src/lib/core/types";
 
 /* ------------------------------------------------------------------ */
@@ -106,12 +107,17 @@ async function main(): Promise<void> {
   say("xana", `${state.headline} (energy ${state.energy.score}/100, ${state.energy.band})`);
   check("assembles a life state from nothing", Boolean(state.generatedAt));
   check("energy is computed", state.energy.score > 0 && state.energy.score <= 100);
-  // Nine, not eight: Google Calendar is a plugin of its own now, alongside the
-  // ICS calendar rather than folded into it. The assertion is about there being
-  // one status row per registered plugin, which is the property that matters —
-  // a plugin that is switched off must still report, or the UI loses a row and
-  // the user cannot tell "not configured" from "not there".
-  check("every plugin reported a status", state.sources.length === 9, `got ${state.sources.length}`);
+  // One status row per registered connection, whatever the register happens to
+  // hold — a connection that is switched off must still report, or the UI loses
+  // a row and the user cannot tell "not configured" from "not there". The count
+  // comes from the registry itself rather than a literal: a literal tests the
+  // contents of the register (and broke the day crypto was added) instead of the
+  // property this check exists to protect.
+  check(
+    "every connection reported a status",
+    state.sources.length === getRegistry().list().length,
+    `${state.sources.length} rows for ${getRegistry().list().length} connections`,
+  );
 
   /* ---------------- 3. Capture ---------------- */
 
@@ -254,7 +260,11 @@ async function main(): Promise<void> {
     const mark = s.state === "connected" ? "●" : s.state === "local" ? "○" : "×";
     console.log(`  ${mark} ${s.label.padEnd(22)} ${s.mode.padEnd(10)} ${s.detail ?? ""}`);
   }
-  check("all nine plugins accounted for", state.sources.length === 9);
+  check(
+    "every connection accounted for",
+    state.sources.length === getRegistry().list().length,
+    `${state.sources.length} rows for ${getRegistry().list().length} connections`,
+  );
 
   /* ---------------- Result ---------------- */
 

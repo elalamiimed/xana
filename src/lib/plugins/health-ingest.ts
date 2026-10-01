@@ -28,7 +28,10 @@
 
 import { NextResponse } from "next/server";
 
+import { credential } from "../settings/store";
 import {
+  DEVICE_TOKEN_KEY,
+  deviceToken,
   ingest,
   ingestEnabled,
   normalizePayload,
@@ -136,4 +139,76 @@ export async function postHealthIngest(request: Request): Promise<NextResponse> 
 
   const response: IngestResponse = { ok: true, days, lastDay: lastDay ?? samples[0].date };
   return NextResponse.json(response);
+}
+
+/* ------------------------------------------------------------------ */
+/* Handing the token to the panel                                      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The token, for the one page allowed to show it.
+ *
+ * WHY THIS IS A SEPARATE CALL AND NOT PART OF THE CONNECTION LIST
+ *
+ * The panel used to say "leave it empty and Xana generates one", and that was
+ * not true: nothing minted a token until `tokenMatches` ran, and a token is
+ * needed to reach the code that runs it. A token minted during `GET
+ * /api/connections` would fix the symptom and break two rules — a read would
+ * write to the settings file, and the secret would sit in a response the rest
+ * of the app treats as safe to log or cache.
+ *
+ * So the mint lives here, on its own path, and it is asked for deliberately:
+ *
+ *  - **Nothing is written unless the endpoint is on.** With `health.ingest` off
+ *    there is no bridge to authorise, so the answer says so and no token is
+ *    created. Turning the feature on is what creates one, which is the same
+ *    "the user asked for this" consent the POST path relies on.
+ *  - **An environment token is never echoed.** `credential()` is consulted
+ *    first, and a value that came from the environment is reported as
+ *    `from: "env"` with no `token` field. Xana reads the environment; she does
+ *    not print it back into a page.
+ *  - **A stored token is the user's**, whether they typed it or Xana generated
+ *    it on an earlier visit. This path never replaces a value that exists.
+ *
+ * The value is a bearer secret for a LAN endpoint, so the one page that shows
+ * it is the page on this machine whose whole purpose is to hand it to a phone.
+ * It is deliberately not part of `GET /api/connections`, and the token itself
+ * never appears in an ingest response.
+ */
+export function getHealthDeviceToken(): NextResponse {
+  if (!ingestEnabled()) {
+    return NextResponse.json({
+      ok: true,
+      enabled: false,
+      from: "none" as const,
+      message:
+        'Phone ingest is off. Put "on" in the accept-posts field to open the endpoint and get a token.',
+    });
+  }
+
+  const found = credential(DEVICE_TOKEN_KEY);
+  if (found.present) {
+    return NextResponse.json({
+      ok: true,
+      enabled: true,
+      from: found.from,
+      // The escape hatch for a headless install: a value from the environment
+      // is what the phone must send, and this route will not repeat it.
+      token: found.from === "settings" ? found.value : undefined,
+      message:
+        found.from === "settings"
+          ? "This is the token your phone sends."
+          : "The token is set in your environment. Use that value — it is not echoed here.",
+    });
+  }
+
+  // Nothing stored and nothing exported: mint one now, persist it, and show it.
+  const token = deviceToken();
+  return NextResponse.json({
+    ok: true,
+    enabled: true,
+    from: "settings" as const,
+    token,
+    message: "A token was generated and saved. Your phone sends this.",
+  });
 }

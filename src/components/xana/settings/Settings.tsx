@@ -2,13 +2,13 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { CONNECTIONS_LABEL } from "@/lib/plugins/types";
 import type { AppearanceSettings, SettingsPatch } from "@/lib/settings/types";
 
 import { Tabs } from "./controls";
 import AppearancePanel from "./AppearancePanel";
+import ConnectionsPanel from "./ConnectionsPanel";
 import ModelPanel from "./ModelPanel";
-import PluginsPanel from "./PluginsPanel";
-import SourcesPanel from "./SourcesPanel";
 import VoicePanel from "./VoicePanel";
 import type { SettingsController } from "../useSettings";
 
@@ -36,8 +36,7 @@ export type SettingsTab =
   | "appearance"
   | "voice"
   | "model"
-  | "sources"
-  | "plugins"
+  | "connections"
   | "about";
 
 export interface SettingsProps {
@@ -48,12 +47,18 @@ export interface SettingsProps {
   onAppearancePreview: (next: AppearanceSettings) => void;
 }
 
+/** What Ctrl+, opens on, and what a tab id that no longer exists falls back to. */
+const FALLBACK_TAB: SettingsTab = "appearance";
+
 const TABS: readonly { id: SettingsTab; label: string; badge?: boolean }[] = [
   { id: "appearance", label: "Appearance" },
   { id: "voice", label: "Voice" },
   { id: "model", label: "Model & key", badge: true },
-  { id: "sources", label: "Connections" },
-  { id: "plugins", label: "Plugins" },
+  // One tab for what used to be two screens. The label comes from the plugin
+  // vocabulary rather than being typed again here: the tab, the panel heading
+  // and the API route are the same name, and three copies of a title that must
+  // agree is three chances for them not to.
+  { id: "connections", label: CONNECTIONS_LABEL },
   { id: "about", label: "About" },
 ];
 
@@ -66,7 +71,7 @@ export default function Settings({
   controller,
   onAppearancePreview,
 }: SettingsProps) {
-  const [tab, setTab] = useState<SettingsTab>("appearance");
+  const [tab, setTab] = useState<SettingsTab>(FALLBACK_TAB);
   const panelRef = useRef<HTMLDivElement | null>(null);
   const restoreRef = useRef<HTMLElement | null>(null);
 
@@ -144,6 +149,20 @@ export default function Settings({
 
   const view = controller.view;
 
+  /**
+   * The tab that actually renders.
+   *
+   * Ctrl+, opens this panel with no tab argument, so what shows is whatever
+   * tab the user chose last. The union lost "sources" and "plugins" in the
+   * merge to one Connections screen, and a hot reload keeps React state, so a
+   * client that was open across this edit can hand back an id that no longer
+   * exists. Without this guard the dialog would open with a tab strip and an
+   * empty body, which is indistinguishable from a broken panel.
+   */
+  const activeTab: SettingsTab = TABS.some((entry) => entry.id === tab)
+    ? tab
+    : FALLBACK_TAB;
+
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
       {/* The scrim. Kept light enough that the orb stays visible through
@@ -200,7 +219,7 @@ export default function Settings({
             <div className="hidden md:block">
               <Tabs
                 tabs={TABS}
-                active={tab}
+                active={activeTab}
                 onChange={setTab}
                 ariaLabel="Settings sections"
                 orientation="vertical"
@@ -209,7 +228,7 @@ export default function Settings({
             <div className="md:hidden">
               <Tabs
                 tabs={TABS}
-                active={tab}
+                active={activeTab}
                 onChange={setTab}
                 ariaLabel="Settings sections"
                 orientation="horizontal"
@@ -218,9 +237,9 @@ export default function Settings({
           </nav>
 
           <div
-            id={`panel-${tab}`}
+            id={`panel-${activeTab}`}
             role="tabpanel"
-            aria-labelledby={`tab-${tab}`}
+            aria-labelledby={`tab-${activeTab}`}
             tabIndex={-1}
             className="min-h-0 flex-1 overflow-y-auto"
           >
@@ -253,7 +272,7 @@ export default function Settings({
 
             {view ? (
               <>
-                {tab === "appearance" ? (
+                {activeTab === "appearance" ? (
                   <AppearancePanel
                     appearance={view.appearance}
                     onPreview={onAppearancePreview}
@@ -262,21 +281,22 @@ export default function Settings({
                   />
                 ) : null}
 
-                {tab === "voice" ? (
+                {activeTab === "voice" ? (
                   <VoicePanel view={view} onSave={save} saving={controller.saving} />
                 ) : null}
 
-                {tab === "model" ? (
+                {activeTab === "model" ? (
                   <ModelPanel view={view} controller={controller} />
                 ) : null}
 
-                {tab === "sources" ? (
-                  <SourcesPanel view={view} onSave={save} saving={controller.saving} />
+                {/* One screen for what used to be two: the consent cards, the
+                    per-connection settings, and the older flat XANA_* values
+                    folded in at the foot of the same panel. */}
+                {activeTab === "connections" ? (
+                  <ConnectionsPanel view={view} onSave={save} saving={controller.saving} />
                 ) : null}
 
-                {tab === "plugins" ? <PluginsPanel /> : null}
-
-                {tab === "about" ? (
+                {activeTab === "about" ? (
                   <AboutPanel settingsPath={view.settingsPath} />
                 ) : null}
 

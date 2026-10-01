@@ -1471,12 +1471,28 @@ function describeRecall(sim: number, lex: number, mem: MemoryRecord): string {
 
 /* ------------------------------------------------------------------ */
 
+/**
+ * Where the database lives: `<project>/data/xana.db`, unless told otherwise.
+ *
+ * `XANA_DATA_DIR` moves it, and it has to be honoured *here* rather than only in
+ * the settings layer. The two halves of Xana's own state are documented as one
+ * directory — "delete them and she rebuilds from empty", "one place to look is
+ * one place to back up" — and for a long time only the settings file obeyed the
+ * variable. The database did not, which meant `XANA_DATA_DIR=/tmp/scratch` gave
+ * you a scratch settings file and the user's real life: a script, a container or
+ * a test that believed the README wrote into `data/xana.db` and nothing failed
+ * loudly enough to say so.
+ *
+ * The project root is still resolved from this file's own location, so the path
+ * is the same under `next dev`, `next start` and a TypeScript script run from
+ * anywhere. Only the directory is overridable, and an empty value means
+ * "unset" rather than "the current working directory".
+ */
 export function defaultDbPath(): string {
-  // <project>/data/xana.db — resolved from this file's location so it works
-  // identically under `next dev`, `next start` and tsx scripts.
   const here = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"));
   const projectRoot = path.resolve(here, "..", "..", "..");
-  return path.join(projectRoot, "data", "xana.db");
+  const override = process.env.XANA_DATA_DIR?.trim();
+  return path.join(override && override.length > 0 ? override : path.join(projectRoot, "data"), "xana.db");
 }
 
 let singleton: XanaStore | undefined;

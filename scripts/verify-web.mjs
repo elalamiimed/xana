@@ -292,6 +292,14 @@ async function main() {
     state.engine,
   );
 
+  // One status row per registered connection, including the ones that are
+  // switched off — a row per connection means the UI can never lose one. The
+  // expected count comes from the connections endpoint rather than a literal, so
+  // adding a connection cannot make this check stale, and the two surfaces
+  // disagreeing about how many connections exist is itself the failure worth
+  // catching.
+  const connectionCount = (await (await fetch(`${base}/api/connections`)).json()).plugins?.length;
+
   for (const path of ["/api/context", "/xana/context"]) {
     const res = await fetch(base + path);
     const body = await res.json();
@@ -299,9 +307,11 @@ async function main() {
     check(`${path} responds 200`, res.status === 200, String(res.status));
     check(`${path} returns a life state`, Boolean(ls));
     if (ls) {
-      // Nine plugin rows: one per registered plugin, including the ones that
-      // are switched off. A row per plugin means the UI can never lose one.
-      check(`${path} reports 9 plugins`, ls.sources?.length === 9, String(ls.sources?.length));
+      check(
+        `${path} reports one row per connection`,
+        ls.sources?.length === connectionCount,
+        `${ls.sources?.length} rows for ${connectionCount} connections`,
+      );
     }
   }
 
