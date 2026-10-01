@@ -24,6 +24,7 @@ import type {
   AdapterStatus,
   CalendarEvent,
   EnergyForecast,
+  HealthSample,
   LifeState,
   MemoryHit,
   Task,
@@ -116,7 +117,28 @@ export async function buildLifeState(opts: ContextOptions = {}): Promise<LifeSta
   const goals = store.listGoals(["active"]).map((goal) => ({ goal, progress: computeGoalProgress(goal, now) }));
 
   /* --- Health. --- */
-  const healthSamples = [...snapshot.health].sort((a, b) => a.date.localeCompare(b.date));
+  /**
+   * The user's own readings come from her store as a base; the plugin's samples
+   * merge on top.
+   *
+   * This mirrors what the calendar, tasks and notes paths do with their own
+   * local halves, and it has to. `health_samples` is one table keyed by day, so
+   * the energy level the user logs and the sleep hours an export imports are
+   * columns of the same row. When the import plugin became gated, its adapter
+   * stopped running and the hand-logged energy silently vanished from the
+   * briefing — the one reading in the app that is asked for rather than
+   * inferred, disappearing because an unrelated folder permission was off.
+   *
+   * Row-level merge, latest wins per day, which is the same rule `mergeByDay`
+   * applies inside the adapter for the same reason.
+   */
+  const byDay = new Map<string, HealthSample>();
+  for (const sample of store.healthSamples(30)) byDay.set(sample.date, sample);
+  for (const sample of snapshot.health) {
+    const existing = byDay.get(sample.date);
+    byDay.set(sample.date, existing ? { ...existing, ...sample } : sample);
+  }
+  const healthSamples = [...byDay.values()].sort((a, b) => a.date.localeCompare(b.date));
   const recent = healthSamples.filter((h) => h.date >= toDateKey(addDays(now, -6)));
   const sleepValues = recent.map((h) => h.sleepHours).filter((v): v is number => typeof v === "number");
   const sleepAvgHours =

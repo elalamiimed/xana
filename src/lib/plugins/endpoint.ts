@@ -253,9 +253,24 @@ export async function postPlugins(request: Request): Promise<NextResponse> {
         if (action.id !== GOOGLE_PLUGIN_ID) {
           return fail(400, `${entry.descriptor.name} has nothing to disconnect.`);
         }
-        const result = await googleDisconnect();
+        /**
+         * The local clear is unconditional; the revoke at Google is a request,
+         * so it needs the network permission like every other request. Without
+         * this the plugin surface reached oauth2.googleapis.com with nothing
+         * granted — see the note on `disconnect` in google-calendar.ts.
+         *
+         * `entry.gates()` is the live decision and is preferred; the grant check
+         * is the fallback for the case where no adapter has been built yet, so
+         * a disconnect still does the right thing on a cold process.
+         */
+        const online = entry.gates()?.network === true || allGranted(["net.read"]);
+        const result = await googleDisconnect({ mayReachNetwork: online });
         if (!result.ok) return fail(500, result.error ?? "Could not clear the stored token.");
-        messages.push("Disconnected. The token is revoked and forgotten.");
+        messages.push(
+          online
+            ? "Disconnected. The token is revoked and forgotten."
+            : "Disconnected, and the token is forgotten here. Google still holds a copy — revoke it in your Google account if you want that gone too.",
+        );
         break;
       }
     }

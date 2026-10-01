@@ -361,13 +361,34 @@ export async function accessToken(): Promise<{ token: string } | { error: string
   }
 }
 
-export async function disconnect(): Promise<{ ok: boolean; error?: string }> {
+/**
+ * Forget the account.
+ *
+ * Two halves, deliberately not conditional on the same thing:
+ *
+ *  - **Clearing the stored tokens always happens.** It is a write to her own
+ *    settings file, it is what the user asked for, and it has to work even with
+ *    every permission withdrawn — a disconnect button that refuses while
+ *    permissions are off is a button that traps credentials on disk.
+ *  - **Revoking at Google happens only when the network is permitted.** It is a
+ *    request to a third party, so it follows the rule every other request
+ *    follows. With nothing granted the token is forgotten locally and Google
+ *    keeps its copy, which the user can revoke from their Google account and
+ *    which is inert anyway once the refresh token here is gone.
+ *
+ * The first version revoked unconditionally, so `POST /api/plugins` with
+ * `permissions: {}` reached oauth2.googleapis.com. Small, and exactly the shape
+ * of thing this system exists to prevent.
+ */
+export async function disconnect(
+  opts: { mayReachNetwork?: boolean } = {},
+): Promise<{ ok: boolean; error?: string }> {
+  const mayReachNetwork = opts.mayReachNetwork ?? false;
   const tokens = googleTokens();
-  if (tokens.refreshToken || tokens.accessToken) {
+  if (mayReachNetwork && (tokens.refreshToken || tokens.accessToken)) {
     try {
       // Best effort. Google's revoke drops every token for this client, which
-      // is what "disconnect" should mean; if it fails the local tokens are
-      // still cleared, which is the part under our control.
+      // is what "disconnect" should mean.
       await fetch(`${REVOKE_ENDPOINT}?token=${encodeURIComponent(tokens.refreshToken || tokens.accessToken)}`, {
         method: "POST",
         headers: { "content-type": "application/x-www-form-urlencoded" },
@@ -377,11 +398,16 @@ export async function disconnect(): Promise<{ ok: boolean; error?: string }> {
       /* the local clear below is what matters */
     }
   }
+  // The pending-flow pair is cleared too. A half-finished authorization left in
+  // the file after a disconnect is a state the next connect would inherit.
   const result = writePluginSettings({
     "google.refreshToken": "",
     "google.accessToken": "",
     "google.accessExpiresAt": "",
     "google.account": "",
+    "google.pendingState": "",
+    "google.pendingVerifier": "",
+    "google.pendingAt": "",
   });
   runPluginRefresh();
   return result;

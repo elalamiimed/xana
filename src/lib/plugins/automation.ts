@@ -142,6 +142,56 @@ export function bumpConfigEpoch(): void {
   epoch += 1;
 }
 
+/**
+ * A signature of everything a plugin's gates are computed from.
+ *
+ * The epoch alone is not enough, and this is the hole it leaves: the epoch only
+ * moves when a change goes *through this module*. A settings file edited from
+ * outside the app — the documented way to clear a key by hand, another process
+ * writing the file, a user with the JSON open in an editor — changes
+ * `permissions` with no epoch bump at all.
+ *
+ * The permission re-check still refuses the *call*, because that reads the file
+ * every time. But a **core** plugin's required list is local, so `runPlugin`
+ * allows it through, and the adapter it has been holding since before the
+ * revoke still believes its `network` gate is open. It fetches. That is a real
+ * leak — consent withdrawn and a request still going out — and it lasts as long
+ * as the process does.
+ *
+ * So the gates are keyed on the values rather than on a counter only this module
+ * can advance. `checkConfigDrift` compares this against the signature the live
+ * adapters were built from and bumps the epoch when it moves. Two small
+ * `JSON.stringify` calls over a handful of keys, on a path that already does
+ * filesystem work.
+ */
+function grantsSignature(): string {
+  const settings = loadSettings();
+  return JSON.stringify([settings.permissions, settings.sources]);
+}
+
+let seenSignature = "";
+
+/**
+ * Rebuild every adapter if the stored grants or settings have moved.
+ *
+ * Called at the top of the two functions that can lead to an adapter being
+ * used, so there is no path to a stale gate. Returns true when it rebuilt.
+ */
+export function checkConfigDrift(): boolean {
+  let signature: string;
+  try {
+    signature = grantsSignature();
+  } catch {
+    // An unreadable settings file is not a reason to skip a permission check.
+    // Leaving the signature alone means the next successful read decides.
+    return false;
+  }
+  if (signature === seenSignature) return false;
+  seenSignature = signature;
+  bumpConfigEpoch();
+  return true;
+}
+
 /* ------------------------------------------------------------------ */
 /* Plugin entries                                                     */
 /* ------------------------------------------------------------------ */
@@ -346,8 +396,16 @@ export function definePlugin(config: {
     return permitted(needed, grants()).ok;
   };
 
-  /** The adapter if it exists and is current; builds it when permitted. */
+  /**
+   * The adapter if it exists and is current; builds it when permitted.
+   *
+   * The drift check comes first, and it is what makes a hand-edited settings
+   * file behave exactly like a change made in the UI. Without it, revoking a
+   * core plugin's network half by editing the JSON left the warm adapter
+   * fetching — see `checkConfigDrift`.
+   */
   const current = (): LifeAdapter | undefined => {
+    checkConfigDrift();
     if (!allowed()) {
       // Drop a previously-built adapter rather than keep it warm. If the
       // permission comes back, the next call rebuilds it with fresh config —
@@ -446,20 +504,39 @@ export function definePlugin(config: {
         // Reported on a blocked row too: a user looking at a blocked Todoist
         // should see everything it wants, not just the first thing it lacks.
         row.waiting = waiting;
+        /**
+         * The write gate is a property of the descriptor and the grants, not of
+         * whether the plugin happens to be running.
+         *
+         * Reporting `false` here because the plugin is blocked made the panel
+         * disagree with `writable()` for every blocked plugin — a Notes card
+         * with `local.write` granted said "changes: off" while the write path
+         * said yes. The two must answer the same question the same way; being
+         * blocked is reported by `state`, which is where it belongs.
+         */
+        row.canWrite = writeUsable(descriptor);
         return row;
       }
       const live = built && builtAt === epoch ? built.state() : undefined;
-      const entry: RuntimeStatus = {
+      return {
         id: descriptor.id,
-        state: live?.state ?? "offline",
+        state: live?.state ?? (descriptor.optional === undefined && descriptor.needs.length === 0 ? "local" : "offline"),
         provenance: provenanceOf(live),
         detail: live?.detail ?? "not read yet",
         missing: [],
         waiting,
         durationMs: live?.durationMs,
+        /**
+         * From the descriptor and the grants, never from the live adapter.
+         *
+         * Reading it off `built` was the bug: with no adapter built — which is
+         * every non-core plugin before consent — the answer was always false, so
+         * the panel showed `canWrite: false` beside a `writable()` of true the
+         * moment the permissions lined up. Two callers, one predicate; this is
+         * that predicate.
+         */
         canWrite: writeUsable(descriptor),
       };
-      return entry;
     },
   };
 }
@@ -492,6 +569,10 @@ export interface RunResult {
 
 /** Run one plugin into a snapshot, or refuse. */
 export async function runPlugin(entry: PluginEntry, snapshot: LifeSnapshot): Promise<RunResult> {
+  // Before anything else, and outside the entry: a settings file edited from
+  // outside the app must drop the adapter that read the old values. This is the
+  // one call site every read passes through, so it is the right place.
+  checkConfigDrift();
   const needed = entry.descriptor.needs.map((n) => n.kind);
   const verdict = entry.descriptor.core
     ? ({ ok: true } as const)
@@ -553,6 +634,27 @@ export function mayWriteRemotely(pluginId: string): WriteVerdict {
       allowed: false,
       needs: "remote.write",
       reason: `Not without permission to change things in ${entry.descriptor.name}.`,
+    };
+  }
+  /**
+   * Checked against the plugin's own write gate, not just the one capability.
+   *
+   * `granted("remote.write")` is necessary and not sufficient. A write needs
+   * the rest of the plugin working too — a Google write with no `net.read` has
+   * no token to authenticate with — and `writeUsable` is where the descriptor's
+   * all-or-nothing rule lives. Asking the capability directly here produced the
+   * bug this replaces: with `remote.write` granted and `local.write` refused,
+   * `canWrite` in the panel said false while `mayWriteRemotely` said true, and
+   * an event really was created in a live Google calendar. The panel and the
+   * gate disagreed because they were computing the same answer twice.
+   */
+  if (!writeUsable(entry.descriptor)) {
+    const optional = (entry.descriptor.optional ?? []).map((o) => o.kind);
+    const short = optional.filter((kind) => !granted(grants(), kind));
+    return {
+      allowed: false,
+      needs: short[0] ?? "remote.write",
+      reason: `${entry.descriptor.name} needs the rest of its permissions before it can change anything.`,
     };
   }
   return { allowed: true };
@@ -682,6 +784,13 @@ export function writePluginSettings(values: Record<string, string>): { ok: boole
 /** Drop cached data and force a rebuild after any configuration change. */
 function afterConfigChange(): void {
   epoch += 1;
+  // Record the signature we just wrote, so the drift check below does not
+  // immediately bump again for a change this module made itself.
+  try {
+    seenSignature = grantsSignature();
+  } catch {
+    /* the next check will settle it */
+  }
   for (const entry of entries.values()) entry.invalidate();
 }
 

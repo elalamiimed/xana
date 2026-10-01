@@ -47,7 +47,9 @@ Proactive nudges ranked by what changes the day.
 Everything local works with nothing granted. Weather and market quotes need a
 click first: they are the only two built-ins that cannot answer honestly without
 leaving the machine, and Open-Meteo would otherwise geolocate you by IP on the
-first page load.
+first page load. A vault folder, a health export directory, a now-playing file
+and a mail bridge are asked for too, because they are files outside Xana's own
+database.
 
 **Goals.** Short, mid and long horizons with milestones. Weekly and monthly
 reflections she writes herself. Progress as thin rings, never charts.
@@ -122,25 +124,45 @@ The rule the whole thing rests on:
 
 The check lives in one function (`runPlugin` in `lib/plugins/automation.ts`), in
 front of the adapter. A blocked plugin has no adapter instance, so there is no
-function to call by accident. When a capability is revoked, the assembled life
-state and every adapter's cache are dropped together, so the data does not
-linger for a TTL after you withdraw access.
+function to call by accident. Revoking drops the assembled state, every adapter
+cache, and the built adapter together, so data cannot linger for a TTL after you
+withdraw access.
 
-Three things follow from that, and they are the whole design:
+Three things follow, and they are the whole design:
 
 - **Consent and configuration are different questions.** An ungranted plugin
   reads `blocked`; a granted plugin with no URL yet reads `local` and says what
   is missing. Neither looks like the other, and neither looks like a fault.
 - **Her own store is not a permission boundary.** Tasks, her own events, habits,
-  energy readings and memories live in `data/xana.db`, which she wrote. Those
-  plugins are `core` and always run — a fresh install has a working assistant,
-  not an empty one waiting on a permissions screen. The boot contract refuses
-  `core: true` on any descriptor whose *required* capabilities leave the
-  machine, so the flag cannot become an escape hatch.
+  energy readings and memories live in `data/xana.db`, which she wrote. Two
+  plugins are `core` and always run — the local task list, and her own calendar —
+  so a fresh install is a working assistant rather than an empty one waiting on
+  a permissions screen. A core plugin's `needs` list must be **empty**, and the
+  boot contract enforces it.
 - **Adapters are told, not asked.** The plugin layer computes a `PluginGates`
   (`{network, remote, localWrite}`) and hands it to the adapter factory. An
   adapter never reads the permission store; when `network` is false the network
   branch is not entered and no request object is built.
+
+**Why `core` needs that rule.** `core` skips the gate, so a capability declared
+in a core plugin's `needs` would be decorative — never checked, never reported,
+never revocable. The first version of the flag allowed exactly that, and the
+result was six plugins reading arbitrary user-named folders — a Markdown vault, a
+health export directory, any file for now-playing and mail — on a fresh install
+with nothing granted. The capability was named in the descriptor, shown in no UI,
+and enforced nowhere. A plugin that touches anything outside `xana.db` is not
+core.
+
+**A file read and a network read are separate permissions.** `local.read` covers
+a folder or file you name; `net.read` covers an endpoint. Granting one does not
+grant the other, and neither happens without a click — a plugin is a unit, not a
+set of partial unlocks.
+
+**Grants are read from the file, not from a counter.** The config epoch is an
+optimisation for rebuilding adapters, not the enforcement mechanism. A settings
+file edited from outside the app still stops the fetch, and `checkConfigDrift`
+rebuilds the adapter rather than leaving a warm one holding a permission that has
+since been withdrawn.
 
 `GET /api/plugins` returns every plugin with its capabilities, its reasons, and
 what it last managed to read. `POST /api/plugins` grants, revokes, connects and

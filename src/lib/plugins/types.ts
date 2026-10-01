@@ -317,23 +317,32 @@ export interface PluginDescriptor {
   /**
    * Always runs, and is never gated.
    *
-   * Set only for a plugin whose **required** capabilities touch nothing outside
-   * Xana's own store. The rule this encodes:
+   * THE RULE
    *
-   *   Her own store is not a permission boundary; anything outside it is.
+   *   Her own store is not a permission boundary; everything else is.
    *
-   * Tasks, events she booked herself, habits, energy readings and memories all
-   * live in `data/xana.db`, which she wrote. Asking the user to grant access to
-   * their own task list before the assistant works would be theatre, and worse,
-   * it would mean a fresh install does nothing at all — no tasks, no schedule,
-   * no briefing — until someone finds the permissions screen.
+   * Tasks, events she booked herself, habits, energy readings and memories live
+   * in `data/xana.db`, which she wrote. Asking a user to grant access to their
+   * own task list before the assistant works would be theatre, and it would mean
+   * a fresh install did nothing at all — no tasks, no schedule, no briefing —
+   * until someone found the permissions screen. Those plugins are core.
    *
-   * This is NOT an escape hatch for a plugin that talks to a service. The boot
-   * contract refuses `core: true` on any descriptor whose *required* list
-   * leaves the machine, which is why the network half of a core plugin
-   * (an ICS feed, a Todoist token) is declared under `optional` instead. The
-   * effect is exactly the intended one: the local half works out of the box,
-   * and nothing reaches the network until the user says so.
+   * WHAT `core` DOES NOT MEAN
+   *
+   * It does not mean "this plugin may read your disk". A core plugin's `needs`
+   * list must be EMPTY, because `core` skips the gate entirely and any
+   * capability listed there would be decorative — never checked, never
+   * reported, never revocable. `assertBootContract` enforces that.
+   *
+   * That distinction was learned the hard way. The first version of this flag
+   * let a core plugin declare `local.read` and still run ungated, which meant
+   * six plugins read arbitrary user-chosen folders — a Markdown vault, a health
+   * export directory, any file for now-playing and mail — on a fresh install
+   * with nothing granted. The capability was named in the descriptor, shown in
+   * no UI, and enforced nowhere.
+   *
+   * So a plugin that touches anything outside `xana.db` is NOT core and must
+   * declare the capability that covers it.
    */
   core?: boolean;
   /**

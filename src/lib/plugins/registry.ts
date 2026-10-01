@@ -95,9 +95,8 @@ const DESCRIPTORS: PluginDescriptor[] = [
     id: "calendar",
     name: "Calendar",
     category: "life",
-    // Core: her own events are always in the schedule. The ICS feed is the
-    // ungated-exempt half's opposite — it needs `net.read` and an optional
-    // account, so it lives under `optional` and cannot run without consent.
+    // Core: her own events are always in the schedule, and reading them reaches
+    // nothing but her own table.
     core: true,
     // Either feed is enough. `needsAll: false` says so; see the field's note.
     needsAll: false,
@@ -105,9 +104,9 @@ const DESCRIPTORS: PluginDescriptor[] = [
     dataNote:
       "Fetches the feed URLs you provide. Google, Outlook and Fastmail all publish a private address under their calendar settings. Nothing is uploaded. Her own events stay on this machine and are always read.",
     provides: "Today's events, the next thing, and how much of the day is free.",
-    needs: [
-      { kind: "local.read", reason: "Read the events Xana booked herself." },
-    ],
+    // Empty, and it must stay empty: `core` skips the gate, so a capability
+    // here would be decorative. See the note on `core` in types.ts.
+    needs: [],
     optional: [
       {
         kind: "net.read",
@@ -127,7 +126,11 @@ const DESCRIPTORS: PluginDescriptor[] = [
         key: "calendar.icsUrls",
         label: "ICS feed URLs",
         hint: "Comma separated. A webcal:// address works too.",
-        kind: "url",
+        // A private ICS address is a bearer secret: anyone holding it reads the
+        // whole calendar. Declared `secret` so it is never echoed back into a
+        // response body — the field still accepts a paste, it just shows
+        // presence afterwards rather than the address.
+        kind: "secret",
         example: "https://calendar.google.com/calendar/ical/…/basic.ics",
       },
     ],
@@ -179,16 +182,14 @@ const DESCRIPTORS: PluginDescriptor[] = [
     id: "tasks",
     name: "Todoist",
     category: "life",
-    // Core: the local task list always works. The hosted list is the optional
-    // half, and it is where the network read lives.
+    // Core: the local task list lives in her own table and always works. The
+    // hosted list is the optional half, and it is where the network read lives.
     core: true,
     tagline: "Your hosted task list, read alongside the local one.",
     dataNote:
       "Sends your Todoist token to api.todoist.com, and nothing else. Tasks Xana creates stay local. Your own tasks need none of this.",
     provides: "Hosted tasks in the same triage as local ones.",
-    needs: [
-      { kind: "local.read", reason: "Read your own task list." },
-    ],
+    needs: [],
     // Both are needed: a token with no network read fetches nothing, and a
     // network read with no token has nothing to authenticate with. `needsAll`
     // defaults to true, and this entry is why the default is what it is.
@@ -214,10 +215,13 @@ const DESCRIPTORS: PluginDescriptor[] = [
     id: "notes",
     name: "Notes folder",
     category: "knowledge",
-    core: true,
+    // NOT core, and this is the finding that made the distinction: the vault is
+    // a folder the user names, outside `xana.db`, and a core plugin skips the
+    // gate. Reading it needs `local.read` like any other external source. What
+    // stays ungated is her own notes table, which is always merged in below.
     tagline: "A folder of Markdown she can read, and write to.",
     dataNote:
-      "Reads .md files from a folder on this machine. Nothing leaves it. Her own notes in the database are always read.",
+      "Reads .md files from a folder on this machine. Nothing leaves it. Notes you write to her, and anything she files herself, are always kept regardless.",
     provides: "Your notes as recall, and somewhere to write when you ask her to remember.",
     needs: [
       { kind: "local.read", reason: "Read the Markdown files in your vault." },
@@ -240,10 +244,12 @@ const DESCRIPTORS: PluginDescriptor[] = [
     id: "health",
     name: "Health export",
     category: "life",
-    core: true,
+    // NOT core: an export folder is outside her store. Readings you log by hand
+    // live in `xana.db` and are never gated — that is the half worth keeping
+    // unasked, and it is why the energy forecast still works on a fresh install.
     tagline: "Sleep and activity from a folder of exports.",
     dataNote:
-      "Reads JSON and CSV exports from a folder on this machine. Nothing leaves it. Readings you log by hand are always kept.",
+      "Reads JSON and CSV exports from a folder on this machine. Nothing leaves it. Readings and meals you log by hand are always kept.",
     provides: "Sleep average, sleep debt and mood trend, which feed the energy forecast.",
     needs: [
       { kind: "local.read", reason: "Read your Apple Health or Google Fit export." },
@@ -262,10 +268,13 @@ const DESCRIPTORS: PluginDescriptor[] = [
     id: "media",
     name: "Now playing",
     category: "signal",
-    core: true,
+    // NOT core: both sources are outside her store — a file the user names, or
+    // an endpoint. The focus suggestion is derived from the energy band and
+    // needs no bridge at all, so the plugin's *helpful* half is ungated without
+    // the plugin having to be.
     tagline: "What is playing, from a local player bridge.",
     dataNote:
-      "Reads a local file you point at, or asks a local endpoint. Nothing leaves this machine unless the endpoint is remote, which is why the endpoint needs permission and the file does not. The focus suggestion works with no bridge at all.",
+      "Reads a file you point at, or asks an endpoint. Either way it is a source outside Xana's own database, so it asks first. Nothing is uploaded.",
     provides: "The current track, and a focus suggestion matched to your energy.",
     needs: [
       { kind: "local.read", reason: "Read the now-playing file." },
@@ -289,7 +298,7 @@ const DESCRIPTORS: PluginDescriptor[] = [
       {
         key: "media.file",
         label: "or a file",
-        hint: "The same JSON, read from disk. Needs no permission.",
+        hint: "The same JSON, read from disk.",
         kind: "path",
       },
     ],
@@ -298,10 +307,10 @@ const DESCRIPTORS: PluginDescriptor[] = [
     id: "mail",
     name: "Mail",
     category: "signal",
-    core: true,
+    // NOT core: a bridge file or endpoint, both outside her store.
     tagline: "Recent message subjects, from a bridge you run.",
     dataNote:
-      "Reads a local JSON file you point at, or asks a local endpoint. Subject lines only — Xana never reads bodies. The file stays on this machine; the endpoint needs permission because it is a request, not a file.",
+      "Reads a JSON file you point at, or asks an endpoint. Subject lines only — Xana never reads bodies. Nothing is uploaded.",
     provides: "Urgent messages worth raising before you ask.",
     needs: [
       { kind: "local.read", reason: "Read the mail file." },
@@ -323,7 +332,7 @@ const DESCRIPTORS: PluginDescriptor[] = [
       {
         key: "mail.file",
         label: "or a file",
-        hint: "The same JSON, read from disk. Needs no permission.",
+        hint: "The same JSON, read from disk.",
         kind: "path",
       },
     ],
@@ -391,15 +400,20 @@ function assertBootContract(entries: readonly PluginEntry[]): void {
     seen.add(d.id);
 
     /**
-     * The required list: allowlist, hosts, and the core rule.
+     * The required list: allowlist, hosts, and the core rules.
      *
-     * The core check walks *only* this list. `core` is what exempts a plugin
-     * from the gate, and the exemption is only sound because a core plugin's
-     * required capabilities are local by construction — so `needs` is exactly
-     * the list that must not leave the machine. Everything optional (an ICS
-     * feed, a Todoist token) is gated like any other plugin's, which is why
-     * declaring it under `optional` is correct and declaring it under `needs`
-     * is the mistake this catches.
+     * Two rules apply to a core plugin, and both exist because `core` is the one
+     * thing that skips the gate — so anything it declares has to be checked by
+     * someone:
+     *
+     *  - its `needs` list must be **empty**, because a capability listed there
+     *    would never be consulted, never shown as missing, and never revocable
+     *    into effect. `local.read` was exactly that on six plugins, and it meant
+     *    a fresh install read a Markdown vault, a health export folder and any
+     *    file the user named for now-playing and mail, with nothing granted.
+     *  - nothing it declares may leave the machine, for the obvious reason.
+     *
+     * A plugin that reads outside `xana.db` is not core. That is the whole rule.
      */
     for (const spec of d.needs) {
       if (!knownCaps.has(spec.kind)) {
@@ -410,10 +424,11 @@ function assertBootContract(entries: readonly PluginEntry[]): void {
           problems.push(`${d.id} asks for ${spec.kind} without naming a host`);
         }
       }
-      if (d.core && capabilityLeaves(spec.kind)) {
+      if (d.core) {
         problems.push(
-          `${d.id} is marked core but requires "${spec.kind}", which leaves the machine. ` +
-            `Core means "reads Xana's own store". Move it to \`optional\` so it is gated.`,
+          `${d.id} is marked core but requires "${spec.kind}". A core plugin skips the gate, ` +
+            `so a required capability would be decorative — never checked, never revocable. ` +
+            `If it reads outside xana.db, it is not core; if it does not, its needs list is empty.`,
         );
       }
     }

@@ -46,7 +46,7 @@
  * refusal is both counted and unable to hang the run.
  */
 
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -241,6 +241,12 @@ function grant(kinds: readonly CapabilityKind[]): void {
 function writeSettingsFile(doc: unknown): void {
   writeFileSync(SETTINGS_FILE, `${JSON.stringify(doc, null, 2)}\n`, "utf8");
   settings.invalidateSettingsCache();
+  // `loadSettings` memoises on mtime, and two writes inside the same
+  // millisecond share one. Without this nudge the "hand-edited file" tests
+  // would silently read the previous document, and a test that reads stale
+  // input passes for the wrong reason.
+  const at = new Date(Date.now() + 5);
+  utimesSync(SETTINGS_FILE, at, at);
 }
 
 function slices(snapshot: LifeSnapshot): Record<string, number | string> {
@@ -500,44 +506,86 @@ await group("With nothing granted, no plugin reaches the network", async () => {
 });
 
 /* ------------------------------------------------------------------ */
-/* Core means the local half works with no consent at all              */
+/* A file read and a network read are different permissions            */
 /* ------------------------------------------------------------------ */
 
-await group("Core means the local half works with no consent at all", async () => {
+/**
+ * This group used to assert that `media` was core and read its file with every
+ * permission refused. That was the bug, not the design: `core` skips the gate
+ * entirely, so a configured path meant the first page load of a fresh install
+ * read a file the user had never granted access to.
+ *
+ * The correct model, asserted here: `local.read` covers the file, `net.read`
+ * covers the endpoint, and they are independent. Granting one does not grant the
+ * other, and neither happens without a click.
+ */
+await group("A file read and a network read are separate permissions", async () => {
   clearGrants();
   const mediaFile = path.join(DATA_DIR, "now-playing.txt");
   writeFileSync(mediaFile, "Gate Check Track\n", "utf8");
   automation.writePluginSettings({ "media.file": mediaFile });
 
-  /**
-   * A local file is not a network read, and `media` is core precisely because
-   * its local half is supposed to work with every permission refused. The
-   * adapter folds `mayFetch` into `configured`, so if the plugin offers no
-   * capability that can ever make `mayFetch` true, a configured *file* is
-   * dead too — and the row says "set a now-playing endpoint or file" next to a
-   * setting the user just filled in.
-   */
-  const local = await withFetch(refuse, async (log) => ({
+  // Nothing granted: the file is configured and must not be read.
+  const ungranted = await withFetch(refuse, async (log) => ({
     snapshot: await registry!.collect(),
     log,
   }));
   check(
-    "reading a configured local file makes no request",
-    local.log.calls === 0,
-    `${local.log.calls} call(s): ${local.log.urls.join(", ")}`,
+    "a configured file is not read without local.read",
+    ungranted.snapshot.media?.nowPlaying === undefined,
+    JSON.stringify(ungranted.snapshot.media),
   );
   check(
-    "and the track in it reaches the snapshot",
-    local.snapshot.media?.nowPlaying === "Gate Check Track",
-    JSON.stringify(local.snapshot.media),
-  );
-  check(
-    "which is what makes the plugin core: its local half needs no grant",
-    (panel("media")?.missing ?? []).length === 0 && panel("media")?.state !== "blocked",
+    "and media reports itself blocked, naming the capability",
+    panel("media")?.state === "blocked" && (panel("media")?.missing ?? []).includes("local.read"),
     JSON.stringify(panel("media")),
   );
 
-  automation.writePluginSettings({ "media.file": "" });
+  // local.read only. The file must be read, and the network must stay untouched.
+  grant(["local.read"]);
+  const localOnly = await withFetch(refuse, async (log) => ({
+    snapshot: await registry!.collect(),
+    log,
+  }));
+  check(
+    "local.read is enough to read the file",
+    localOnly.snapshot.media?.nowPlaying === "Gate Check Track",
+    JSON.stringify(localOnly.snapshot.media),
+  );
+  check(
+    "and grants nothing on the network: a file read is not a request",
+    localOnly.log.calls === 0,
+    `${localOnly.log.calls} call(s): ${localOnly.log.urls.join(", ")}`,
+  );
+
+  /**
+   * The converse, which is the half that would be missed: an endpoint with
+   * `net.read` but no `local.read` must not be reached either, because the
+   * plugin as a whole is ungranted. A plugin is a unit; a permission is not a
+   * partial unlock.
+   *
+   * The assertion is narrowed to the media endpoint rather than "no request at
+   * all", because `net.read` legitimately turns *Markets* on — it declares that
+   * capability as a requirement, so granting it is the consent it was waiting
+   * for. A blanket call count here would be asserting that one grant affects one
+   * plugin, which is not the model.
+   */
+  automation.writePluginSettings({ "media.file": "", "media.url": MEDIA_URL });
+  clearGrants();
+  grant(["net.read"]);
+  const urlOnly = await withFetch(() => ({ text: "{}" }), async (log) => {
+    await registry!.collect();
+    return log;
+  });
+  const mediaCalls = urlOnly.urls.filter((url) => url === MEDIA_URL).length;
+  check(
+    "net.read alone does not start the media plugin back up",
+    mediaCalls === 0,
+    `${mediaCalls} call(s) to ${MEDIA_URL}; all calls: ${urlOnly.urls.join(", ")}`,
+  );
+
+  automation.writePluginSettings({ "media.url": "" });
+  clearGrants();
 });
 
 /* ------------------------------------------------------------------ */
@@ -879,6 +927,97 @@ await group("Configuration changes rebuild the adapter that read it", async () =
     "and the next run reads the new address, not the old one",
     afterRewrite.calls === 1 && afterRewrite.urls[0] === ICS_URL_2,
     `${afterRewrite.calls} call(s): ${afterRewrite.urls.join(", ")}`,
+  );
+});
+
+/* ------------------------------------------------------------------ */
+/* 3b. The epoch is not what enforces consent                          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The hard case: a grant removed *without* going through the API.
+ *
+ * Every other revoke in this file calls `setGrants`, which bumps the config
+ * epoch, which forces the adapter to be rebuilt. That means those tests cannot
+ * tell the difference between two very different mechanisms:
+ *
+ *   (a) the permission is re-checked before every call, and
+ *   (b) the adapter was rebuilt, and a rebuilt adapter happens to be inert.
+ *
+ * Only (a) is the guarantee. (b) is an optimisation that would silently become
+ * load-bearing the moment someone made the rebuild conditional — and the bug
+ * would only show up for a settings file edited from outside the app, which is
+ * exactly what a user does when they follow the README and clear a key by hand.
+ *
+ * So this test removes the grant by editing the file and forgetting the cache,
+ * with no epoch bump. The adapter stays warm and still believes it may fetch.
+ * It must nevertheless make no request, because `runPlugin` asks the file
+ * rather than the adapter.
+ */
+await group("A revoke that bypasses the API still stops the fetch", async () => {
+  clearGrants();
+  writeSettingsFile({ permissions: { "net.read": true, "local.read": true }, sources: { "calendar.icsUrls": ICS_URL } });
+
+  const calendar = entry("calendar");
+  const warm = await withFetch(() => ({ text: ICS_BODY }), async (log) => {
+    await calendar?.invalidate();
+    await calendar?.fetch(emptySnapshot());
+    return log;
+  });
+  check("while granted, the feed is fetched", warm.calls === 1, `${warm.calls} call(s)`);
+  check("and the warm adapter's gates say it may", calendar?.gates()?.network === true, JSON.stringify(calendar?.gates()));
+
+  // Remove the grant from the file directly. No `setGrants`, so no epoch bump:
+  // whatever adapter exists now is the one built while the grant was live.
+  writeSettingsFile({ permissions: {}, sources: { "calendar.icsUrls": ICS_URL } });
+  const adapterAfterRevoke = calendar?.adapter();
+  check(
+    "the adapter instance itself is still the warm one",
+    adapterAfterRevoke !== undefined,
+    "if this fails the test below proves nothing about a stale adapter",
+  );
+
+  /**
+   * `invalidate()` before each read, because the adapter's own TTL cache would
+   * otherwise answer from memory and the request counter would stay at zero for
+   * a reason that has nothing to do with consent.
+   *
+   * That mistake was made here first, and it is worth naming: the test passed
+   * vacuously and the assertion that exposed it was the status row, which read
+   * `connected` from a cached read taken while the grant was live. A negative
+   * assertion about a call count is only as good as the proof that the call was
+   * otherwise going to happen.
+   */
+  const after = await withFetch(refuse, async (log) => {
+    await calendar?.invalidate();
+    await calendar?.fetch(emptySnapshot());
+    await calendar?.invalidate();
+    await calendar?.fetch(emptySnapshot());
+    return log;
+  });
+  check(
+    "an out-of-band revoke stops the fetch anyway",
+    after.calls === 0,
+    `${after.calls} call(s): ${after.urls.join(", ")}`,
+  );
+
+  await calendar?.invalidate();
+  const row = await calendar?.fetch(emptySnapshot());
+  /**
+   * `local`, not `blocked`, and that is correct rather than a gap.
+   *
+   * A core plugin's required list is local, so it is never blocked: it runs and
+   * reports how much of itself is working. `blocked` is reserved for a plugin
+   * that has no adapter at all. The state that must not appear here is
+   * `connected` — that is what it said while the stale adapter was still
+   * fetching — so that is what the assertion checks, together with the detail
+   * line naming the missing permission, because a row that says `local` without
+   * saying why is the failure mode this whole test exists to prevent.
+   */
+  check(
+    "and the row no longer claims to be connected",
+    row?.state === "local" && (row?.detail ?? "").includes("Allow network access"),
+    JSON.stringify(row),
   );
 });
 
@@ -1262,22 +1401,40 @@ await group("Writes that leave the machine need remote.write", () => {
     automation.mayWriteRemotely("no-such-plugin").allowed === false,
   );
 
+  /**
+   * The write gate and the panel must agree, and they did not.
+   *
+   * `mayWriteRemotely` used to check `granted("remote.write")` and nothing else,
+   * while `writable()` applied the descriptor's all-or-nothing rule. With
+   * `remote.write` granted and `local.write` refused the two disagreed — the
+   * panel said `canWrite: false` and a real event was created in a live Google
+   * calendar. The bug survived because the assertions below were eleven lines
+   * apart, each internally consistent, and nothing compared them.
+   *
+   * So this group now asserts the *relationship*, at every grant step, rather
+   * than each side separately.
+   */
   grant(["remote.write"]);
-  const allowed = automation.mayWriteRemotely(gcal.GOOGLE_PLUGIN_ID);
+  const partial = automation.mayWriteRemotely(gcal.GOOGLE_PLUGIN_ID);
+  const googleEntry = entry(gcal.GOOGLE_PLUGIN_ID);
   check(
-    "granting remote.write allows the write",
-    allowed.allowed === true && allowed.reason === undefined,
-    JSON.stringify(allowed),
+    "mayWriteRemotely refuses while the plugin's own write gate says no",
+    partial.allowed === false && googleEntry?.writable() === false,
+    `mayWrite=${JSON.stringify(partial)} writable=${googleEntry?.writable()}`,
+  );
+  check(
+    "and the refusal names the permission actually missing",
+    partial.needs === "local.write",
+    JSON.stringify(partial),
   );
 
-  const google = entry(gcal.GOOGLE_PLUGIN_ID);
-  check(
-    "the write half is not writable until every optional capability is granted",
-    google?.writable() === false,
-    `writable=${google?.writable()} remote.write=${automation.isGranted("remote.write")} local.write=${automation.isGranted("local.write")}`,
-  );
   grant(["local.write"]);
-  check("and is writable once they are", entry(gcal.GOOGLE_PLUGIN_ID)?.writable() === true);
+  const complete = automation.mayWriteRemotely(gcal.GOOGLE_PLUGIN_ID);
+  check(
+    "and allows it only once the two agree",
+    complete.allowed === true && entry(gcal.GOOGLE_PLUGIN_ID)?.writable() === true,
+    `mayWrite=${JSON.stringify(complete)} writable=${entry(gcal.GOOGLE_PLUGIN_ID)?.writable()}`,
+  );
 
   /**
    * One predicate, two callers: the status row the panel reads and the method
@@ -1306,6 +1463,130 @@ await group("Writes that leave the machine need remote.write", () => {
     entry("weather")?.writable() === false,
     `weather writable=${entry("weather")?.writable()}`,
   );
+});
+
+/* ------------------------------------------------------------------ */
+/* 9b. Nothing outside her store happens without a grant               */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The finding that made `core` mean something narrower.
+ *
+ * `core` skips the gate, so a capability in a core plugin's `needs` list was
+ * decorative: never checked, never reported, never revocable. Six plugins
+ * declared `local.read` that way, and it meant a fresh install with
+ * `permissions: {}` read a Markdown vault, a health export folder, and any file
+ * the user named for now-playing and mail — every `.md` under a folder of their
+ * choosing, ingested into memory on the first page load.
+ *
+ * These assertions are about the *shape* of the register, because that is where
+ * the hole was. The runtime proof is in the group above: with nothing granted,
+ * no plugin is handed an adapter that can read a file.
+ */
+await group("Nothing outside her own store runs ungated", () => {
+  const core = entries.filter((item) => item.descriptor.core === true);
+  check("some plugins are core, or a fresh install would do nothing", core.length > 0, `${core.length}`);
+
+  const decorative = core.filter((item) => item.descriptor.needs.length > 0);
+  check(
+    "no core plugin declares a required capability",
+    decorative.length === 0,
+    decorative.map((item) => `${item.descriptor.id}: ${item.descriptor.needs.map((n) => n.kind).join("+")}`).join(", "),
+  );
+
+  /**
+   * And the converse: a plugin that reads a folder or file the user names must
+   * NOT be core, because core is what exempts it from the gate. The list of
+   * descriptors that own a path-shaped setting is derived rather than written
+   * out, so a new one is covered the day it is added.
+   */
+  const pathOwners = entries.filter((item) =>
+    (item.descriptor.config ?? []).some((cfg) => cfg.kind === "path" || cfg.kind === "url"),
+  );
+  const wronglyCore = pathOwners.filter((item) => item.descriptor.core === true);
+  check(
+    "nothing that reads a file or URL the user names is core",
+    wronglyCore.length === 0,
+    wronglyCore.map((item) => item.descriptor.id).join(", "),
+  );
+
+  /**
+   * The one case that legitimately reads a URL and is core: the calendar's ICS
+   * feed. It is core because of the half that reads *her own table*, and the URL
+   * half is declared optional so it is gated. Asserted explicitly, because
+   * "nothing with a url setting is core" would be the wrong rule and this pins
+   * the right one.
+   */
+  const calendar = entry("calendar");
+  check(
+    "the calendar is core for its own events, and its feed is optional",
+    calendar?.descriptor.core === true &&
+      calendar.descriptor.needs.length === 0 &&
+      (calendar.descriptor.optional ?? []).some((spec) => spec.kind === "net.read"),
+    JSON.stringify({ needs: calendar?.descriptor.needs, optional: calendar?.descriptor.optional?.map((s) => s.kind) }),
+  );
+});
+
+/* ------------------------------------------------------------------ */
+/* 9c. Disconnecting does not need the network to forget a token       */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The local clear is unconditional; the revoke at Google is a request.
+ *
+ * `disconnect()` used to call `oauth2.googleapis.com/revoke` whenever a token
+ * existed, with no regard for permissions — so `POST /api/plugins
+ * {action:"disconnect"}` reached a third party with `permissions: {}`. Small,
+ * and the same shape as everything else this file guards.
+ *
+ * The important half of the fix is the other direction: a disconnect must never
+ * be *refused* because permissions are off, or a user who withdraws everything
+ * has no way to get their credentials off the disk.
+ */
+await group("Disconnect forgets the token without needing the network", async () => {
+  clearGrants();
+  automation.writePluginSettings({
+    "google.refreshToken": "refresh-disconnect",
+    "google.accessToken": "access-disconnect",
+    "google.accessExpiresAt": String(Date.now() + 3_600_000),
+    "google.account": "probe@example.com",
+  });
+  check("the token is stored to begin with", automation.setting("google.refreshToken") === "refresh-disconnect");
+
+  const offline = await withFetch(refuse, async (log) => {
+    const result = await gcal.disconnect({ mayReachNetwork: false });
+    return { result, log };
+  });
+  check(
+    "with nothing granted, disconnect makes no request",
+    offline.log.calls === 0,
+    `${offline.log.calls} call(s): ${offline.log.urls.join(", ")}`,
+  );
+  check("and it still succeeds", offline.result.ok === true, JSON.stringify(offline.result));
+  check(
+    "and the token is gone from the settings file",
+    automation.setting("google.refreshToken") === "" && automation.setting("google.accessToken") === "",
+    `refresh="${automation.setting("google.refreshToken")}" access="${automation.setting("google.accessToken")}"`,
+  );
+
+  /**
+   * Bites: drop the `mayReachNetwork` guard in `google-calendar.ts:disconnect`.
+   * The first assertion then counts one request to oauth2.googleapis.com and
+   * fails — reproduced before the guard was added.
+   */
+  automation.writePluginSettings({ "google.refreshToken": "refresh-disconnect-2" });
+  grant(["net.read", "account", "local.write", "remote.write"]);
+  const online = await withFetch(() => ({ json: {} }), async (log) => {
+    const result = await gcal.disconnect({ mayReachNetwork: true });
+    return { result, log };
+  });
+  check(
+    "with the network granted, the token is revoked at Google",
+    online.log.calls === 1 && online.log.urls[0].includes("oauth2.googleapis.com/revoke"),
+    `${online.log.calls} call(s): ${online.log.urls.join(", ")}`,
+  );
+  check("and the token is cleared either way", automation.setting("google.refreshToken") === "");
+  clearGrants();
 });
 
 /* ------------------------------------------------------------------ */
