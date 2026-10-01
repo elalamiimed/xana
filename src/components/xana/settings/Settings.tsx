@@ -332,7 +332,9 @@ function AboutPanel({ settingsPath }: { settingsPath: string }) {
         is stored in one JSON file on this machine. Nothing is sent anywhere
         except to the services you have explicitly switched on.
       </p>
-      <code className="mt-4 block overflow-x-auto rounded-[var(--r-md)] border border-hairline bg-black/30 px-3 py-2 font-mono text-[12px] text-dim">
+      {/* A file path is a long unbroken string on a surface that has to
+          survive 390px, so it wraps rather than widening the sheet. */}
+      <code className="mt-4 block min-w-0 overflow-x-auto rounded-[var(--r-md)] border border-hairline bg-black/30 px-3 py-2 font-mono text-[12px] text-dim wrap-anywhere">
         {settingsPath}
       </code>
 

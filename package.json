@@ -31,10 +31,11 @@
     "verify:live": "node --import ./scripts/ts-loader.mjs scripts/verify-live-connections.ts",
     "check:encoding": "node scripts/check-encoding.mjs",
     "check:bundle": "node scripts/check-bundle.mjs",
+    "check:design": "node scripts/check-design.mjs",
     "debug:key": "node scripts/debug-key.mjs",
     "debug:engine": "node scripts/debug-engine.mjs",
     "inspect": "node --import ./scripts/ts-loader.mjs scripts/inspect.ts",
-    "check": "npm run typecheck && npm run demo && npm run smoke && npm run verify:orb && npm run verify:providers"
+    "check": "npm run typecheck && npm run demo && npm run smoke && npm run verify:orb && npm run verify:providers && npm run check:design"
   },
   "dependencies": {
     "better-sqlite3": "^13.0.3",

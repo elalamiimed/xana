@@ -260,6 +260,23 @@ same constant-time comparison, not a new capability kind.
   filesystem into the browser bundle. They now live in `settings/types.ts`,
   which imports nothing. If client code needs a constant from the settings
   layer, it belongs in `types.ts`.
+- **A design rule that is only written down gets broken.** The visual pass that
+  produced the Connections panel found five drifts by eye — an unthemed caret, an
+  unthemed native control, a card that was a hairline box instead of `.card`, a
+  group heading and a card title both at `h4`, and a 64-character token with
+  nowhere to wrap — and every one of them was a *pattern* that the next panel
+  could reintroduce. `scripts/check-design.mjs` (`npm run check:design`, wired
+  into `npm run check`) now asserts the decidable ones: the 12px type floor, no
+  component rendering its own `h1`, no level skip inside a component, every
+  scrolling `<code>` wrapping, cards using the class, and `caret-color` /
+  `accent-color` resolving from `--accent-rgb`.
+  **Write the rule at the level it is actually decidable.** The first version of
+  the heading rule assumed a component's first heading sat under the shell's h1
+  and flagged six correct `h3`s — a gate that reports on what it cannot know
+  teaches people to ignore it, so it now checks only the shape one file can be
+  wrong about. The script also earned its keep on first run: it found two real
+  un-wrapped `<code>` blocks in `ModelPanel.tsx` and `Settings.tsx` that the
+  manual pass had missed.
 
 ---
 

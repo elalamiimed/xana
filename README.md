@@ -473,7 +473,7 @@ and nothing else on that surface does.
 ## Verifying it
 
 ```bash
-npm run check                # typecheck + demo + route smoke + orb maths
+npm run check                # typecheck + demo + route smoke + orb maths + craft floor
 npm run verify:web           # with the server running: the real HTTP surface
 npm run verify:browser       # with the server running: a real browser
 npm run verify:crypto        # the keyless quote path, on a stubbed CoinGecko
@@ -516,6 +516,19 @@ npm run verify:health-bridge # the phone door: token, statuses, day upserts
   tokens, the stylesheet as it comes through Tailwind, every endpoint, a live
   chat turn, and a settings round trip that changes the theme, proves the next
   page load renders it, and changes it back.
+- `npm run check:design` — the craft floor as a check, for the invariants that
+  were only auditable by eye and that a new panel is most likely to break again:
+  no `font-light` at 12px or below, no component rendering its own `h1`, no
+  heading level skipping a step inside one component, every scrolling `<code>`
+  block able to wrap a URL that has no spaces, long values wrapped rather than
+  widening a 390px sheet, cards using the project's own `card` class, and the
+  caret and native controls resolving from the accent channels. Every rule in it
+  earned its place by catching something real — the two `<code>` blocks it
+  flagged in `ModelPanel` and `Settings.tsx` were genuine 390px overflow bugs
+  nobody had noticed, and the first version of its heading rule was itself a
+  false-positive generator, which is why it now checks only what one file can be
+  wrong about. Run it with the server up and it reads the *served* stylesheet
+  rather than the source.
 - `npm run verify:browser` — launches headless Edge or Chrome and checks the
   things bytes cannot: that the client bundle hydrated, that the orb canvas is
   *actually painting* (it reads the pixels back), that it is animating between

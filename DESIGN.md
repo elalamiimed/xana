@@ -3,6 +3,17 @@
 The contract for anything visual. Implement tokens once in `globals.css` and
 never hardcode a colour, duration or size anywhere else.
 
+**Part of this file is executable.** `npm run check:design` asserts the rules
+that can be decided from the source — the type floor below 13px, the heading
+outline, long values wrapping instead of widening a 390px sheet, cards using the
+project's own `.card`, and the caret and native controls resolving from the
+accent channels — and `npm run verify:web` asserts the contrast ratios against
+the *served* stylesheet. Everything else here is prose a reviewer has to hold in
+their head, so treat the two gates as the floor and this document as the
+standard they encode. A rule that turns out to be decidable belongs in the
+script; a rule that lives only in prose has already been broken once without
+anyone noticing.
+
 ## 1. Palette
 
 Deep, near-black, quiet. Nothing in this UI should ever be pure white or

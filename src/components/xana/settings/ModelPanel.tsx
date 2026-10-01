@@ -436,7 +436,10 @@ export default function ModelPanel({ view, controller }: ModelPanelProps) {
             useful line on the page when a test fails. */}
         <div className="rounded-[var(--r-md)] border border-hairline bg-black/25 px-3 py-2">
           <span className="label">Requests go to</span>
-          <code className="mt-1 block overflow-x-auto font-mono text-[12px] text-dim">
+          {/* `wrap-anywhere` because a base URL has no spaces: without it the
+              path widens the panel rather than wrapping inside it, and this is
+              the line a user reads when a test fails. */}
+          <code className="mt-1 block min-w-0 overflow-x-auto font-mono text-[12px] text-dim wrap-anywhere">
             {effectivePath}
           </code>
         </div>
