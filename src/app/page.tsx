@@ -113,8 +113,17 @@ export default function Page() {
 
     const line = speakable(latest.text);
     if (!line) return;
-    setSpeaking(true);
-    speak(line, { voiceName, rate, pitch, onDone: () => setSpeaking(false) });
+    /**
+     * `speaking` is set from what `speak` REPORTS, not from having asked.
+     *
+     * `speak` returns false when it could not queue anything, and in that case
+     * `onDone` never runs — so setting this optimistically would leave it true
+     * forever, which leaves always-listening paused forever, which is a
+     * microphone that never comes back for the rest of the session. Gating it on
+     * the return value is what makes the two impossible to separate.
+     */
+    const started = speak(line, { voiceName, rate, pitch, onDone: () => setSpeaking(false) });
+    setSpeaking(started);
   }, [latestXana, speakReplies, voiceName, rate, pitch]);
 
   /**

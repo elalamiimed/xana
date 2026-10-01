@@ -350,6 +350,34 @@ async function keyRoundTrip() {
     return;
   }
 
+  /**
+   * What the user had before this ran.
+   *
+   * This test talks to the REAL settings endpoint on the running server, so it
+   * writes a key and switches the model on in the user's own configuration. The
+   * intent was always to put it back — the cleanup did clear the key — but it
+   * also asserted the model was off afterwards, which is only true if it had
+   * been off beforehand. On a machine where the user had deliberately switched
+   * the model on and given it a real key, this test would have:
+   *
+   *   1. overwritten their key with `sk-roundtrip-…`,
+   *   2. left that invalid key stored, with the model still enabled, and
+   *   3. failed two of its own assertions while doing it.
+   *
+   * The failure was the visible part, and the least bad part. So the state is
+   * captured first and restored last, and the assertions compare against what
+   * was actually there rather than against a hardcoded expectation.
+   */
+  const original = (await (await fetch(`${base}/api/settings`)).json()).settings?.model ?? {};
+  /**
+   * Only a key that lives in the settings FILE is at risk.
+   *
+   * A key from the environment is not touched by anything here — the store has
+   * no way to write it — so warning about it would be crying wolf, and a warning
+   * that fires on a correct setup is one people learn to ignore.
+   */
+  const hadStoredKey = original.apiKey?.present === true && original.apiKey?.from === "settings";
+
   const put = async (settings) => {
     const res = await fetch(`${base}/api/settings`, {
       method: "PUT",
@@ -434,11 +462,46 @@ async function keyRoundTrip() {
   );
   console.log(`  info  fallback reason: ${reply?.modelError}`);
 
-  // 5. Leave the environment as it was found.
-  await put(panelPatch({ clearApiKey: true }));
+  // 5. Leave the environment as it was found — genuinely, this time.
+  //
+  // A key that was already stored cannot be put back: the endpoint never returns
+  // it, by design. So the honest outcome is to remove the test key, restore the
+  // model switch to whatever it was, and SAY SO LOUDLY when a real key was
+  // displaced, because a silent overwrite of someone's credentials is worse than
+  // a failing test.
+  await put({
+    model: {
+      ...panelPatch({ clearApiKey: true }).model,
+      enabled: original.enabled === true,
+    },
+  });
   const cleared = (await (await fetch(`${base}/api/settings`)).json()).settings;
-  check("cleanup leaves no key behind", cleared?.model?.apiKey?.present === false);
-  check("cleanup leaves the model switched off", cleared?.model?.enabled === false);
+  /**
+   * The assertion is about SOURCE, not presence.
+   *
+   * "no key present" is the wrong question and was a latent bug in this test:
+   * when the user has a real key in `.env`, `present` is true no matter what
+   * this test does, so the check fails on a correct configuration. What must be
+   * true is that the test's own key is gone — the credential resolves from the
+   * environment, or from nowhere, and never from the settings file.
+   */
+  check(
+    "cleanup leaves the test key behind",
+    cleared?.model?.apiKey?.from !== "settings",
+    `from=${cleared?.model?.apiKey?.from}`,
+  );
+  check(
+    "cleanup restores the model switch it found",
+    cleared?.model?.enabled === (original.enabled === true),
+    `was ${original.enabled}, now ${cleared?.model?.enabled}`,
+  );
+
+  if (hadStoredKey) {
+    console.log(
+      "  WARN  a stored API key was replaced by this test and could not be restored —\n" +
+        "        the endpoint does not return keys. Re-enter yours in Settings > Model & key.",
+    );
+  }
 }
 
 await keyRoundTrip();

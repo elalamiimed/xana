@@ -139,14 +139,28 @@ export default function VoicePanel({ view, onSave, saving }: VoicePanelProps) {
               <StatusLine tone="info">
                 Save, then say her name from across the room. She answers with a reply, so give it a second.
               </StatusLine>
-              {/* The honest version of how this works. Saying "on-device" here
-                  would be a lie in every browser that uses a speech service. */}
-              <StatusLine tone="error">
-                The browser owns this microphone, and in Edge and Chrome the audio
-                goes to the browser&apos;s own speech service — not to Xana, and
-                not to your model provider. Use the mic button, or type, if you
-                would rather nothing left the machine.
-              </StatusLine>
+              {/* Labelled as a privacy note rather than left as a bare warning.
+                  It was a bare warning, and it read as an error message — the
+                  user quoted it back as though something had gone wrong. It is
+                  not a failure: it is the one trade this feature makes, and it
+                  belongs next to the switch that makes it. */}
+              <div className="card px-4 py-3">
+                <p className="text-[12px] leading-relaxed font-normal tracking-[0.02em] text-dim uppercase">
+                  Privacy note
+                </p>
+                <p className="mt-1.5 text-[12px] leading-relaxed font-normal text-dim">
+                  The microphone belongs to the browser, not to Xana. In Edge the
+                  audio goes to Microsoft&apos;s speech service and in Chrome to
+                  Google&apos;s — never to Xana, and never to DeepSeek. No key is
+                  involved, and nothing is stored.
+                </p>
+                <p className="mt-1.5 text-[12px] leading-relaxed font-normal text-faint">
+                  If you would rather no audio left this machine, switch this off
+                  and type instead. The browser&apos;s on-device model removes the
+                  round trip entirely where it is installed — see the microphone
+                  check.
+                </p>
+              </div>
             </>
           ) : null}
         </>

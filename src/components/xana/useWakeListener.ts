@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { SpeechRecognizer } from "./speech";
+import { logMic } from "./mic-log";
 import {
   endFromError,
   matchWake,
@@ -257,6 +258,12 @@ export function useWakeListener({
         const decision = planRestart(kind, failures.current);
         if (kind === "error-other") failures.current += 1;
         else if (kind === "silence") failures.current = 0;
+        logMic("wake.end", {
+          kind,
+          failures: failures.current,
+          restart: decision.restart,
+          delay: decision.delayMs,
+        });
 
         if (!decision.restart) {
           setState(kind === "stopped" ? "off" : "failed");
@@ -276,21 +283,44 @@ export function useWakeListener({
         }, decision.delayMs);
       };
 
+      instance.onstart = () => {
+        // The moment that separates "start() was called" from "the microphone is
+        // open". On a machine where those two never converge, this is the whole
+        // diagnosis, and its absence is as informative as the event itself.
+        logMic("wake.session.open");
+      };
+
       instance.onresult = (event) => {
-        if (Date.now() < cooldownUntil.current) return;
+        if (Date.now() < cooldownUntil.current) {
+          logMic("wake.result.cooldown");
+          return;
+        }
         // Hearing her own reply is the one failure that makes the loop
         // unusable, so results are dropped outright while she is speaking.
-        if (live.current.paused) return;
+        if (live.current.paused) {
+          logMic("wake.result.paused");
+          return;
+        }
 
         let transcript = "";
+        let finals = 0;
         for (let index = 0; index < event.results.length; index += 1) {
           transcript += event.results[index]?.[0]?.transcript ?? "";
+          if (event.results[index]?.isFinal) finals += 1;
         }
         transcript = transcript.trim();
+        logMic("wake.result", {
+          // Length, never the words.
+          chars: transcript.length,
+          results: event.results.length,
+          finals,
+          capturing: capturing.current,
+        });
         if (!transcript) return;
 
         if (!capturing.current) {
           const match = matchWake(transcript, live.current.phraseList);
+          logMic("wake.match", { matched: match.matched, heard: match.heard, chars: match.command.length });
           if (!match.matched) return;
           capturing.current = true;
           // Everything before the request belonged to the previous wake.
@@ -330,7 +360,9 @@ export function useWakeListener({
       };
 
       instance.onerror = (event) => {
-        const kind = endFromError(event?.error ?? "");
+        const reason = event?.error ?? "";
+        const kind = endFromError(reason);
+        logMic("wake.error", { reason, kind });
         if (kind === "silence") return; // `onend` follows and handles it.
         handledByError = true;
         recognizer.current = null;
@@ -338,6 +370,7 @@ export function useWakeListener({
       };
 
       instance.onend = () => {
+        logMic("wake.onend", { handled: handledByError, held: held.current, paused: live.current.paused });
         if (handledByError) return;
         recognizer.current = null;
         // An end with no error is the ordinary end of a session: silence, a
@@ -349,12 +382,17 @@ export function useWakeListener({
       recognizer.current = instance;
       setNote("");
       setState("starting");
+      logMic("wake.start");
       try {
         instance.start();
-      } catch {
+      } catch (error) {
         // `start()` throws when a recogniser is already running. That is a race
         // between the restart timer and a late `onend`, not a failure worth
         // surfacing — the running recogniser is already doing the job.
+        logMic("wake.start.threw", {
+          name: error instanceof Error ? error.name : "unknown",
+          held: held.current,
+        });
         recognizer.current = null;
       }
     },
@@ -375,13 +413,21 @@ export function useWakeListener({
    */
   useEffect(() => {
     if (!enabled) {
+      logMic("wake.off");
       stop();
       setState("off");
       setNote("");
       setDraft("");
       return stop;
     }
-    if (!getWakeRecognition()) {
+    const hasApi = getWakeRecognition() !== null;
+    logMic("wake.on", {
+      api: hasApi,
+      phrases: phraseList.join("|"),
+      lang: typeof navigator !== "undefined" ? navigator.language : "none",
+      secure: typeof window !== "undefined" ? window.isSecureContext : false,
+    });
+    if (!hasApi) {
       setState("failed");
       setNote("This browser cannot watch for her name. The mic button and typing still work.");
       return;

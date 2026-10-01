@@ -10,6 +10,7 @@ import {
   transcriptFrom,
   type SpeechRecognizer,
 } from "@/components/xana/speech";
+import { logMic } from "@/components/xana/mic-log";
 
 /**
  * Why the microphone does nothing, measured rather than guessed.
@@ -139,6 +140,7 @@ export default function MicPage() {
    */
   const startMeter = useCallback(async () => {
     setMeterError("");
+    logMic("micpage.meter.start");
     try {
       const media = await navigator.mediaDevices.getUserMedia({ audio: true });
       stream.current = media;
@@ -150,19 +152,45 @@ export default function MicPage() {
       source.connect(analyser);
       const buffer = new Float32Array(analyser.fftSize);
       setMetering(true);
+      const track = media.getAudioTracks()[0];
+      // The device label is the answer to the most common cause: a default input
+      // that exists but is not a microphone.
+      logMic("micpage.meter.open", {
+        tracks: media.getAudioTracks().length,
+        label: track?.label ?? "unlabelled",
+        settings: track?.getSettings?.().sampleRate ?? 0,
+      });
 
       let smoothed = 0;
+      /** Highest peak seen, reported once the meter has had a chance to hear. */
+      let loudest = 0;
+      let reported = false;
       const draw = () => {
         analyser.getFloatTimeDomainData(buffer);
         let peak = 0;
         for (const sample of buffer) peak = Math.max(peak, Math.abs(sample));
+        loudest = Math.max(loudest, peak);
         // Fast attack, slow release: it must jump when you speak and fade after.
         smoothed = Math.max(peak, smoothed * 0.92);
         setLevel(smoothed);
         frame.current = requestAnimationFrame(draw);
       };
       draw();
+
+      // Three seconds is long enough to say a word and short enough not to nag.
+      window.setTimeout(() => {
+        if (reported) return;
+        reported = true;
+        logMic("micpage.meter.level", {
+          // Bands rather than the raw number: what matters is silent vs audible.
+          band: loudest > 0.05 ? "audible" : loudest > 0.005 ? "faint" : "silent",
+          peak: Number(loudest.toFixed(4)),
+        });
+      }, 3000);
     } catch (error) {
+      logMic("micpage.meter.fail", {
+        name: error instanceof Error ? error.name : "unknown",
+      });
       setMetering(false);
       setMeterError(dictationNote(error));
     }
@@ -170,6 +198,7 @@ export default function MicPage() {
 
   const tryRecognition = useCallback(() => {
     const Recognition = getSpeechRecognition();
+    logMic("micpage.recognition.start", { available: Recognition !== null });
     if (!Recognition) {
       setRecognitionError("This browser has no speech recognition API.");
       return;
@@ -184,15 +213,24 @@ export default function MicPage() {
     instance.continuous = true;
     instance.interimResults = true;
 
-    instance.onstart = () => setRecognitionState("open — say something");
-    instance.onresult = (event) => setHeard(transcriptFrom(event));
+    instance.onstart = () => {
+      logMic("micpage.recognition.open");
+      setRecognitionState("open — say something");
+    };
+    instance.onresult = (event) => {
+      const text = transcriptFrom(event);
+      logMic("micpage.recognition.result", { chars: text.length, results: event.results.length });
+      setHeard(text);
+    };
     instance.onerror = (event) => {
       const reason = event?.error ?? "";
+      logMic("micpage.recognition.error", { reason });
       setRecognitionState(`error: ${reason}`);
       setRecognitionError(dictationFailure(reason, false) || `Recognition stopped (${reason}).`);
       setRecognising(false);
     };
     instance.onend = () => {
+      logMic("micpage.recognition.end");
       setRecognising(false);
       setRecognitionState((current) =>
         current.startsWith("error") ? current : "stopped (the browser ended the session — press the button again)",
@@ -371,6 +409,36 @@ export default function MicPage() {
             which of the two failed and the app is the thing to fix, not your setup.
           </li>
         </ul>
+      </section>
+
+      <section className="mt-10">
+        <h2 className="text-[13px] font-normal tracking-[0.02em] text-accent uppercase">
+          4. The recording of what just happened
+        </h2>
+        <p className="mt-2 max-w-[62ch] text-[13px] leading-relaxed font-light text-dim">
+          Every microphone event on this page is written down — which API was
+          present, what each failure was called, whether a session ever opened —
+          so a problem can be read rather than described. No words you say are in
+          it: only event names, error names and lengths.
+        </p>
+        <p className="mt-3 flex flex-wrap gap-4 text-[13px] font-light">
+          <a
+            href="/api/mic-log"
+            target="_blank"
+            rel="noreferrer"
+            className="text-dim underline decoration-hairline underline-offset-2 transition-colors duration-[var(--t-fast)] hover:text-text"
+          >
+            Open the log
+          </a>
+          <a
+            href="/api/mic-log?clear=1"
+            target="_blank"
+            rel="noreferrer"
+            className="text-faint underline decoration-hairline underline-offset-2 transition-colors duration-[var(--t-fast)] hover:text-dim"
+          >
+            Clear it, then try again
+          </a>
+        </p>
       </section>
     </main>
   );

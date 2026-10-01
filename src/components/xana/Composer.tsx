@@ -16,6 +16,7 @@ import {
   hasOnDeviceRecognition,
   type SpeechRecognizer,
 } from "./speech";
+import { logMic } from "./mic-log";
 
 /**
  * The single input line. Pinned to the bottom, one hairline, radius-full.
@@ -98,6 +99,9 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
   const interim = useRef("");
   const recognizer = useRef<SpeechRecognizer | null>(null);
   const textarea = useRef<HTMLTextAreaElement | null>(null);
+  /** The last recogniser whose session actually opened, for the watchdog. */
+  const opened = useRef<SpeechRecognizer | null>(null);
+  const openTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [micAvailable, setMicAvailable] = useState(false);
   /** Whether this browser can recognise speech without leaving the machine. */
   const [onDevice, setOnDevice] = useState(false);
@@ -124,8 +128,19 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
   // Feature detection runs after mount, never during render: the server has
   // no `window`, and a mismatch here would desync hydration.
   useEffect(() => {
-    setMicAvailable(getSpeechRecognition() !== null);
+    const available = getSpeechRecognition() !== null;
+    setMicAvailable(available);
     setOnDevice(hasOnDeviceRecognition());
+    // Whether the button exists at all is the first question when a user says
+    // "I clicked the mic" — if this is false, there was no button to click and
+    // the problem is the browser, not the recogniser.
+    logMic("composer.mount", {
+      micButton: available,
+      onDevice: hasOnDeviceRecognition(),
+      secure: window.isSecureContext,
+      lang: navigator.language,
+      hasMediaDevices: typeof navigator.mediaDevices?.getUserMedia === "function",
+    });
   }, []);
 
   /**
@@ -209,8 +224,21 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
         setHeard(spoken);
         setValue(baseText.current ? `${baseText.current} ${spoken}` : spoken);
       };
+      instance.onstart = () => {
+        logMic("composer.session.open", { local });
+        opened.current = instance;
+        if (openTimer.current) {
+          clearTimeout(openTimer.current);
+          openTimer.current = null;
+        }
+      };
       instance.onerror = (event) => {
         const reason = event?.error ?? "";
+        logMic("composer.error", { reason, local });
+        if (openTimer.current) {
+          clearTimeout(openTimer.current);
+          openTimer.current = null;
+        }
         // Only the first failure of a session gets a recovery attempt, and only
         // if there is a model that can serve it. Retrying on every error would
         // spin against a permission the user has already refused.
@@ -260,6 +288,7 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
         closeDictation(false);
       };
       instance.onend = () => {
+        logMic("composer.end", { stopping: stopping.current, current: recognizer.current === instance });
         // A session that ended on its own is restarted while the user still
         // wants to dictate. This is the difference between "it stopped after one
         // sentence" and a microphone that stays open.
@@ -304,6 +333,7 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
 
   const startDictation = useCallback(() => {
     const Recognition = getSpeechRecognition();
+    logMic("composer.mic.click", { available: Recognition !== null });
     if (!Recognition) return;
 
     // Hand over the microphone before asking for it. Framed as a callback so
@@ -329,7 +359,38 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
       setDictating(true);
       try {
         instance.start();
-      } catch {
+        logMic("composer.start", { continuous: instance.continuous });
+        /**
+         * The watchdog for the silent case.
+         *
+         * A recogniser can start and never open: no error, no event, no `onend`,
+         * and the microphone indicator stays lit while the field stays empty.
+         * That is the one failure this component used to be unable to report at
+         * all, because every other path produces either a result or an error and
+         * this one produces neither.
+         *
+         * Five seconds is long enough for a slow service and short enough that a
+         * user does not conclude the button is dead.
+         */
+        if (openTimer.current) clearTimeout(openTimer.current);
+        openTimer.current = setTimeout(() => {
+          openTimer.current = null;
+          if (stopping.current || recognizer.current !== instance) return;
+          if (opened.current === instance) return; // It did open; it is just quiet.
+          logMic("composer.never-opened");
+          recognizer.current = null;
+          try {
+            instance.abort();
+          } catch {
+            // Never opened, so there is nothing to abort.
+          }
+          setDictating(false);
+          setDictationNote(
+            "The microphone did not open. The browser may be blocked from its speech service, or the device may be held by another app.",
+          );
+        }, 5000);
+      } catch (error) {
+        logMic("composer.start.threw", { name: error instanceof Error ? error.name : "unknown" });
         recognizer.current = null;
         setDictating(false);
         setDictationNote("Dictation could not start. Press the mic again.");
@@ -346,12 +407,24 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
     navigator.mediaDevices
       .getUserMedia({ audio: true })
       .then((stream) => {
+        const tracks = stream.getAudioTracks();
+        logMic("composer.gum.ok", {
+          tracks: tracks.length,
+          // The device label is the single most useful fact when the answer is
+          // "it opened and heard nothing" — a virtual voice-changer driver is a
+          // very different problem from a muted headset.
+          label: tracks[0]?.label ?? "unlabelled",
+        });
         // Released immediately: the recogniser opens the microphone itself, and
         // holding both is what makes it fail with `audio-capture`.
         for (const track of stream.getTracks()) track.stop();
         begin();
       })
       .catch((error: unknown) => {
+        logMic("composer.gum.fail", {
+          name: error instanceof Error ? error.name : "unknown",
+          message: error instanceof Error ? error.message : String(error),
+        });
         setDictating(false);
         setDictationNote(buildDictationNote(error));
       });
