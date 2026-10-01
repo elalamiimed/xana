@@ -388,6 +388,50 @@ I finish" briefing reads. Folding it into the general update would make every
 rename decide what to do about a completion timestamp it has no business
 touching.
 
+### 19. `network` is not a microphone problem, and retrying is not a fix
+
+The mic button and the wake word both failed with nothing on screen. The flight
+recorder answered it in one reading:
+
+```
+composer.mount  micButton=true  onDevice=true  secure=true  hasMediaDevices=true
+wake.session.open                       <- the microphone opened, every time
+wake.error reason=network               <- ten times, never anything else
+```
+
+Permission was granted, the hardware was there, the session opened — and then
+`network`. `SpeechRecognition` does not transcribe anything itself: Edge sends
+the audio to Microsoft's speech service and Chrome to Google's. On a network
+behind a proxy that blocks that endpoint, **every** attempt fails this way, no
+matter how good the microphone is. The sandbox this was built in cannot reach
+`speech.platform.bing.com` either, which is how the diagnosis was confirmed from
+both ends.
+
+Three lessons, and the first one cost the most time:
+
+**A diagnostic that reports the *shape* of an event is worth more than any amount
+of reasoning about it.** Every code-level fix attempted before the recorder
+existed was a guess, and two of those guesses were wrong. One log line ended it.
+The recorder sends event names, error names and lengths — never transcript text —
+and it is the single most useful thing built in this whole area.
+
+**`network` is terminal, not transient.** `planRestart` treats an unknown error as
+retryable with a backoff, which is right in general and wrong here: it retried
+four times into a blocked socket and then gave up with "Listening kept failing, so
+I switched off." Retrying cannot fix an unreachable host. The honest move is to
+stop immediately and say the service is unreachable.
+
+**The fix is not a better retry, it is a different transport.** `local-speech.ts`
+records with `MediaRecorder`, finds the end of the sentence from the waveform
+(`AnalyserNode`, an adaptive threshold against the room's own noise floor), and
+posts the clip to a Whisper service on `127.0.0.1`. No network, nothing to block,
+and the audio does not leave the machine. The browser path stays the default
+because it is faster where it works — but "where it works" is not everywhere, and
+assuming otherwise is what made this look like broken hardware.
+
+The general shape: **when a feature fails with `network` and the user's
+microphone is fine, the feature has a transport problem, not a hardware one.**
+
 ---
 
 ## Traps that have already bitten

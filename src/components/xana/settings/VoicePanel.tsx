@@ -21,6 +21,7 @@ import {
   stopSpeaking,
 } from "../speech";
 import { getSpeechRecognition } from "../speech";
+import { canRecord, transcriberHealth, type TranscriberHealth } from "../local-speech";
 import { DEFAULT_WAKE_PHRASES } from "../wake-word";
 
 /**
@@ -50,6 +51,10 @@ export default function VoicePanel({ view, onSave, saving }: VoicePanelProps) {
   const [pitch, setPitch] = useState(view.voice.pitch);
   const [wakeEnabled, setWakeEnabled] = useState(view.voice.wakeEnabled);
   const [wakePhrases, setWakePhrases] = useState(view.voice.wakePhrases);
+  const [transcribe, setTranscribe] = useState<"browser" | "local">(view.voice.transcribe);
+  /** Whether the local transcriber is actually running, measured not assumed. */
+  const [localState, setLocalState] = useState<TranscriberHealth | null>(null);
+  const [probing, setProbing] = useState(false);
 
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [supported, setSupported] = useState(false);
@@ -98,10 +103,76 @@ export default function VoicePanel({ view, onSave, saving }: VoicePanelProps) {
 
   const save = async () => {
     const next = await onSave({
-      voice: { speakReplies, voiceName, rate, pitch, wakeEnabled, wakePhrases },
+      voice: { speakReplies, voiceName, rate, pitch, wakeEnabled, wakePhrases, transcribe },
     });
     if (next) setSaved(true);
   };
+
+  /**
+   * Where transcription happens.
+   *
+   * The reason this is a setting at all: the browser's speech service is
+   * reachable on some networks and blocked on others, and when it is blocked
+   * every attempt fails with the error name `network` regardless of the
+   * microphone. There is no way to detect that from here — only the user's
+   * browser knows — so the choice is offered, with the state of the local
+   * service measured rather than described.
+   */
+  const transcribeSection = (
+    <Section
+      title="Where speech is transcribed"
+      blurb="The browser's own speech service is faster and needs nothing installed, but it is a network round trip: on a network where it is blocked, recognition fails every time no matter how good the microphone is. The local transcriber does the work on this machine instead."
+    >
+      <SelectField
+        label="Transcription"
+        value={transcribe}
+        onChange={(next) => setTranscribe(next as "browser" | "local")}
+        options={[
+          { value: "browser", label: "The browser's speech service (default)" },
+          { value: "local", label: "This machine, with local Whisper" },
+        ]}
+        hint="If dictation or her name keeps failing, switch to the local transcriber."
+      />
+
+      {transcribe === "local" ? (
+        <>
+          <Actions>
+            <Button
+              onClick={() => {
+                setProbing(true);
+                void transcriberHealth(undefined, 2500)
+                  .then(setLocalState)
+                  .finally(() => setProbing(false));
+              }}
+              disabled={probing}
+            >
+              {probing ? "Checking…" : "Check the local transcriber"}
+            </Button>
+          </Actions>
+
+          {localState ? (
+            localState.ready ? (
+              <StatusLine tone="ok">
+                Ready — {localState.backend}, model “{localState.model}”. Nothing leaves this machine.
+              </StatusLine>
+            ) : (
+              <StatusLine tone="error">
+                {localState.available
+                  ? `Running but not ready. ${localState.reason}`
+                  : "Not running. Start it with python/serve.ps1 — see python/README.md."}
+              </StatusLine>
+            )
+          ) : (
+            <StatusLine tone="info">
+              {canRecord()
+                ? "Check it before relying on it: it needs a separate program running."
+                : "This browser cannot record audio, so the local path is unavailable here."}
+            </StatusLine>
+          )}
+        </>
+      ) : null}
+    </Section>
+  );
 
   /**
    * Hands-free: the section that does NOT depend on speech synthesis.
@@ -272,6 +343,8 @@ export default function VoicePanel({ view, onSave, saving }: VoicePanelProps) {
           <Button onClick={stopSpeaking}>Stop</Button>
         </Actions>
       </Section>
+
+      {transcribeSection}
 
       {handsFree}
 

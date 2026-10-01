@@ -16,6 +16,7 @@ import {
   hasOnDeviceRecognition,
   type SpeechRecognizer,
 } from "./speech";
+import { canRecord, recordUtterance, transcribe, transcriberHealth } from "./local-speech";
 import { logMic } from "./mic-log";
 
 /**
@@ -76,10 +77,20 @@ export interface ComposerProps {
    * permanently switched off.
    */
   onReleaseMicrophone?: () => void;
+  /**
+   * Where transcription happens.
+   *
+   * "browser" uses the browser's own speech service, which is faster where it
+   * works and needs no install. "local" records the audio and sends it to a
+   * Whisper service on this machine, which is the only thing that works on a
+   * network where that service is blocked — the diagnosed cause of `network`
+   * errors on every attempt.
+   */
+  transcribe?: "browser" | "local";
 }
 
 const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
-  { onSubmit, busy, onTakeMicrophone, onReleaseMicrophone },
+  { onSubmit, busy, onTakeMicrophone, onReleaseMicrophone, transcribe: mode = "browser" },
   ref,
 ) {
   const [value, setValue] = useState("");
@@ -87,6 +98,8 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
   const [dictationNote, setDictationNote] = useState<string | null>(null);
   /** What has been heard so far in this dictation, shown so it can be judged. */
   const [heard, setHeard] = useState("");
+  /** Live loudness while recording locally, for the indicator. */
+  const [level, setLevel] = useState(0);
   /** The transcript that was in the field when dictation started. */
   const baseText = useRef("");
   /**
@@ -331,10 +344,125 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
     [closeDictation, onDevice, onReleaseMicrophone],
   );
 
+  /**
+   * Dictation through the local transcriber.
+   *
+   * A loop rather than a single recording, so it behaves like the browser path
+   * from the user's side: press once, keep talking, pause between sentences. Each
+   * pass records one utterance — the end found by the waveform, not by a timer —
+   * sends it to the machine, and appends what came back.
+   *
+   * The microphone is released between passes, which is deliberate: holding it
+   * across a transcription would keep the indicator lit while nothing is being
+   * listened to, and would block the local model from ever being the only thing
+   * using the device.
+   */
+  const startLocalDictation = useCallback(async () => {
+    const health = await transcriberHealth();
+    logMic("composer.local.health", { available: health.available, ready: health.ready, backend: health.backend });
+    if (!health.ready) {
+      setDictating(false);
+      setDictationNote(
+        health.available
+          ? `The local transcriber is running but not ready. ${health.reason}`
+          : "The local transcriber is not running. Start it with `python/serve.ps1`, then press the mic again — or switch transcription back to the browser in Settings → Voice.",
+      );
+      return;
+    }
+
+    setDictating(true);
+    setDictationNote(null);
+
+    while (!stopping.current) {
+      const clip = await recordUtterance({
+        onLevel: (level) => setLevel(level),
+        onSpeechStart: () => setHeard(""),
+      });
+      if (stopping.current) break;
+
+      if (clip.ended === "cancelled") break;
+      if (clip.ended === "error") {
+        logMic("composer.local.record.fail", { name: clip.error?.name ?? "unknown" });
+        setDictationNote(buildDictationNote(clip.error));
+        break;
+      }
+      if (!clip.blob || !clip.heardSpeech) {
+        // The end of the sentence is also the end of this utterance's attempt:
+        // in a hands-free loop that is the moment a person expects the field to
+        // keep what it has and wait, so the loop continues; but a single press
+        // with nothing said should say so rather than sit silently.
+        logMic("composer.local.heard-nothing", { ended: clip.ended });
+        if (clip.ended === "no-speech" && !committed.current) {
+          setDictationNote("I did not hear anything. Press the mic and speak.");
+          break;
+        }
+        continue;
+      }
+
+      logMic("composer.local.clip", { bytes: clip.blob.size, ms: clip.durationMs, type: clip.blob.type });
+      setHeard("…");
+      const result = await transcribe(clip.blob);
+      if (stopping.current) break;
+
+      if (result.error) {
+        logMic("composer.local.transcribe.fail", { error: result.error.slice(0, 80) });
+        setDictationNote(result.error);
+        break;
+      }
+      const text = result.text.trim();
+      if (!text) {
+        logMic("composer.local.empty-transcript");
+        continue;
+      }
+
+      // Append across passes, the same way a session boundary is handled in the
+      // browser path: what was said in an earlier utterance survives this one.
+      committed.current = committed.current ? `${committed.current} ${text}` : text;
+      const spoken = committed.current;
+      setHeard(spoken);
+      setValue(baseText.current ? `${baseText.current} ${spoken}` : spoken);
+    }
+
+    setLevel(0);
+    setDictating(false);
+    setHeard("");
+    onReleaseMicrophone?.();
+  }, [onReleaseMicrophone]);
+
   const startDictation = useCallback(() => {
+    /**
+     * Which path, decided in one place.
+     *
+     * The local one is asked for first when the setting says so. It is not tried
+     * "if the browser fails", because the browser's failure is `network` — a
+     * blocked service — and by the time that is known the user has already
+     * spoken into a void.
+     */
+    if (mode === "local" && canRecord()) {
+      logMic("composer.mic.click", { path: "local" });
+      onTakeMicrophone?.();
+      baseText.current = value;
+      stopping.current = false;
+      committed.current = "";
+      interim.current = "";
+      setDictationNote(null);
+      setHeard("");
+      void startLocalDictation();
+      return;
+    }
+
     const Recognition = getSpeechRecognition();
-    logMic("composer.mic.click", { available: Recognition !== null });
-    if (!Recognition) return;
+    logMic("composer.mic.click", { path: "browser", available: Recognition !== null });
+    if (!Recognition) {
+      // No browser recognition AND no local recorder is the one combination with
+      // nothing to try, so it gets its own sentence rather than a dead button.
+      if (canRecord()) {
+        setDictationNote(
+          "This browser has no speech recognition. Switch transcription to the local transcriber in Settings → Voice.",
+        );
+      }
+      return;
+    }
 
     // Hand over the microphone before asking for it. Framed as a callback so
     // this component does not need to know that always-listening exists.
@@ -428,7 +556,7 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
         setDictating(false);
         setDictationNote(buildDictationNote(error));
       });
-  }, [buildRecognizer, onTakeMicrophone, value]);
+  }, [buildRecognizer, mode, onTakeMicrophone, startLocalDictation, value]);
 
   // A recogniser left running across an unmount keeps the microphone open.
   useEffect(() => {
@@ -480,6 +608,25 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
         >
           {heard ? `Listening — “${heard}”` : "Listening…"}
         </p>
+      ) : null}
+
+      {/* The loudness meter, only while recording locally.
+          It answers the question a silent microphone otherwise leaves open —
+          "is this thing hearing me at all?" — and it is the same envelope the
+          end-of-sentence detector uses, so what it shows is what the recorder
+          believes. A bar that never moves means the device is not passing audio,
+          which is a different problem from transcription being wrong. */}
+      {dictating && mode === "local" ? (
+        <div
+          aria-hidden="true"
+          className="absolute inset-x-4 bottom-full mb-0 h-[2px] overflow-hidden rounded-full bg-surface-2"
+          style={{ transform: heard ? "translateY(-1.6rem)" : undefined }}
+        >
+          <div
+            className="h-full rounded-full bg-accent transition-[width] duration-75"
+            style={{ width: `${Math.min(100, Math.round(level * 400))}%` }}
+          />
+        </div>
       ) : null}
 
       <form

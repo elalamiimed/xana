@@ -1,2 +1,7 @@
 # `py_compile` writes its bytecode here, and it is generated, like .next/.
 __pycache__/
+
+# `setup.ps1` builds a virtual environment here: a few hundred megabytes of
+# someone else's packages, specific to this machine's Python, and reproducible
+# from the script. Committing it would be committing a wheel cache.
+.venv/

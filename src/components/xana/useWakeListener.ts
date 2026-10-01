@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { SpeechRecognizer } from "./speech";
 import { logMic } from "./mic-log";
+import { recordUtterance, transcribe, transcriberHealth } from "./local-speech";
 import {
   endFromError,
   matchWake,
@@ -73,6 +74,15 @@ export interface WakeListenerOptions {
   phrases: string;
   /** True while she is composing a reply or speaking one. */
   paused: boolean;
+  /**
+   * Where the words come from.
+   *
+   * "browser" watches her name with the browser's speech service, which is what
+   * the recogniser below is for. "local" records each utterance and transcribes
+   * it on this machine, which is the only version that works when that service
+   * is blocked — the diagnosed cause of every `network` failure.
+   */
+  transcribe: "browser" | "local";
   /** Called with a request heard without a button press. */
   onSubmit: (text: string) => void;
 }
@@ -125,6 +135,7 @@ export function useWakeListener({
   enabled,
   phrases,
   paused,
+  transcribe: mode,
   onSubmit,
 }: WakeListenerOptions): WakeListener {
   const [state, setState] = useState<WakeState>("off");
@@ -165,6 +176,125 @@ export function useWakeListener({
    */
   const live = useRef({ paused, onSubmit, phraseList });
 
+  /**
+   * The local loop's cancel handle.
+   *
+   * Separate from `recognizer` because the two engines are stopped differently:
+   * a recogniser has `abort()`, whereas the local loop is a sequence of awaited
+   * recordings that has to be told to stop between passes.
+   */
+  const localStop = useRef(false);
+
+  /**
+   * Submit a request heard by the local loop, with the same cooldown as the
+   * other engine. Declared before the loop that calls it.
+   */
+  const submitLocal = useCallback((text: string) => {
+    const command = text.trim();
+    cooldownUntil.current = Date.now() + COOLDOWN_MS;
+    setDraft("");
+    if (!command) return;
+    logMic("wake.local.submit", { chars: command.length });
+    setNote("");
+    live.current.onSubmit(command);
+  }, []);
+
+  /**
+   * Watch for her name on this machine.
+   *
+   * A loop of one-utterance recordings, each transcribed locally, each checked
+   * against the wake word. Slower than the browser's service when that service
+   * works — a second or so per utterance on CPU — but it is the only version
+   * that works where that service is blocked, and it never sends audio anywhere.
+   *
+   * The common case is handled in one pass: "Xana, what's the weather" arrives as
+   * a single utterance, matches, and carries its own command. When the name
+   * arrives alone, the next utterance is taken as the request without needing the
+   * name again — which is what makes the window between the two feel natural.
+   */
+  const runLocalLoop = useCallback(async () => {
+    const health = await transcriberHealth();
+    logMic("wake.local.health", { available: health.available, ready: health.ready, backend: health.backend });
+    if (!health.ready) {
+      setState("failed");
+      setNote(
+        health.available
+          ? `The local transcriber is running but not ready. ${health.reason}`
+          : "Always-listening needs a transcriber. Start the local one with python/serve.ps1, or switch transcription back to the browser in Settings → Voice.",
+      );
+      return;
+    }
+
+    setNote("");
+    setState("armed");
+    /** Set in one pass when the name arrives without a request after it. */
+    let awaitingCommand = false;
+
+    while (!localStop.current && enabled) {
+      if (live.current.paused) {
+        setState("paused");
+        return;
+      }
+
+      const clip = await recordUtterance({ silenceMs: awaitingCommand ? 1100 : 700, noSpeechMs: 9000 });
+      if (localStop.current || !enabled) return;
+
+      if (clip.ended === "error") {
+        logMic("wake.local.record.fail", { name: clip.error?.name ?? "unknown" });
+        setState("failed");
+        setNote("The microphone could not be opened for always-listening.");
+        return;
+      }
+      if (clip.ended === "cancelled") return;
+      if (!clip.blob || !clip.heardSpeech) {
+        // A quiet stretch is the normal state of a room, not a failure.
+        continue;
+      }
+
+      setState("listening");
+      const result = await transcribe(clip.blob);
+      if (localStop.current || !enabled) return;
+      if (result.error) {
+        logMic("wake.local.transcribe.fail", { error: result.error.slice(0, 80) });
+        setState("failed");
+        setNote(result.error);
+        return;
+      }
+      const said = result.text.trim();
+      logMic("wake.local.heard", { chars: said.length, awaiting: awaitingCommand });
+      if (!said) {
+        setState("armed");
+        continue;
+      }
+
+      const match = matchWake(said, live.current.phraseList);
+      logMic("wake.local.match", { matched: match.matched, heard: match.heard });
+
+      if (!match.matched) {
+        if (awaitingCommand) {
+          // The name was heard on its own and this is the request.
+          awaitingCommand = false;
+          submitLocal(said);
+          setState("armed");
+        } else {
+          // Ordinary conversation. Nothing is done with it, and it is not stored.
+          setState("armed");
+        }
+        continue;
+      }
+
+      if (match.command) {
+        submitLocal(match.command);
+        setState("armed");
+      } else {
+        // The name alone. Take the next thing said as the request.
+        awaitingCommand = true;
+        setDraft("");
+        setState("listening");
+      }
+    }
+  }, [enabled, submitLocal]);
+
   const clearTimers = useCallback(() => {
     for (const timer of [restartTimer, settleTimer, windowTimer]) {
       if (timer.current) clearTimeout(timer.current);
@@ -201,6 +331,7 @@ export function useWakeListener({
   );
 
   const stop = useCallback(() => {
+    localStop.current = true;
     clearTimers();
     const instance = recognizer.current;
     recognizer.current = null;
@@ -420,8 +551,26 @@ export function useWakeListener({
       setDraft("");
       return stop;
     }
+
+    /**
+     * The local engine, when it is the selected one.
+     *
+     * It does not need `SpeechRecognition` at all — that API exists only to
+     * reach the browser's speech service, and the whole reason for this path is
+     * that the service is unreachable. So the usual capability check is skipped
+     * rather than allowed to reject a browser that could otherwise do the job
+     * perfectly well without it.
+     */
+    if (mode === "local") {
+      logMic("wake.on", { engine: "local", phrases: phraseList.join("|") });
+      localStop.current = false;
+      void runLocalLoop();
+      return stop;
+    }
+
     const hasApi = getWakeRecognition() !== null;
     logMic("wake.on", {
+      engine: "browser",
       api: hasApi,
       phrases: phraseList.join("|"),
       lang: typeof navigator !== "undefined" ? navigator.language : "none",
@@ -435,7 +584,7 @@ export function useWakeListener({
     failures.current = 0;
     start();
     return stop;
-  }, [enabled, start, stop]);
+  }, [enabled, mode, runLocalLoop, start, stop]);
 
   /**
    * Pause while she speaks, resume when she stops.
@@ -445,7 +594,7 @@ export function useWakeListener({
    * throws on an already-started recogniser and that throw is swallowed.
    */
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled || mode === "local") return;
     if (paused) {
       stop();
       setState("paused");
@@ -453,12 +602,19 @@ export function useWakeListener({
     }
     failures.current = 0;
     start();
-  }, [paused, enabled, start, stop]);
+  }, [paused, enabled, mode, start, stop]);
 
   // A recogniser left open after unmount keeps the microphone indicator on.
   useEffect(() => stop, [stop]);
 
-  const retry = useCallback(() => start(true), [start]);
+  const retry = useCallback(() => {
+    if (mode === "local") {
+      localStop.current = false;
+      void runLocalLoop();
+      return;
+    }
+    start(true);
+  }, [mode, runLocalLoop, start]);
 
   /**
    * Hand the microphone over, synchronously and completely.

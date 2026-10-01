@@ -455,19 +455,40 @@ appears to do nothing.
 
 ### A local transcriber, for when the cloud path is blocked
 
-`python/xana_stt.py` is an optional local Whisper service — no key, no cloud, no
-account — for the case where the browser's speech service is unreachable: a
-school or office network, a hardened browser build, or being offline. See
-**[python/README.md](python/README.md)** for the setup; the short version is
-`pip install faster-whisper` then `python/serve.ps1`. The model downloads once,
-on first use.
+`python/xana_stt.py` is a local Whisper service — no key, no cloud, no account.
+It is what dictation and hands-free listening use when the browser's speech
+service is unreachable, which is not a hypothetical: on a machine behind a proxy
+that blocks Microsoft's speech endpoint, every recognition attempt fails with the
+error name `network` however good the microphone is, and no amount of retrying
+changes that. Both engines are now wired to it.
 
-**It is built and tested but not yet wired into the composer.** The browser's own
-recognition is still the only path the mic button and hands-free listening take,
-so if that path is blocked, dictation does not work yet — the service is ready
-for the recording path that will replace it, and `/xana/mic` is how you find out
-whether you need it. Saying this plainly because the alternative is a README that
-promises a fallback which does not exist.
+**Two commands to set it up:**
+
+```bash
+powershell -ExecutionPolicy Bypass -File python\setup.ps1   # once, needs internet
+powershell -ExecutionPolicy Bypass -File python\serve.ps1   # each session
+```
+
+Then **Settings → Voice → Transcription → "This machine, with local Whisper"**.
+The panel has a **Check the local transcriber** button that reports what the
+service says about itself, so you find out before relying on it rather than
+mid-sentence.
+
+`setup.ps1` installs into `python\.venv`, so nothing touches your system Python
+and no administrator rights are needed; deleting the folder undoes it. The model
+downloads on first use (about 150 MB for `base`; set `XANA_STT_MODEL=tiny` for a
+smaller, faster one). See **[python/README.md](python/README.md)**.
+
+**What changes when it is on.** Audio is recorded locally, the end of your
+sentence is found from the waveform rather than a timer, and the clip goes to
+`127.0.0.1` — nowhere else. There is no network round trip to be blocked, so it
+works offline. It is slower than the browser's service when that service works,
+which is why the browser stays the default.
+
+Hands-free listening gets a local engine too: it records each utterance, transcribes
+it here, and looks for her name in the result. "Xana, what's the weather" is
+handled in a single pass; said alone, the next sentence becomes the request
+without needing the name again.
 
 ### DeepSeek, and what it cannot do
 

@@ -137,6 +137,8 @@ export const DEFAULT_SETTINGS: XanaSettings = {
     wakeEnabled: false,
     // Empty means the built-in phrase list in `wake-word.ts`.
     wakePhrases: "",
+    // Browser by default: faster where it works, and it needs no install.
+    transcribe: "browser",
   },
   /**
    * The model defaults to DeepSeek, and to *switched off*.
@@ -307,6 +309,7 @@ export function coerceSettings(raw: unknown): XanaSettings {
       // megabyte of phrase list would be fed to the matcher on every interim
       // transcript.
       wakePhrases: str(voice.wakePhrases, "").slice(0, 300),
+      transcribe: voice.transcribe === "local" ? "local" : "browser",
     },
     model: {
       enabled: bool(model.enabled, false),
@@ -711,6 +714,7 @@ export function mergePatch(
     if (typeof p.persona === "string") next.voice.persona = p.persona.slice(0, 8000);
     if (typeof p.wakeEnabled === "boolean") next.voice.wakeEnabled = p.wakeEnabled;
     if (typeof p.wakePhrases === "string") next.voice.wakePhrases = p.wakePhrases.slice(0, 300);
+    if (p.transcribe === "local" || p.transcribe === "browser") next.voice.transcribe = p.transcribe;
   }
 
   if (patch.model) {

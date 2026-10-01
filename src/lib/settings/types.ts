@@ -88,6 +88,20 @@ export interface VoiceSettings {
   /** Empty means the built-in persona. */
   persona: string;
   /**
+   * Transcribe speech on this machine instead of through the browser.
+   *
+   * Off by default because it needs a separate program running
+   * (`python/serve.ps1`) — but it is the ONLY path that works on a network where
+   * the browser's speech service is unreachable, where recognition fails with
+   * `network` no matter how good the microphone is. Diagnosed, not assumed: the
+   * flight recorder showed ten consecutive `network` errors with a microphone
+   * that opened every time.
+   *
+   * `browser` is the honest fallback, not the preference. Where the browser's
+   * service works it is faster and needs no install, so it stays the default.
+   */
+  transcribe: "browser" | "local";
+  /**
    * Keep a recogniser open and answer when she is addressed by name.
    *
    * Off by default, and deliberately so. This holds the microphone open

@@ -48,6 +48,8 @@ export interface ShellSettings {
     wakeEnabled: boolean;
     /** Comma-separated ways of saying her name; empty means the built-in list. */
     wakePhrases: string;
+    /** "local" transcribes on this machine; "browser" uses the browser's service. */
+    transcribe: "browser" | "local";
   };
   /** Adapter id -> state, for the Connections screen. */
   statuses: Record<string, { state: string; mode: string; detail?: string }>;
@@ -141,6 +143,7 @@ export function useShellSettings(
       pitch: view?.voice.pitch ?? 1,
       wakeEnabled: view?.voice.wakeEnabled ?? false,
       wakePhrases: view?.voice.wakePhrases ?? "",
+      transcribe: view?.voice.transcribe ?? "browser",
     }),
     [view],
   );
