@@ -438,13 +438,19 @@ appears to do nothing.
 
 ### A local transcriber, for when the cloud path is blocked
 
-`python/xana_stt.py` is an optional local Whisper service, so transcription can
-happen on this machine with no key, no cloud and no account. It is what the mic
-button and hands-free listening fall back to when the browser's speech service is
-unreachable — a school or office network, a hardened browser build, or being
-offline. See **[python/README.md](python/README.md)** for the setup; the short
-version is `pip install faster-whisper` then `python/serve.ps1`. The model
-downloads once, on first use.
+`python/xana_stt.py` is an optional local Whisper service — no key, no cloud, no
+account — for the case where the browser's speech service is unreachable: a
+school or office network, a hardened browser build, or being offline. See
+**[python/README.md](python/README.md)** for the setup; the short version is
+`pip install faster-whisper` then `python/serve.ps1`. The model downloads once,
+on first use.
+
+**It is built and tested but not yet wired into the composer.** The browser's own
+recognition is still the only path the mic button and hands-free listening take,
+so if that path is blocked, dictation does not work yet — the service is ready
+for the recording path that will replace it, and `/xana/mic` is how you find out
+whether you need it. Saying this plainly because the alternative is a README that
+promises a fallback which does not exist.
 
 ### DeepSeek, and what it cannot do
 
