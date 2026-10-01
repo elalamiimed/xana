@@ -480,6 +480,35 @@ npm run verify:crypto        # the keyless quote path, on a stubbed CoinGecko
 npm run verify:health-bridge # the phone door: token, statuses, day upserts
 ```
 
+Three scripts are for operating her rather than verifying her, and they are the
+ones to reach for when a connection looks wrong. They are not in `check`,
+because each one either writes to your real settings or needs a server:
+
+```bash
+node scripts/grant-connections.mjs [id ...]   # grant, one connection at a time
+node scripts/pull-now.mjs                     # force a read, show what each got
+node scripts/probe-status-rows.mjs 40         # is the one-row-per-connection rule holding?
+```
+
+- `scripts/grant-connections.mjs` — grants through `POST /api/connections`, one
+  `{ id, action }` per connection, which is the same call the Allow button makes.
+  It runs two passes because capabilities accumulate: `weather` needs `net.read`
+  **and** `location`, so its first grant leaves it half-allowed, and the second
+  pass picks up whatever the first unblocked. It never grants a write capability
+  — `local.write`, `net.write` and `remote.write` are absent unless you ask for
+  them by id through the API or the panel.
+- `scripts/pull-now.mjs` — `?force=1` and then a row per connection with its
+  state, provenance and detail, plus the assembled values (weather, finance,
+  calendar, health, focus, patterns). This is the answer to "did my grant do
+  anything", and it distinguishes the three things a blocked-looking row can be:
+  **blocked** (no permission), **local** (permitted, nothing configured yet), and
+  **error** (permitted and configured, and the host did not answer).
+- `scripts/probe-status-rows.mjs` — hammers `/api/context` and checks that the
+  status array never has fewer rows than there are connections. Written to chase
+  one intermittent `verify:web` failure; it found nothing in 40 samples and the
+  assertion was left as it was, because the rule it checks is real. It exists so
+  the next occurrence can be read instead of guessed at.
+
 - `npm run typecheck` — `tsc --noEmit`, strict, no `any`, no `@ts-ignore`.
 - `npm run demo` — drives the real stack end to end on a throwaway database:
   time parsing, capture, scheduling, recall, habits, goals, reflection,

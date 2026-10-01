@@ -17,7 +17,7 @@
  */
 
 import type { AdapterStatus, FinanceSignal } from "../core/types";
-import { cred, defineAdapter, errorMessage, httpJson, status, type LifeAdapter } from "./types";
+import { cred, defineAdapter, hostOf, httpJson, reachFailure, status, type LifeAdapter } from "./types";
 
 const DEFAULT_COINS = ["bitcoin", "ethereum", "solana"];
 
@@ -178,16 +178,20 @@ export function cryptoAdapter(): LifeAdapter {
     }
 
     let rows: CoinQuote[];
+    // Named rather than inlined so a failure can say which host went quiet.
+    // Both quote connections fail the same way when a network blocks them, and
+    // a row reading only "timed out" sends the reader looking at their coin
+    // list instead of at the connection.
+    const url =
+      `https://api.coingecko.com/api/v3/simple/price?ids=${coins.join(",")}` +
+      `&vs_currencies=usd&include_24hr_change=true`;
     try {
       // The ids need no escaping: `ID_SHAPE` above admitted nothing else.
-      const url =
-        `https://api.coingecko.com/api/v3/simple/price?ids=${coins.join(",")}` +
-        `&vs_currencies=usd&include_24hr_change=true`;
       rows = parseCoinGecko(await httpJson<unknown>(url, { timeoutMs: 6000 }));
     } catch (err) {
       return {
         data: { finance: [] },
-        status: status(id, label, "error", "local", errorMessage(err), Date.now() - t0),
+        status: status(id, label, "error", "local", reachFailure(hostOf(url), err), Date.now() - t0),
       };
     }
 

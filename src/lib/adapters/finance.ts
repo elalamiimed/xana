@@ -10,7 +10,7 @@
  */
 
 import type { AdapterStatus, FinanceSignal } from "../core/types";
-import { cred, defineAdapter, errorMessage, httpText, status, type LifeAdapter } from "./types";
+import { cred, defineAdapter, hostOf, reachFailure, httpText, status, type LifeAdapter } from "./types";
 
 const DEFAULT_SYMBOLS = ["^spx", "^ndq", "eurusd", "gbpusd"];
 
@@ -80,10 +80,9 @@ export function financeAdapter(): LifeAdapter {
 
     await Promise.all(
       symbols.slice(0, 6).map(async (sym) => {
+        const url = `https://stooq.com/q/d/l/?s=${encodeURIComponent(sym)}&i=d`;
         try {
-          const csv = await httpText(`https://stooq.com/q/d/l/?s=${encodeURIComponent(sym)}&i=d`, {
-            timeoutMs: 5000,
-          });
+          const csv = await httpText(url, { timeoutMs: 5000 });
           const q = parseStooqCsv(csv, sym);
           if (!q) {
             failures.push(`${sym}: no data`);
@@ -97,7 +96,10 @@ export function financeAdapter(): LifeAdapter {
             note: q.date,
           });
         } catch (err) {
-          failures.push(`${sym}: ${errorMessage(err)}`);
+          // The host is named so the row can be acted on: every symbol here
+          // fails together when stooq is blocked, and "timed out" alone reads
+          // like a bug in the app rather than a block between here and there.
+          failures.push(`${sym}: ${reachFailure(hostOf(url), err)}`);
         }
       }),
     );

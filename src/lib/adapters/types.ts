@@ -215,3 +215,35 @@ export function errorMessage(err: unknown): string {
   }
   return String(err);
 }
+
+/**
+ * The host a request was aimed at, and whether it answered at all.
+ *
+ * A status row that says "timed out" is the least useful sentence in the app: it
+ * cannot be told apart from a wrong URL, a revoked key, or a provider outage,
+ * and the reader is left guessing which of their own settings to change. It is
+ * almost always the network between here and there — a firewall, a VPN, a
+ * container with no egress, or a sandbox that denies the host — and none of
+ * those is visible from inside the app.
+ *
+ * So the sentence names the host and states what it implies. It deliberately
+ * does **not** claim the host is unreachable as a fact: `fetch` cannot tell "no
+ * route" from "took longer than my timeout", and pretending otherwise would be
+ * the same mistake in a more confident voice. `hostOf` returning an empty string
+ * means the caller did not pass a URL, and then the plain message stands.
+ */
+export function reachFailure(host: string, err: unknown): string {
+  const message = errorMessage(err);
+  if (host.length === 0) return message;
+  if (message !== "timed out") return `${host}: ${message}`;
+  return `${host} did not answer — check this machine's network or a block on that host`;
+}
+
+/** The hostname of a URL, or "" when it cannot be read. */
+export function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return "";
+  }
+}
