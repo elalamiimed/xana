@@ -18,9 +18,19 @@ import { cred, defineAdapter, status, type LifeAdapter } from "./types";
 
 const MOODS: MoodLabel[] = ["low", "flat", "good", "bright"];
 
-function asMood(v: unknown): MoodLabel | undefined {
-  if (typeof v !== "string") return undefined;
-  const s = v.toLowerCase().trim();
+/**
+ * Exported because a JSON *body* reaches the same vocabulary by a different road.
+ *
+ * A file always holds mood as a string — `"bright"`, `"7"` — so this branch on
+ * `typeof v !== "string"` is invisible to the file path. A request body is
+ * already parsed, so a phone posting `mood: 7` hands over a number, and a second
+ * copy of this function in `health-bridge.ts` would have dropped it while the
+ * file path kept it. The two doors must not disagree about the same sample, so
+ * the mapping is shared: there is no second copy to drift.
+ */
+export function asMood(v: unknown): MoodLabel | undefined {
+  if (typeof v !== "string" && typeof v !== "number") return undefined;
+  const s = String(v).toLowerCase().trim();
   if ((MOODS as string[]).includes(s)) return s as MoodLabel;
   // Numeric-ish mood labels from various exporters.
   const n = Number(s);

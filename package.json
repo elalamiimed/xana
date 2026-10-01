@@ -26,6 +26,8 @@
     "verify:nudges": "node --import ./scripts/ts-loader.mjs scripts/check-nudges.ts",
     "verify:refresh": "node --import ./scripts/ts-loader.mjs scripts/check-refresh.ts",
     "verify:plugins": "node --import ./scripts/ts-loader.mjs scripts/check-plugins.ts",
+    "verify:crypto": "node --import ./scripts/ts-loader.mjs scripts/check-crypto.ts",
+    "verify:health-bridge": "node --import ./scripts/ts-loader.mjs scripts/check-health-bridge.ts",
     "check:encoding": "node scripts/check-encoding.mjs",
     "check:bundle": "node scripts/check-bundle.mjs",
     "debug:key": "node scripts/debug-key.mjs",

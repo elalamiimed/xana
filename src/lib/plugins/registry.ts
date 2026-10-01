@@ -49,6 +49,7 @@ import { healthAdapter } from "../adapters/health";
 import { weatherAdapter } from "../adapters/weather";
 import { mediaAdapter } from "../adapters/media";
 import { financeAdapter } from "../adapters/finance";
+import { cryptoAdapter } from "../adapters/crypto";
 import { mailAdapter } from "../adapters/mail";
 
 import { googleCalendarPlugin } from "./google-calendar";
@@ -254,17 +255,18 @@ const DESCRIPTORS: PluginDescriptor[] = [
     id: "health",
     name: "Health export",
     category: "life",
-    // A folder of exports you drop on this machine. The phone that produces
-    // them posts to the ingest endpoint instead, which is the same plugin's
-    // device half — see `health-bridge.ts`.
+    // A folder of exports you drop on this machine, plus the phone that posts
+    // to the ingest endpoint — the same plugin's device half, reached through
+    // `health-bridge.ts`. One card, because "where my sleep comes from" is one
+    // question, however many doors the numbers arrive through.
     kind: "source",
     // NOT core: an export folder is outside her store. Readings you log by hand
     // live in `xana.db` and are never gated — that is the half worth keeping
     // unasked, and it is why the energy forecast still works on a fresh install.
-    tagline: "Sleep and activity from a folder of exports.",
+    tagline: "Sleep and activity, from an export folder or straight from your phone.",
     dataNote:
-      "Reads JSON and CSV exports from a folder on this machine. Nothing leaves it. Readings and meals you log by hand are always kept.",
-    provides: "Sleep average, sleep debt and mood trend, which feed the energy forecast.",
+      "Reads JSON and CSV exports from a folder on this machine, and accepts small JSON posts from a phone on your own network. A phone post needs the token below and nothing else — no account, no cloud, no permission. Either way the readings land only in Xana's own database, and readings you log by hand are always kept.",
+    provides: "Sleep average, sleep debt and mood trend, which feed the energy forecast — plus whatever your phone sends.",
     needs: [
       { kind: "local.read", reason: "Read your Apple Health or Google Fit export." },
     ],
@@ -275,6 +277,25 @@ const DESCRIPTORS: PluginDescriptor[] = [
         hint: "Where the JSON and CSV exports live.",
         kind: "path",
         example: "C:\\Users\\you\\Health",
+      },
+      {
+        key: "health.deviceToken",
+        label: "Phone token",
+        hint: "A bearer secret for your phone. Xana generates one on first use — do not retype it. Point your phone at POST /api/health/ingest with this in the X-Device-Token header. Anyone holding it can post readings.",
+        kind: "text",
+        // Not required, and that is the honest answer: the server generates one
+        // on first use, so a card that read "not ready" until the user invented
+        // a secret would make a working feature look broken. `text` rather than
+        // `secret` is deliberate too — a secret is never echoed back, and this
+        // value exists to be copied onto a phone.
+        required: false,
+      },
+      {
+        key: "health.ingest",
+        label: "Accept posts from your phone",
+        hint: 'Type "on" to open the endpoint. Anything else is off. The token above is the only other thing needed — no permission is required for this path.',
+        kind: "text",
+        example: "on",
       },
     ],
   },
@@ -381,6 +402,38 @@ const DESCRIPTORS: PluginDescriptor[] = [
         kind: "text",
         example: "aapl.us, msft.us, btcusd",
         required: true,
+      },
+    ],
+  },
+  {
+    id: "crypto",
+    name: "Crypto",
+    category: "signal",
+    // Keyless like the markets, and listed separately because the two answer
+    // different questions: a ticker list is a portfolio, a coin list is a price
+    // check. Both land in the same signals on the card.
+    kind: "service",
+    tagline: "Coin prices beside the markets, with no key to paste.",
+    dataNote:
+      "Sends the coin ids you list to api.coingecko.com. The list is visible to them; nothing else is sent, and no key or account is involved.",
+    provides: "A line per coin — its price and 24h move — in the same signals as the markets.",
+    needs: [
+      {
+        kind: "net.read",
+        reason: "Fetch coin prices.",
+        hosts: ["api.coingecko.com"],
+      },
+    ],
+    config: [
+      {
+        key: "crypto.coins",
+        label: "Coins",
+        hint: "CoinGecko ids, comma separated. Empty means bitcoin, ethereum and solana.",
+        kind: "text",
+        example: "bitcoin, ethereum, solana",
+        // Not required: the adapter has a usable default, so marking this
+        // required would leave a working connection reading "not ready".
+        required: false,
       },
     ],
   },
@@ -696,6 +749,8 @@ function adapterFor(
       return mailAdapter({ knownPeople: people, mayFetch: gates.network });
     case "markets":
       return financeAdapter();
+    case "crypto":
+      return cryptoAdapter();
     default:
       throw new Error(`No adapter for plugin "${id}"`);
   }

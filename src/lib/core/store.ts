@@ -1208,6 +1208,28 @@ export class XanaStore {
       .reverse();
   }
 
+  /**
+   * The newest health row's day and where it came from.
+   *
+   * One cheap question, asked by the device half of the health plugin: *has
+   * anything a phone sent ever actually arrived?* The panel cannot answer it from
+   * `healthSamples()`, which returns 30 days and no provenance summary, and it
+   * must not guess — "no readings from your phone yet" printed over a table full
+   * of them is exactly the kind of lie this exists to prevent.
+   *
+   * Ordered by day, not by insertion time: days are the table's key and its
+   * ordering, so the newest row is the newest *day*, which is what the panel is
+   * talking about. A hand-logged energy reading for today would outrank a phone
+   * post for yesterday, and correctly so.
+   */
+  lastHealthSource(): { day: string; source: string } | undefined {
+    const row = this.db
+      .prepare(`SELECT day, source FROM health_samples ORDER BY day DESC LIMIT 1`)
+      .get() as Row | undefined;
+    if (!row) return undefined;
+    return { day: String(row.day), source: String(row.source) };
+  }
+
   /* ---------------- conversation ---------------- */
 
   logMessage(role: string, text: string, sessionId?: string, meta?: unknown): void {
