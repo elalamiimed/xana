@@ -46,6 +46,15 @@ export interface SpeechRecognizer {
   continuous: boolean;
   interimResults: boolean;
   maxAlternatives: number;
+  /**
+   * Recognise on the device instead of through the browser's speech service.
+   *
+   * An addition to the Web Speech API rather than part of it, and only honoured
+   * where the browser ships an on-device model — see `hasOnDeviceRecognition`.
+   * Setting it where there is no model makes `start()` fail, which is why it is
+   * opt-in here rather than always on.
+   */
+  processLocally?: boolean;
   start(): void;
   stop(): void;
   abort(): void;
@@ -70,6 +79,72 @@ export function getSpeechRecognition(): RecognizerConstructor | null {
   if (typeof window === "undefined") return null;
   const scope = window as unknown as SpeechWindow;
   return scope.SpeechRecognition ?? scope.webkitSpeechRecognition ?? null;
+}
+
+/**
+ * Whether this browser can recognise speech *on the device*, without a cloud
+ * round trip.
+ *
+ * Edge shipped an on-device model behind a flag, and the API that exposes it is
+ * two static methods on the constructor rather than a per-instance option, so
+ * the only honest test is their presence. Reported rather than assumed: the
+ * sentence "your voice never leaves this machine" is a claim about an
+ * implementation, and making it without asking would be a lie in the case where
+ * the browser quietly sends the audio to a server instead.
+ *
+ * `processLocally` is deliberately NOT forced on. Setting it where the model is
+ * absent makes recognition fail outright, and a mic that works through the
+ * browser's own service is better than a mic that does nothing — so the panel
+ * says which one is in use and the user decides whether that is acceptable.
+ */
+export function hasOnDeviceRecognition(): boolean {
+  if (typeof window === "undefined") return false;
+  const scope = window as unknown as SpeechWindow;
+  const ctor = scope.SpeechRecognition ?? scope.webkitSpeechRecognition;
+  if (!ctor) return false;
+  const withStatics = ctor as unknown as {
+    available?: unknown;
+    install?: unknown;
+  };
+  return typeof withStatics.available === "function" && typeof withStatics.install === "function";
+}
+
+/**
+ * Why dictation stopped, in words a person can act on.
+ *
+ * This exists because the first version of the mic treated every failure as
+ * nothing at all: `onerror` called `stopDictation()` and said no more, so a
+ * denied permission, a browser with no speech service configured, and a
+ * microphone another app was holding all looked identical — like a button that
+ * does not work. None of them is the app's fault, and all of them are fixable by
+ * the person sitting in front of it, so the reason is carried out to the UI
+ * rather than swallowed.
+ *
+ * `not-allowed` and `service-not-allowed` are the two worth telling apart: the
+ * first is a permission the user can grant in one click, the second usually
+ * means the browser cannot reach its speech service at all (Brave, some hardened
+ * Chromium builds, and anything offline).
+ */
+export function dictationFailure(error: string, onDevice: boolean): string {
+  switch (error) {
+    case "not-allowed":
+    case "permission-denied":
+      return "That needs microphone access. Allow it for this page, then press the mic again.";
+    case "service-not-allowed":
+      return "This browser will not run speech recognition. Edge or Chrome will; Brave and some hardened builds disable it.";
+    case "no-speech":
+      return "I did not hear anything. Press the mic and speak.";
+    case "audio-capture":
+      return "No microphone was found. Check that one is plugged in and not in use by another app.";
+    case "network":
+      return onDevice
+        ? "The on-device model stopped. Try again."
+        : "Speech recognition needs a working connection in this browser — the audio is sent to the browser's own service, not to Xana.";
+    case "aborted":
+      return "";
+    default:
+      return "Dictation stopped.";
+  }
 }
 
 /** Flattens a result list into the transcript accumulated so far. */

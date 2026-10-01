@@ -338,6 +338,7 @@ belongs to the connection that owns it.
 | Variable | Effect when set |
 |---|---|
 | `XANA_LLM_API_KEY` | Enables the generative voice |
+| `DEEPSEEK_API_KEY` / `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GROQ_API_KEY` / `OPENROUTER_API_KEY` / `TOGETHER_API_KEY` | The same, with the endpoint implied by the variable's name — so a DeepSeek key is never sent to OpenAI. `XANA_LLM_API_KEY` outranks these and implies no endpoint, so pair it with `XANA_LLM_BASE_URL` |
 | `XANA_LLM_BASE_URL` / `_MODEL` / `_PROVIDER` | Any OpenAI-compatible endpoint (OpenAI, DeepSeek, Groq, OpenRouter, Ollama, llama.cpp) or Anthropic |
 | `XANA_CALENDAR_ICS_URLS` | Live calendar from any published ICS feed (Google, Outlook, Fastmail). Comma-separated. Superseded by `calendar.icsUrls` |
 | `XANA_TODOIST_TOKEN` | Merges Todoist tasks with the local list. Superseded by `tasks.token` |
@@ -354,6 +355,66 @@ Environment variables do **not** grant permission. A token in your shell and an
 ungranted `net.read` means the token is read and nothing is fetched — the
 capability is stored in the settings file only, precisely so that reaching into
 your environment is not a way to widen what Xana may do.
+
+### Voice: how she listens and speaks
+
+**Neither direction needs an API key, and neither sends audio to the model.**
+This is worth stating plainly because "make the AI talk" usually means paying for
+a speech service, and here it does not.
+
+**She speaks** through `speechSynthesis` — the voices Windows and your browser
+already have installed. Turn it on in **Settings → Voice** and pick one; the
+voice, rate and pitch are controls, and each has a sample button. The text is
+stripped of markdown first, so a briefing does not read out "dash energy colon".
+
+**She listens** through the browser's `SpeechRecognition` API, which is the mic
+button beside the input. It is rendered only in a browser that has the API, and
+it writes into the same field you would type into — dictation is a way to fill
+the composer, not a separate conversation mode.
+
+There are **two ways that recognition can run**, and the difference is a privacy
+one rather than a quality one:
+
+| | Where the audio goes | What it needs |
+|---|---|---|
+| **Cloud** | to the *browser's own* speech service — never to Xana, never to DeepSeek, no key involved | a working connection |
+| **On-device** | nowhere; it is transcribed on this machine | Edge Dev/Canary 150.0.4076+ with `edge://flags` → *Speech Recognition with on-device model* → Enabled (the first use downloads the model) |
+
+Xana prefers the browser default and **does not force on-device recognition**,
+because setting it where no model is installed makes recognition fail outright —
+a mic that works is better than a mic that is private and dead. It detects the
+on-device model when it is there and switches to it automatically if the cloud
+path fails, and the reason for any failure is shown above the input: a denied
+permission, a browser with no speech service, and an unplugged headset each get
+their own sentence rather than a button that appears to do nothing.
+
+### DeepSeek, and what it cannot do
+
+`DEEPSEEK_API_KEY` in `.env` is enough to switch her voice on: the variable's
+name selects the endpoint, so it resolves to `https://api.deepseek.com/v1` and
+`deepseek-chat` without a second setting, and `deepseek-reasoner` is one
+`XANA_LLM_MODEL` away. Paste it, then switch the model on in **Settings → Model
+& key** — a key on its own is deliberately not enough, so an `OPENAI_API_KEY`
+exported for some other tool is never spent by accident.
+
+**DeepSeek has no audio endpoint.** Its API is text in, text out: no
+speech-to-text, no text-to-speech, no transcription model. So audio cannot be
+routed through the model at all, which is why both directions are handled in the
+browser instead — and why the voice features above work with **no key
+whatsoever**, including with the local engine answering every turn.
+
+If you ever want transcription of an *audio file* rather than the microphone,
+that is a server-side job none of the browser APIs cover, and it needs a
+provider that has one:
+
+| Provider | Model | Notes |
+|---|---|---|
+| [Groq](https://console.groq.com/keys) | `whisper-large-v3` | free tier, fastest of the three |
+| [OpenAI](https://platform.openai.com/api-keys) | `gpt-4o-mini-transcribe` | paid, cheap |
+| local Whisper | `whisper.cpp` | no key, no network, best privacy, needs setup |
+
+Nothing in Xana calls any of them today. `.env.example` names where such a key
+would go, so the file is not a mystery when that changes.
 
 ### Crypto
 

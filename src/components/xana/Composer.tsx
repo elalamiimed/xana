@@ -10,7 +10,9 @@ import {
 } from "react";
 
 import {
+  dictationFailure,
   getSpeechRecognition,
+  hasOnDeviceRecognition,
   transcriptFrom,
   type SpeechRecognizer,
 } from "./speech";
@@ -21,6 +23,20 @@ import {
  * Enter sends, Shift+Enter breaks the line. The mic exists only where the
  * Web Speech API does — a dead control is worse than no control, so when
  * `getSpeechRecognition()` returns null the button is not rendered at all.
+ *
+ * WHEN THE MIC FAILS, IT SAYS WHY
+ *
+ * It did not, and that made a working feature look broken. `onerror` threw the
+ * reason away, so a denied microphone permission, a browser with no speech
+ * service, and an unplugged headset were indistinguishable from a button that
+ * does nothing. Dictation is still a convenience — it never raises anything at
+ * the user, and nothing here blocks sending a typed line — but a convenience
+ * that fails silently is worse than one that is not offered, because the user
+ * has no way to tell which of their own settings to change.
+ *
+ * One recovery is attempted automatically: if the failure is one the on-device
+ * model can serve and this browser has that model, dictation restarts with
+ * `processLocally`, so the network is no longer in the path.
  */
 
 export interface ComposerHandle {
@@ -40,11 +56,16 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
 ) {
   const [value, setValue] = useState("");
   const [dictating, setDictating] = useState(false);
+  const [dictationNote, setDictationNote] = useState<string | null>(null);
   /** The transcript that was in the field when dictation started. */
   const baseText = useRef("");
   const recognizer = useRef<SpeechRecognizer | null>(null);
   const textarea = useRef<HTMLTextAreaElement | null>(null);
   const [micAvailable, setMicAvailable] = useState(false);
+  /** Whether this browser can recognise speech without leaving the machine. */
+  const [onDevice, setOnDevice] = useState(false);
+  /** Set once the on-device retry has been tried, so it cannot loop. */
+  const triedLocally = useRef(false);
 
   useImperativeHandle(
     ref,
@@ -59,6 +80,7 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
   // no `window`, and a mismatch here would desync hydration.
   useEffect(() => {
     setMicAvailable(getSpeechRecognition() !== null);
+    setOnDevice(hasOnDeviceRecognition());
   }, []);
 
   const stopDictation = useCallback(() => {
@@ -67,16 +89,22 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
     recognizer.current = null;
   }, []);
 
-  const startDictation = useCallback(() => {
-    const Recognition = getSpeechRecognition();
-    if (!Recognition) return;
-
-    baseText.current = value;
-    const instance = new Recognition();
+  /**
+   * The two things every recognizer this component starts has in common.
+   *
+   * Split out so the on-device retry below is the same recognizer with one
+   * option changed, rather than a second copy of the wiring that could drift
+   * from the first.
+   */
+  const buildRecognizer = useCallback((instance: SpeechRecognizer, local: boolean): void => {
     instance.lang = navigator.language || "en-US";
+    // Not continuous: one press, one utterance. A recognizer that stays open
+    // holds the microphone indicator on, which reads as the app listening
+    // when it is not.
     instance.continuous = false;
     instance.interimResults = true;
     instance.maxAlternatives = 1;
+    if (local) instance.processLocally = true;
 
     instance.onresult = (event) => {
       const heard = transcriptFrom(event);
@@ -84,19 +112,51 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
       const prefix = baseText.current;
       setValue(prefix ? `${prefix} ${heard}` : heard);
     };
-    instance.onerror = () => {
-      // Dictation is a convenience. It never raises anything at the user.
+    instance.onerror = (event) => {
+      const reason = event?.error ?? "";
+      // Only the first failure of a session gets a recovery attempt, and only
+      // if there is a model that can serve it. Retrying on every error would
+      // spin against a permission the user has already refused.
+      const canRetryLocally =
+        !local && onDevice && !triedLocally.current && (reason === "network" || reason === "service-not-allowed");
+      if (canRetryLocally) {
+        triedLocally.current = true;
+        recognizer.current?.abort();
+        recognizer.current = null;
+        setDictationNote("That needed the browser's speech service. Switching to the on-device model — the first run downloads it.");
+        const Recognition = getSpeechRecognition();
+        if (Recognition) {
+          const retry = new Recognition();
+          buildRecognizer(retry, true);
+          recognizer.current = retry;
+          setDictating(true);
+          retry.start();
+          return;
+        }
+      }
+      const message = dictationFailure(reason, local);
+      if (message) setDictationNote(message);
       stopDictation();
     };
     instance.onend = () => {
       setDictating(false);
       recognizer.current = null;
     };
+  }, [onDevice, stopDictation]);
+
+  const startDictation = useCallback(() => {
+    const Recognition = getSpeechRecognition();
+    if (!Recognition) return;
+
+    baseText.current = value;
+    setDictationNote(null);
+    const instance = new Recognition();
+    buildRecognizer(instance, false);
 
     recognizer.current = instance;
     setDictating(true);
     instance.start();
-  }, [stopDictation, value]);
+  }, [buildRecognizer, value]);
 
   // A recognizer left running across an unmount keeps the microphone open.
   useEffect(() => {
@@ -111,6 +171,9 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
       const text = value.trim();
       if (!text || busy) return;
       if (dictating) stopDictation();
+      // A failed dictation has been read by now. Leaving the note up while the
+      // reply arrives would attach an old explanation to a new turn.
+      setDictationNote(null);
       onSubmit(text, modality);
       setValue("");
     },
@@ -118,13 +181,27 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
   );
 
   return (
-    <form
-      onSubmit={(event) => {
-        event.preventDefault();
-        submit("text");
-      }}
-      className="relative flex w-full items-end gap-2 rounded-full border border-hairline bg-surface px-5 py-3 transition-colors duration-[var(--t-fast)] focus-within:border-accent/24"
-    >
+    <div className="relative w-full">
+      {/* Why dictation stopped, above the field rather than inside it: the pill
+          is one line tall and a paragraph in it would push the textarea around
+          while the user is mid-sentence. `aria-live` so the reason is announced
+          rather than only drawn. */}
+      {dictationNote ? (
+        <p
+          aria-live="polite"
+          className="absolute inset-x-4 bottom-full mb-2 text-[12px] leading-relaxed font-normal text-warn"
+        >
+          {dictationNote}
+        </p>
+      ) : null}
+
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          submit("text");
+        }}
+        className="relative flex w-full items-end gap-2 rounded-full border border-hairline bg-surface px-5 py-3 transition-colors duration-[var(--t-fast)] focus-within:border-accent/24"
+      >
       <label htmlFor="xana-composer" className="sr-only">
         Ask Xana
       </label>
@@ -201,7 +278,8 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
           </svg>
         </button>
       ) : null}
-    </form>
+      </form>
+    </div>
   );
 });
 
