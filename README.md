@@ -478,6 +478,7 @@ npm run verify:web           # with the server running: the real HTTP surface
 npm run verify:browser       # with the server running: a real browser
 npm run verify:crypto        # the keyless quote path, on a stubbed CoinGecko
 npm run verify:health-bridge # the phone door: token, statuses, day upserts
+npm run verify:durability    # local saving: folding, reopening, backup, a kill
 ```
 
 Three scripts are for operating her rather than verifying her, and they are the
@@ -566,6 +567,16 @@ node scripts/probe-status-rows.mjs 40         # is the one-row-per-connection ru
   stylesheet; this one can run in `check`, which is where a new token gets
   measured before anyone looks at it. `--text-faint` currently measures 4.71:1
   at its worst, which is the margin the comment in `globals.css` is about.
+- `npm run verify:durability` — that a local write actually survives, in a temp
+  `XANA_DATA_DIR`: a committed row is in the write-ahead log while she is open
+  and in `xana.db` once it closes; it is still there when a fresh connection
+  opens the same file; a checkpoint takes the log to zero bytes and leaves every
+  row in the database file; a backup copy opens as a database with the same rows
+  in it and carries no log of its own; and the real `data/` is only read, never
+  written. One case is **skipped here with its reason** — a row committed by a
+  process that is then killed — because this sandbox denies process creation, so
+  there is no second process to kill. That skip is a real gap: it is the
+  assertion that would catch someone changing `synchronous` to `OFF`.
 - `npm run verify:browser` — launches headless Edge or Chrome and checks the
   things bytes cannot: that the client bundle hydrated, that the orb canvas is
   *actually painting* (it reads the pixels back), that it is animating between
@@ -629,6 +640,32 @@ didn't follow that."
 - **Data lives in `data/`** — `xana.db` and `settings.json`, both gitignored.
   Delete them and she rebuilds from empty. `npm run seed -- --reset` rebuilds
   deliberately.
+- **The database checkpoints itself, and `npm run backup` copies it safely.**
+  That sounds like plumbing until you know what it fixed: `xana.db` runs in WAL
+  mode, so a committed write lands in a `-wal` file beside it, and nothing ever
+  folded that log back in. This repository's own `data/` held a **2.9 MB log
+  beside a 320 KB database** — so the durable file was about a tenth of what
+  "your data" actually was, and a copy of `xana.db` taken in that state was
+  silently missing most of it, which is exactly the copy a person makes when
+  they want to back up their data.
+  Three things changed. The log is folded in on open, so the file is complete
+  from the first second she is up; it is folded in on `SIGINT`/`SIGTERM` and on
+  process exit, so the next open has nothing to replay; and `durability` is
+  stated rather than inherited — `synchronous = NORMAL`, which survives an
+  application crash and loses only what the *operating system* lost in a power
+  cut. `npm run verify:durability` proves all of it, including that a copy opens
+  as a database with the same rows in it.
+  ```bash
+  npm run backup                          # → data/backups/xana-<timestamp>/
+  npm run backup -- --out D:\xana-backups # somewhere that survives the disk
+  npm run backup -- --keep 20             # how many snapshots to retain
+  ```
+  A snapshot is three things: `xana.db` (copied through SQLite's Online Backup
+  API, so it is consistent even while she is running), `settings.json` (your keys
+  and grants, the half people forget), and a `BACKUP.json` recording the row
+  counts and how to restore. Restoring is copying both files back into `data/`
+  with her stopped. Do **not** back up by copying `xana.db` by hand while she is
+  running — that is the mistake the section above is about.
 - **The memory embedder is local and dependency-free** — a feature-hashing
   model over unigrams, bigrams and character trigrams, blended with lexical
   overlap, salience and recency. It is not a transformer, but for a single

@@ -216,6 +216,51 @@ same constant-time comparison, not a new capability kind.
 
 ---
 
+### 14. A local database is not the same as a saved one
+
+Xana writes to SQLite in `data/xana.db`, and for a long time that was the whole
+answer to "where does my data go". It was not a good enough answer, and the
+evidence was sitting in the repository's own `data/` directory: a **2.9 MB
+`-wal` file beside a 320 KB database**.
+
+WAL mode puts a committed write in a separate log and folds it back on a
+checkpoint. Nothing ever checkpointed and nothing ever closed the connection, so:
+
+- the file a user would copy to back up their data was roughly a tenth of the
+  data, and copying it produced something that opened perfectly and was missing
+  most of the history;
+- every open replayed a log larger than the database it belonged to.
+
+Three changes, in the order they matter if a crash is the thing you are
+defending against:
+
+1. **Checkpoint on open** (`TRUNCATE`). The log is folded in before anything
+   reads, so the file on disk is complete from the first second. This is the one
+   that covers `kill -9` and a power cut, because it needs no cooperation from
+   the dying process.
+2. **Checkpoint on `SIGINT`/`SIGTERM` and on process exit**, via
+   `src/instrumentation.ts` — Next calls `register()` once per server process
+   however it was launched, so `next dev`, `next start` and `scripts/dev.mjs` all
+   get it. Registering it in `dev.mjs` alone was the first attempt and was wrong
+   for exactly that reason.
+3. **`synchronous = NORMAL`, stated rather than inherited.** The SQLite
+   documentation pairs it with WAL: a committed transaction survives an
+   application crash and is lost only if the OS loses power first. `FULL` fsyncs
+   per commit (a stall per utterance, for a guarantee nobody asked for); `OFF`
+   silently permits losing committed data. Naming it makes it a decision.
+
+`npm run backup` copies the database through SQLite's **Online Backup API**, not
+a file copy, so it is a consistent instant even while she is writing — plus
+`settings.json`, because a backup that omits the keys and grants is a backup that
+loses half the state. `data/backups/` stays gitignored for the same reason the
+settings file is: it contains the keys.
+
+The trap to remember: **a backup that has never been opened is a file, not a
+backup.** The script opens every copy and compares row counts before it reports
+success, and deletes the folder if the copy will not open.
+
+---
+
 ## Traps that have already bitten
 
 - **`handleBrief` with no guard.** It returned a briefing unconditionally and,

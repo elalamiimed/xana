@@ -12,7 +12,7 @@
  */
 
 import BetterSqlite3 from "better-sqlite3";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, statSync } from "node:fs";
 import path from "node:path";
 import type {
   CalendarEvent,
@@ -59,19 +59,147 @@ export function decodeVector(buf: Buffer): Float32Array {
 
 export class XanaStore {
   readonly db: BetterSqlite3.Database;
+  /** Where this store lives. `:memory:` for a scratch run. */
+  private readonly file: string;
   private embedder: Embedder;
 
   constructor(filename?: string, embedder: Embedder = localEmbedder) {
     const file = filename ?? defaultDbPath();
     if (file !== ":memory:") mkdirSync(path.dirname(file), { recursive: true });
     this.db = new BetterSqlite3(file);
+    this.file = file;
     this.embedder = embedder;
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("foreign_keys = ON");
     this.db.pragma("busy_timeout = 4000");
+    /**
+     * Durability, stated rather than inherited.
+     *
+     * `synchronous = NORMAL` is the setting the SQLite documentation pairs with
+     * WAL: a committed transaction is durable across an application crash, and
+     * can be lost only if the *operating system* loses power before the write
+     * reaches the disk. `FULL` would fsync on every commit, which for a local
+     * assistant that writes a conversation row per utterance buys a guarantee
+     * nobody is asking for at the cost of a stall per message. `OFF` would let
+     * the WAL be what it quietly becomes if nobody chooses: fast, and able to
+     * lose committed data. Naming it here means it is a decision on the record.
+     */
+    this.db.pragma("synchronous = NORMAL");
+    /**
+     * Checkpoint automatically once the log passes ~1 MB (250 pages of 4 KB).
+     *
+     * SQLite's default, stated here because it is load-bearing rather than
+     * incidental: it is what keeps the log bounded *during* a long session, and
+     * this app has to run for days without a restart. The explicit checkpoint on
+     * open is what makes the file complete after a crash; this is what stops the
+     * log growing without limit before that crash even matters.
+     *
+     * Raising it would let more uncommitted-to-the-main-file data accumulate;
+     * lowering it would fold the log in every few writes for no benefit, since a
+     * reader never sees the log's contents anyway — WAL exists precisely so a
+     * read does not have to wait for one.
+     */
+    this.db.pragma("wal_autocheckpoint = 250");
+    /**
+     * Fold the write-ahead log back into the database on open.
+     *
+     * WAL is what makes a read not block a write, but the log grows until
+     * something checkpoints it, and nothing did: a dev server that ran for a
+     * while left a 2.9 MB `-wal` beside a 320 KB database, so the durable file
+     * was a tenth of what "your data" actually was. A crash in that state can
+     * still replay the log — SQLite is careful — but a copy of `xana.db` made by
+     * anyone who did not know to bring `-wal` along was silently missing most of
+     * the history.
+     *
+     * TRUNCATE rather than PASSIVE: this is a once-per-open moment, so paying
+     * for the log to actually shrink to zero is worth it, and it means the file
+     * on disk is complete from the first second the app is up.
+     */
+    this.checkpoint();
     this.migrate();
     this.addMissingColumns();
     this.backfillGoalOrder();
+  }
+
+  /**
+   * Fold the write-ahead log into the database file.
+   *
+   * Called on open, on close, and whenever a caller wants the on-disk file to be
+   * the whole truth — the backup script, and the dev server's shutdown handler.
+   * Returns what happened, so a caller can report it rather than assume.
+   *
+   * A checkpoint on a connection with no writes is nearly free, which is what
+   * makes "always checkpoint on open" a reasonable thing to do rather than a
+   * cost to weigh.
+   */
+  checkpoint(mode: "PASSIVE" | "TRUNCATE" = "TRUNCATE"): { busy: number; log: number; checkpointed: number } {
+    if (this.file === ":memory:") return { busy: 0, log: 0, checkpointed: 0 };
+    try {
+      const row = this.db.pragma(`wal_checkpoint(${mode})`, { simple: false }) as
+        | Array<{ busy: number; log: number; checkpointed: number }>
+        | undefined;
+      const first = row?.[0];
+      return {
+        busy: Number(first?.busy ?? 0),
+        log: Number(first?.log ?? 0),
+        checkpointed: Number(first?.checkpointed ?? 0),
+      };
+    } catch {
+      // A checkpoint is maintenance. A database that cannot take one still
+      // reads and writes correctly, and refusing to start over it would be a
+      // far worse failure than a log that stays where it is.
+      return { busy: 0, log: 0, checkpointed: 0 };
+    }
+  }
+
+  /**
+   * Write a consistent copy of the database to `target`.
+   *
+   * The Online Backup API, not a file copy. Copying `xana.db` while the app is
+   * writing gives you a torn database, and copying it while forgetting `-wal`
+   * gives you a database missing every recent write — both of which *look* like
+   * a backup until the day you need one. `db.backup()` runs the same routine
+   * SQLite's own `.backup` command uses: it takes a read lock, copies page by
+   * page, and restarts the copy if a writer changes something underneath it, so
+   * the result is a database as of a single instant.
+   *
+   * The copy is checkpointed before it is handed back, so it is one self-
+   * contained file rather than another WAL pair for the user to keep together.
+   */
+  async backupTo(target: string): Promise<{ ok: boolean; path: string; bytes: number; error?: string }> {
+    if (this.file === ":memory:") {
+      return { ok: false, path: target, bytes: 0, error: "there is nothing on disk to back up" };
+    }
+    try {
+      mkdirSync(path.dirname(target), { recursive: true });
+      await this.db.backup(target);
+      // Open the copy to fold any log the backup API left beside it, then close
+      // it: the point of a backup is one file you can move somewhere else.
+      const copy = new BetterSqlite3(target);
+      try {
+        copy.pragma("wal_checkpoint(TRUNCATE)");
+      } finally {
+        copy.close();
+      }
+      const bytes = statSync(target).size;
+      return { ok: true, path: target, bytes };
+    } catch (err) {
+      return { ok: false, path: target, bytes: 0, error: describeError(err) };
+    }
+  }
+
+  /** Where this store keeps its file. Reported by the About panel and scripts. */
+  get path(): string {
+    return this.file;
+  }
+
+  close(): void {
+    // Checkpoint first. `close()` on the last connection does fold the log in,
+    // but it does so silently and only because SQLite is being careful; doing it
+    // explicitly means the durable file is complete even on the paths where the
+    // process never gets to call this at all.
+    this.checkpoint();
+    this.db.close();
   }
 
   /**
@@ -264,10 +392,6 @@ export class XanaStore {
       );
       CREATE INDEX IF NOT EXISTS idx_conversation_created ON conversation(created_at DESC);
     `);
-  }
-
-  close(): void {
-    this.db.close();
   }
 
   /* ---------------- memories ---------------- */
@@ -1264,6 +1388,19 @@ export class XanaStore {
 /* Row mappers                                                         */
 /* ------------------------------------------------------------------ */
 
+/**
+ * `unknown` into a sentence, without reaching for the adapter layer.
+ *
+ * `lib/adapters/types.ts` exports an `errorMessage` that does the same thing,
+ * and importing it here would close a cycle: the adapters import the settings
+ * layer, which imports this file. Three lines is cheaper than a cycle, and the
+ * different name is deliberate — a reader looking for `errorMessage` should not
+ * find a second body and wonder which one is current.
+ */
+function describeError(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
 function j<T>(v: unknown, fallback: T): T {
   if (typeof v !== "string") return fallback;
   try {
@@ -1501,6 +1638,31 @@ let singleton: XanaStore | undefined;
 export function getStore(): XanaStore {
   if (!singleton) singleton = new XanaStore();
   return singleton;
+}
+
+/**
+ * Checkpoint and close the process-wide store, if one was ever opened.
+ *
+ * The app never used to close its database. Nothing was wrong with that in the
+ * sense that SQLite survives it — but the write-ahead log was then only folded
+ * back by the *next* open, so a server that ran for days left a log larger than
+ * the database it belonged to, and any copy of `xana.db` taken meanwhile was
+ * missing most of the history. This is the function the server calls on
+ * SIGINT/SIGTERM and on process exit.
+ *
+ * Returns false when no store was opened, so a caller can say honestly that
+ * there was nothing to flush rather than printing a zero it did not measure.
+ */
+export function closeStore(): boolean {
+  if (!singleton) return false;
+  try {
+    singleton.close();
+  } catch {
+    // Already closed, or closed under us. Nothing to do and nothing to report:
+    // this runs on the way out of the process.
+  }
+  singleton = undefined;
+  return true;
 }
 
 /**

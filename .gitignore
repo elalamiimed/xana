@@ -46,6 +46,12 @@ next-env.d.ts
 # The SQLite store and the settings file, which holds API keys in plaintext.
 # This is the user's life, not the repository's. It is safe to delete — she
 # rebuilds from empty — but it must never be published.
+#
+# This also covers `data/backups/`, which is deliberate: a backup of
+# `settings.json` contains every key the user has pasted, in plaintext, so the
+# one directory named "back up my data" is the last one that should ever be
+# committed. Keeping a copy somewhere else is the point; keeping it in the
+# repository would be the opposite.
 data/
 
 # --------------------------------------------------------------------

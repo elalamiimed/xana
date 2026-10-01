@@ -196,7 +196,41 @@ if (dev) {
 /* Close the listener cleanly on interrupt rather than hanging on keep-alive. */
 for (const signal of ["SIGINT", "SIGTERM"]) {
   process.on(signal, () => {
-    server.close(() => process.exit(0));
-    setTimeout(() => process.exit(0), 1500).unref();
+    /**
+     * Fold the write-ahead log back into `data/xana.db` before exiting.
+     *
+     * WHY HERE AND NOT IN `src/instrumentation.ts`
+     *
+     * Next's instrumentation hook is the obvious home for a lifecycle handler —
+     * it runs for `next dev` and `next start` both. It was tried, and it broke
+     * the build: Next compiles instrumentation for the **edge** runtime as well
+     * as the node one, so the bundler followed the import into `lib/core/store`
+     * → `better-sqlite3`, which is a native addon and cannot be bundled for
+     * edge. A `NEXT_RUNTIME !== "nodejs"` guard at the top of `register()` does
+     * not help, because the failure is in the bundler's static analysis, not at
+     * runtime. The failure mode was the worst kind: every page 500'd with
+     * "Module not found: Can't resolve (dynamic | 'null')".
+     *
+     * So the handler lives in the process that owns the loop, and the durability
+     * guarantee does not depend on it. `XanaStore` checkpoints on open, which is
+     * what actually covers a crash, and `close()` checkpoints before closing.
+     * This is the tidy path for the launcher most people use; `next start` gets
+     * the checkpoint from the next open instead, which is one pragma.
+     *
+     * `--import ./scripts/ts-loader.mjs` in the `dev` script is what makes this
+     * import resolvable: the store's internal imports are extension-less, and
+     * plain Node cannot follow them.
+     */
+    void (async () => {
+      try {
+        const { closeStore } = await import("../src/lib/core/store.ts");
+        if (closeStore()) console.log("  Database checkpointed.");
+      } catch {
+        /* Nothing was open in this process, or the import failed on a broken
+           build. Either way the log is intact and the next open reconciles it. */
+      }
+      server.close(() => process.exit(0));
+      setTimeout(() => process.exit(0), 1500).unref();
+    })();
   });
 }

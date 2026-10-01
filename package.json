@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Xana — a minimalist, Jarvis-inspired personal AI assistant with a persistent external brain.",
   "scripts": {
-    "dev": "node scripts/dev.mjs",
+    "dev": "node --import ./scripts/ts-loader.mjs scripts/dev.mjs",
     "dev:next": "next dev -p 4310",
     "build": "next build",
     "start": "next start -p 4310",
@@ -26,6 +26,8 @@
     "verify:nudges": "node --import ./scripts/ts-loader.mjs scripts/check-nudges.ts",
     "verify:refresh": "node --import ./scripts/ts-loader.mjs scripts/check-refresh.ts",
     "verify:plugins": "node --import ./scripts/ts-loader.mjs scripts/check-plugins.ts",
+    "verify:durability": "node --import ./scripts/ts-loader.mjs scripts/check-durability.ts",
+    "backup": "node --import ./scripts/ts-loader.mjs scripts/backup.ts",
     "verify:crypto": "node --import ./scripts/ts-loader.mjs scripts/check-crypto.ts",
     "verify:health-bridge": "node --import ./scripts/ts-loader.mjs scripts/check-health-bridge.ts",
     "verify:live": "node --import ./scripts/ts-loader.mjs scripts/verify-live-connections.ts",
