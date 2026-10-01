@@ -255,7 +255,7 @@ have.
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/api/state` | Ambient poll: presence, headline, energy, attention count |
+| `GET` | `/api/state` | Ambient poll: presence, headline, energy, attention |
 | `GET` | `/xana/context` | The unified life-state gateway (canonical) |
 | `GET` | `/api/context` | Alias of the above, for the UI's `/api` prefix |
 | `POST` | `/api/chat` | `{ message, sessionId?, modality? }` → `{ message, lifeState }` |
@@ -529,6 +529,14 @@ npm run verify:health-bridge # the phone door: token, statuses, day upserts
   false-positive generator, which is why it now checks only what one file can be
   wrong about. Run it with the server up and it reads the *served* stylesheet
   rather than the source.
+- `npm run check:palette` — the half of DESIGN.md §1 that needs no server: every
+  text token clears 4.5:1 against every surface, each step of the surface ladder
+  reads as a step (≥1.08:1, the number the file settled on after a 1.05:1 ladder
+  was judged invisible), and the three semantic colours stay legible on the void.
+  `verify:web` makes the same text-contrast claim against the *served*
+  stylesheet; this one can run in `check`, which is where a new token gets
+  measured before anyone looks at it. `--text-faint` currently measures 4.71:1
+  at its worst, which is the margin the comment in `globals.css` is about.
 - `npm run verify:browser` — launches headless Edge or Chrome and checks the
   things bytes cannot: that the client bundle hydrated, that the orb canvas is
   *actually painting* (it reads the pixels back), that it is animating between

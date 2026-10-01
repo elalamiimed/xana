@@ -277,6 +277,17 @@ same constant-time comparison, not a new capability kind.
   wrong about. The script also earned its keep on first run: it found two real
   un-wrapped `<code>` blocks in `ModelPanel.tsx` and `Settings.tsx` that the
   manual pass had missed.
+- **A colour claim needs a number, and the number needs re-taking.** DESIGN.md §1
+  documents `--text-faint` being raised twice — once for failing outright at
+  3.89:1, once because an unrelated change to `--surface-3` took it from 4.54:1
+  to 4.21:1 and nothing failed, since the promise lived in a comment. The answer
+  is two scripts at two levels: `verify:web` measures the three text tokens
+  against every surface **in the served stylesheet**, so a token that did not
+  survive Tailwind is caught; `check:palette` measures the whole of §1 with no
+  server — the text floors, the surface ladder's 1.08:1 step, and the semantic
+  colours — so it runs inside `npm run check`, where a new token gets measured
+  before anyone looks at it. The current worst case is `--text-faint` at 4.71:1;
+  if that number moves, one of the two says so.
 
 ---
 
