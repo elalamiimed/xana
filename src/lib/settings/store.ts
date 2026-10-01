@@ -133,6 +133,10 @@ export const DEFAULT_SETTINGS: XanaSettings = {
     rate: 1,
     pitch: 1,
     persona: "",
+    // Off, because it holds the microphone open. See `VoiceSettings`.
+    wakeEnabled: false,
+    // Empty means the built-in phrase list in `wake-word.ts`.
+    wakePhrases: "",
   },
   /**
    * The model defaults to DeepSeek, and to *switched off*.
@@ -298,6 +302,11 @@ export function coerceSettings(raw: unknown): XanaSettings {
       rate: num(voice.rate, 1, 0.5, 1.5),
       pitch: num(voice.pitch, 1, 0, 2),
       persona: str(voice.persona, "").slice(0, 8000),
+      wakeEnabled: bool(voice.wakeEnabled, false),
+      // Capped well below the field limit: this is a handful of words, and a
+      // megabyte of phrase list would be fed to the matcher on every interim
+      // transcript.
+      wakePhrases: str(voice.wakePhrases, "").slice(0, 300),
     },
     model: {
       enabled: bool(model.enabled, false),
@@ -700,6 +709,8 @@ export function mergePatch(
     if (typeof p.rate === "number") next.voice.rate = num(p.rate, current.voice.rate, 0.5, 1.5);
     if (typeof p.pitch === "number") next.voice.pitch = num(p.pitch, current.voice.pitch, 0, 2);
     if (typeof p.persona === "string") next.voice.persona = p.persona.slice(0, 8000);
+    if (typeof p.wakeEnabled === "boolean") next.voice.wakeEnabled = p.wakeEnabled;
+    if (typeof p.wakePhrases === "string") next.voice.wakePhrases = p.wakePhrases.slice(0, 300);
   }
 
   if (patch.model) {

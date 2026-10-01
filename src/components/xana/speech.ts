@@ -61,6 +61,14 @@ export interface SpeechRecognizer {
   onresult: ((event: SpeechResultEvent) => void) | null;
   onerror: ((event: SpeechErrorEvent) => void) | null;
   onend: (() => void) | null;
+  /**
+   * Fires when the session genuinely opens.
+   *
+   * Worth its own handler because "called `start()`" and "the microphone is
+   * open" are different moments, and on a machine where they never converge the
+   * difference is the whole diagnosis. The mic-check page reports it.
+   */
+  onstart: (() => void) | null;
 }
 
 type RecognizerConstructor = new () => SpeechRecognizer;
@@ -136,6 +144,12 @@ export function dictationFailure(error: string, onDevice: boolean): string {
       return "I did not hear anything. Press the mic and speak.";
     case "audio-capture":
       return "No microphone was found. Check that one is plugged in and not in use by another app.";
+    case "language-not-supported":
+      // Reached when the browser cannot recognise the page's language. Worth
+      // its own sentence because the generic fallback ("Dictation stopped.")
+      // gives the user nothing to act on, and the browser's language setting
+      // is not somewhere they would think to look.
+      return "This browser cannot recognise your language for dictation. Change the browser's language, or type instead.";
     case "network":
       return onDevice
         ? "The on-device model stopped. Try again."
@@ -144,6 +158,37 @@ export function dictationFailure(error: string, onDevice: boolean): string {
       return "";
     default:
       return "Dictation stopped.";
+  }
+}
+
+/**
+ * Why the microphone probe failed, in words a person can act on.
+ *
+ * Separate from `dictationFailure` because the two APIs name the same problems
+ * differently, and `getUserMedia` names them better: the recogniser reports a
+ * refused microphone as `not-allowed`, which does not say whether the user
+ * declined, the operating system refused, or the browser has no microphone at
+ * all. `DOMException.name` does distinguish those, and this is where that
+ * distinction is spent.
+ *
+ * The probe exists precisely so the user gets one of these sentences instead of
+ * a microphone that opens and hears nothing.
+ */
+export function dictationNote(error: unknown): string {
+  const name = error instanceof Error ? error.name : "";
+
+  switch (name) {
+    case "NotAllowedError":
+    case "SecurityError":
+      return "That needs microphone access. Allow it for this page — the icon in the address bar — then press the mic again.";
+    case "NotFoundError":
+    case "OverconstrainedError":
+      return "No microphone was found. Check that one is plugged in, then press the mic again.";
+    case "NotReadableError":
+    case "AbortError":
+      return "The microphone is in use by another app. Close it and press the mic again.";
+    default:
+      return "The microphone could not be opened. Press the mic to try again.";
   }
 }
 
@@ -200,10 +245,20 @@ export function listVoices(): SpeechSynthesisVoice[] {
  * Replacing rather than queuing is right for an assistant: if she has said
  * something new, the previous sentence is stale, and two voices talking
  * over each other is the worst possible outcome here.
+ *
+ * `onDone` fires when the sentence actually stops — finished, cancelled, or
+ * failed. Always-on listening needs this: a recogniser left open while the
+ * speakers are playing hears the reply and can wake on her own voice, so the
+ * microphone has to be shut for exactly as long as she is talking, and a timer
+ * guessing the duration would either clip her or leave the mic open.
+ *
+ * It fires at most once, whichever of `onend` and `onerror` the browser uses.
+ * Chromium fires `onend` after a cancellation, but not all builds do, and a
+ * callback that never runs would leave listening paused forever.
  */
 export function speak(
   text: string,
-  opts: { voiceName?: string; rate?: number; pitch?: number } = {},
+  opts: { voiceName?: string; rate?: number; pitch?: number; onDone?: () => void } = {},
 ): boolean {
   if (!speechSynthesisAvailable()) return false;
   const trimmed = text.trim();
@@ -219,6 +274,17 @@ export function speak(
   if (opts.voiceName) {
     const match = synth.getVoices().find((voice) => voice.name === opts.voiceName);
     if (match) utterance.voice = match;
+  }
+
+  if (opts.onDone) {
+    let finished = false;
+    const done = () => {
+      if (finished) return;
+      finished = true;
+      opts.onDone?.();
+    };
+    utterance.onend = done;
+    utterance.onerror = done;
   }
 
   synth.speak(utterance);

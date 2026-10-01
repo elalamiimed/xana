@@ -44,6 +44,10 @@ export interface ShellSettings {
     voiceName: string;
     rate: number;
     pitch: number;
+    /** Keep listening for her name without a button press. */
+    wakeEnabled: boolean;
+    /** Comma-separated ways of saying her name; empty means the built-in list. */
+    wakePhrases: string;
   };
   /** Adapter id -> state, for the Connections screen. */
   statuses: Record<string, { state: string; mode: string; detail?: string }>;
@@ -135,6 +139,8 @@ export function useShellSettings(
       voiceName: view?.voice.voiceName ?? "",
       rate: view?.voice.rate ?? 1,
       pitch: view?.voice.pitch ?? 1,
+      wakeEnabled: view?.voice.wakeEnabled ?? false,
+      wakePhrases: view?.voice.wakePhrases ?? "",
     }),
     [view],
   );

@@ -1,0 +1,2 @@
+# `py_compile` writes its bytecode here, and it is generated, like .next/.
+__pycache__/

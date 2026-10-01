@@ -259,6 +259,99 @@ The trap to remember: **a backup that has never been opened is a file, not a
 backup.** The script opens every copy and compares row counts before it reports
 success, and deletes the folder if the copy will not open.
 
+### 15. A recogniser session is not a transcript
+
+The browser's `SpeechRecognition` does not hand you a growing transcript. It
+hands you the result list for the **current session**, and a session does not
+survive a pause: Chromium ends it after a few seconds of silence, `onend` fires,
+and the next `start()` begins an empty list.
+
+This matters because the obvious implementation is one line — read every result
+in the event and use that as the text — and it is wrong:
+
+- **It deletes what the user said.** Rebuilding the field from a fresh session's
+  list drops everything heard before the pause. Nothing errors and nothing logs;
+  the words simply disappear while the user watches. That is the worst thing
+  dictation can do, and it is what happened the first time continuous dictation
+  was turned on here.
+- **It multiplies the sentence.** `event.results` is re-sent in full on every
+  event, so re-reading from zero commits every final result again. Honouring
+  `event.resultIndex` is what stops it.
+- **It doubles partial words.** A partial result is revised **at the same
+  index**, so appending each revision produces `remindremind me`. The tail has to
+  be *rebuilt* from the unsettled entries, not appended to.
+
+So the accumulation is three pieces of state, not one string: `committed` (every
+final result, across sessions, only ever grows), `committedCount` (how many
+results of this session are already folded in), and `lastFinal` (so a browser
+that re-sends a final cannot write it twice). The session boundary is passed in
+by the caller, **not inferred from `resultIndex === 0`** — that guess is
+ambiguous, because a session whose first result is also its last fires it too,
+and the first attempt at this wiped the live tail on ordinary events.
+
+It lives in `src/components/xana/dictation.ts` as a pure function, because the
+bug needs a browser that ends a session mid-sentence to reproduce, which is
+exactly what cannot be arranged on demand. `npm run verify:dictation` drives it
+through the real event stream instead.
+
+### 16. A wake word must be tested on what it must NOT match
+
+Every failure mode of a wake word is asymmetric. Missing the name is annoying and
+instantly obvious — the user says it again. Firing on a sentence that merely
+*contains* the name is silent: the listener swallows the rest of the sentence as
+a command and answers something nobody asked, and the user never learns that is
+what happened, only that the thing is unreliable.
+
+So matching is anchored to the **start** of an utterance — at most two fillers
+("hey", "okay") before the name, and nothing else — because a wake word is how a
+sentence is *addressed*, not something it contains. And the negative cases are
+first-class tests: "I told Xana to remind me", "the banana is ripe", "can I ask
+you something", "I need a nap".
+
+Four versions of the matching were wrong, and only the test file caught any of
+them:
+
+- No latitude under five letters rejected `Zana` and `Zara` — the most likely way
+  her own name comes back.
+- A bonus edit for sharing an opening sound let `sonar` through.
+- Folding `c` → `x` turned `can` into `xan`, one edit from `xana`, so "can I ask
+  you something" woke her.
+- A `break` in the window loop discarded the name itself: in "okay Xana", the
+  token after the filler is the name, not a filler, and the loop quit one step
+  before finding her — while still answering "can a person do that".
+
+The rules that survived: a token may not be shorter than the name; position 0 is
+folding's job, so a substitution there is a different word rather than a
+near-miss; and one extra letter is allowed only as a **doubled sound** (`xanna`,
+the middle `n` heard twice), which is what separates `Xanna` from `Xanax` —
+arithmetic cannot, since they are the same edit distance.
+
+### 17. An open microphone has to be visible, and the browser owns it
+
+Two halves, and both are about honesty rather than code.
+
+**Visible.** A microphone that is open without saying so is the most
+objectionable thing an always-on assistant can do. The line above the input
+always states which of two genuinely different states she is in — *watching for
+her name* (nothing you say is a request) versus *listening for the request* (the
+next thing you say is the question) — and it echoes the words as they arrive, so
+a misheard name is distinguishable from a microphone that is not working.
+
+**Borrowed.** In Edge on Windows the audio goes to Microsoft's speech service; in
+Chrome, Google's. Neither is Xana, neither is DeepSeek, and no key is involved —
+but it does leave the machine, and saying otherwise would be a lie. Xana does not
+force on-device recognition, because setting `processLocally` where no model is
+installed makes `start()` fail outright: a mic that works beats a mic that is
+private and dead. It detects the model when present and retries on-device
+automatically when the cloud path fails.
+
+The microphone is also **one resource**. Manual dictation and always-listening
+both want it, so pressing the mic button takes it synchronously (`wake.stop()`,
+not a settings write) and hands it back when done (`wake.resume()`). The first
+version freed it by *saving* `wakeEnabled: false` through the settings API — a
+network round trip racing the permission prompt, arriving long after
+`getUserMedia` had already been called.
+
 ---
 
 ## Traps that have already bitten
@@ -333,6 +426,21 @@ success, and deletes the folder if the copy will not open.
   colours — so it runs inside `npm run check`, where a new token gets measured
   before anyone looks at it. The current worst case is `--text-faint` at 4.71:1;
   if that number moves, one of the two says so.
+- **A gate that reports on what it cannot know teaches people to ignore it —
+  twice now.** The heading rule flagged six correct `h3`s (above), and
+  `check-encoding.mjs` flagged `docs/MIC-DIAGNOSIS.md` for quoting this machine's
+  real audio device names, which Windows reports in Chinese. That is the evidence
+  the diagnosis rests on; deleting it to satisfy the gate would have been the
+  wrong repair.
+  The fix is an **explicit per-line marker** (`xana-encoding-ok`), not a loosened
+  pattern and not a whole-file exclusion: it is auditable by reading the one line,
+  it cannot be inherited by a file that has not earned it, and a mojibake line
+  will not have been marked by anyone. The guard still catches real corruption —
+  verified by writing a genuinely mangled line alongside a marked one and watching
+  it fire on exactly one of them.
+  The general shape: when a heuristic has a legitimate counterexample, give the
+  counterexample a way to *say so*, rather than widening the heuristic until it
+  stops noticing.
 
 ---
 

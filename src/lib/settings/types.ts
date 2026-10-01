@@ -87,6 +87,24 @@ export interface VoiceSettings {
   pitch: number;
   /** Empty means the built-in persona. */
   persona: string;
+  /**
+   * Keep a recogniser open and answer when she is addressed by name.
+   *
+   * Off by default, and deliberately so. This holds the microphone open
+   * whenever the page is in front of the user, which is a thing to opt into
+   * rather than discover. Turning it on is also the only way to make dictation
+   * hands-free, so it is a real setting and not a hidden preference.
+   */
+  wakeEnabled: boolean;
+  /**
+   * Comma-separated ways of saying her name.
+   *
+   * Empty means the built-in list. Exposed because the honest limit of wake-word
+   * matching is that one person's accent produces spellings no default list will
+   * guess — a user whose name comes back as "Dana" can add it here, without the
+   * default being loosened for everybody.
+   */
+  wakePhrases: string;
 }
 
 export interface ModelSettings {

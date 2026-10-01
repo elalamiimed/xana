@@ -367,17 +367,64 @@ already have installed. Turn it on in **Settings → Voice** and pick one; the
 voice, rate and pitch are controls, and each has a sample button. The text is
 stripped of markdown first, so a briefing does not read out "dash energy colon".
 
-**She listens** through the browser's `SpeechRecognition` API, which is the mic
-button beside the input. It is rendered only in a browser that has the API, and
-it writes into the same field you would type into — dictation is a way to fill
-the composer, not a separate conversation mode.
+**She listens** through the browser's `SpeechRecognition` API, in one of two
+places: the **mic button** beside the input, or **hands-free** — say her name and
+she answers without a button. Both write into the same field you would type into.
+Dictation is a way to fill the composer, not a separate conversation mode.
+
+**Dictation stays open until you stop it, and shows what it is hearing.** One
+press means "listen until I say stop", not "listen to one sentence" — the browser
+ends its session after a pause regardless, and Xana starts another. As you speak,
+the words appear above the field so a misheard word is visible as words rather
+than discovered as a wrong reply. What you have said survives those session
+boundaries; before that was fixed, a pause in the middle of a sentence silently
+deleted everything before it.
+
+### Hands-free: saying her name
+
+Turn on **Settings → Voice → Hands-free → Listen for her name**. The microphone
+stays open while the page is in front of you, and nothing you say is treated as a
+request until she hears her name. A line above the input always states which of
+the two states she is in — *Listening for her name* or *Go ahead — I am
+listening* — because a microphone that is open without saying so is the most
+objectionable thing an always-on assistant can do.
+
+Her name is matched **anywhere in the first three words**, allowing one filler in
+front ("hey Xana", "okay Xana"), because a wake word is how a sentence is
+*addressed* rather than something it contains. Matching anywhere would mean any
+remark about her — "I asked Xana about the weather" — woke her up and sent the
+rest of the sentence as a command. Recognition also returns names as they sound,
+so `zana`, `sana`, `zara` and `xanna` all count, and the phrase list is editable
+in the same panel if your accent produces a spelling the defaults miss.
+
+She **stops listening while she is speaking**, so she cannot hear her own reply
+and answer herself. If it stops for a reason you can fix — a refused permission,
+no microphone — the line says which, and does not keep retrying against a refusal.
+
+The honest limit: this uses the browser's recognition service, so it inherits the
+cloud dependency below. There is no wake word without either a working connection
+or an on-device model.
+
+### When the microphone does nothing
+
+Open **`/xana/mic`** (linked from Settings → Voice). It measures the four layers
+separately — secure context, the API's presence, whether the operating system is
+handing over a microphone *and whether that microphone is carrying sound*, and
+whether recognition returns words — and names the layer that failed. The level
+meter is the useful part: it reads the microphone directly with no speech service
+involved, so a flat bar proves the problem is hardware or permission and nothing
+further down the page can work.
+
+The most common cause on Windows is an input device that exists but is not a
+microphone — a voice-changer virtual driver, for instance. The device list in
+Settings → System → Sound shows which one is default; the app cannot tell you.
 
 There are **two ways that recognition can run**, and the difference is a privacy
 one rather than a quality one:
 
 | | Where the audio goes | What it needs |
 |---|---|---|
-| **Cloud** | to the *browser's own* speech service — never to Xana, never to DeepSeek, no key involved | a working connection |
+| **Cloud** | to the *browser's own* speech service. In Edge this is Microsoft's, in Chrome Google's — never Xana, never DeepSeek, no key involved | a working connection |
 | **On-device** | nowhere; it is transcribed on this machine | Edge Dev/Canary 150.0.4076+ with `edge://flags` → *Speech Recognition with on-device model* → Enabled (the first use downloads the model) |
 
 Xana prefers the browser default and **does not force on-device recognition**,
@@ -385,8 +432,19 @@ because setting it where no model is installed makes recognition fail outright �
 a mic that works is better than a mic that is private and dead. It detects the
 on-device model when it is there and switches to it automatically if the cloud
 path fails, and the reason for any failure is shown above the input: a denied
-permission, a browser with no speech service, and an unplugged headset each get
-their own sentence rather than a button that appears to do nothing.
+permission, a browser with no speech service, an unplugged headset and a language
+the browser cannot recognise each get their own sentence rather than a button that
+appears to do nothing.
+
+### A local transcriber, for when the cloud path is blocked
+
+`python/xana_stt.py` is an optional local Whisper service, so transcription can
+happen on this machine with no key, no cloud and no account. It is what the mic
+button and hands-free listening fall back to when the browser's speech service is
+unreachable — a school or office network, a hardened browser build, or being
+offline. See **[python/README.md](python/README.md)** for the setup; the short
+version is `pip install faster-whisper` then `python/serve.ps1`. The model
+downloads once, on first use.
 
 ### DeepSeek, and what it cannot do
 
@@ -534,12 +592,13 @@ and nothing else on that surface does.
 ## Verifying it
 
 ```bash
-npm run check                # typecheck + demo + route smoke + orb maths + craft floor
+npm run check                # typecheck + wake word + dictation + demo + route smoke + orb + craft floor
 npm run verify:web           # with the server running: the real HTTP surface
 npm run verify:browser       # with the server running: a real browser
 npm run verify:crypto        # the keyless quote path, on a stubbed CoinGecko
 npm run verify:health-bridge # the phone door: token, statuses, day upserts
 npm run verify:durability    # local saving: folding, reopening, backup, a kill
+npm run verify:stt           # the optional Python transcriber: routes, honesty, wake port
 ```
 
 Three scripts are for operating her rather than verifying her, and they are the
@@ -603,6 +662,27 @@ node scripts/probe-status-rows.mjs 40         # is the one-row-per-connection ru
   the status code; `400`, `403` and `409` land on the conditions they name; a valid
   day ingests and the same day posted again updates instead of duplicating; and
   both ingest paths run the identical handler.
+- `npm run verify:wake` — the wake word, and the assertions that matter are the
+  ones that must NOT match: "I told Xana to remind me", "the banana is ripe",
+  "can I ask you something", "I need a nap", and a name more than three words in.
+  A wake word that fires on a sentence containing her name is the failure nobody
+  notices — it answers something that was not a question — so those cases are
+  first-class rather than extras. Four separate versions of the matching were
+  wrong in ways only this file caught, including one that stopped recognising
+  "okay Xana" while still answering "can I ask you something".
+- `npm run verify:dictation` — that a pause does not delete what you said. The
+  fixtures are the event stream a browser actually emits, session boundary
+  included, because the session ending mid-sentence is exactly what cannot be
+  arranged on demand in a real browser and exactly what caused the bug. It also
+  pins the interim-to-final promotion, a final result repeated by the browser, and
+  the sparse result lists.
+- `npm run verify:stt` — the optional Python transcriber, checked without a
+  backend installed: the routes and JSON keys are asserted statically, `--selftest`
+  proves `/health` never claims `ready` when it is not, junk audio comes back as
+  `{"text":""}` rather than a 500, the body cap answers `413`, and CORS reflection
+  is refused for a non-loopback origin. Its wake matcher is checked *differentially*
+  against the TypeScript one at check time, so the two halves cannot drift into
+  disagreeing about when she was called.
 - `npm run verify:web` — the served application: rendered page, inlined theme
   tokens, the stylesheet as it comes through Tailwind, every endpoint, a live
   chat turn, and a settings round trip that changes the theme, proves the next

@@ -80,8 +80,25 @@ const CORRUPTION = [
   },
 ];
 
+/**
+ * A line that says "this non-ASCII text is deliberate".
+ *
+ * The CJK rule is a heuristic, and like every heuristic it has a legitimate
+ * counterexample: `docs/MIC-DIAGNOSIS.md` quotes the actual names of this
+ * machine's audio endpoints, which Windows reports in Chinese. That is real
+ * system output, and deleting it would delete the evidence the diagnosis rests
+ * on — the exact trap `MEMORY.md` records for the heading rule.
+ *
+ * So the exemption is explicit, opt-in, and per line: a line carrying this
+ * marker is skipped, which is auditable by reading the line, unlike a
+ * whole-file exclusion or a loosened pattern. A mojibake line will not have
+ * been marked by anyone.
+ */
+const DELIBERATE = "xana-encoding-ok";
+
 const findings = [];
 let scanned = 0;
+let exempted = 0;
 
 function walk(dir) {
   for (const name of readdirSync(dir)) {
@@ -101,29 +118,47 @@ function walk(dir) {
     if (text.charCodeAt(0) === 0xfeff) {
       findings.push({ file: relative, line: 1, what: "BOM at the start of the file" });
     }
+
+    // The line numbers are kept so a finding points at the line it found, and
+    // the marker check runs per line rather than per file.
+    const lines = text.split("\n");
     for (const { label, test } of CORRUPTION) {
-      const match = test.exec(text);
-      if (!match) continue;
-      const line = text.slice(0, match.index).split("\n").length;
-      const around = text
-        .slice(Math.max(0, match.index - 30), match.index + 30)
-        .replace(/\n/g, "\\n");
-      findings.push({ file: relative, line, what: label, around });
+      // Every occurrence is examined, not just the first: one exempted line must
+      // not hide a genuine corruption further down the same file.
+      for (let index = 0; index < lines.length; index += 1) {
+        const line = lines[index] ?? "";
+        if (!test.test(line)) continue;
+        if (line.includes(DELIBERATE)) {
+          exempted += 1;
+          continue;
+        }
+        findings.push({
+          file: relative,
+          line: index + 1,
+          what: label,
+          // Captured from the line that actually matched. Reading it back after
+          // the loop reported the LAST matching line instead of the triggering
+          // one, which is the kind of small lie that makes a finding useless.
+          around: line.trim().slice(0, 140),
+        });
+      }
     }
   }
 }
 
 walk(ROOT);
 
+const note = exempted > 0 ? ` (${exempted} line(s) marked deliberate)` : "";
+
 if (findings.length === 0) {
-  console.log(`  ok    ${scanned} files, every character intact`);
+  console.log(`  ok    ${scanned} files, every character intact${note}`);
   process.exit(0);
 }
 
-console.log(`  FAIL  ${findings.length} damaged location(s) in ${scanned} files\n`);
+console.log(`  FAIL  ${findings.length} damaged location(s) in ${scanned} files${note}\n`);
 for (const finding of findings) {
   console.log(`    ${finding.file}:${finding.line}  ${finding.what}`);
-  if (finding.around) console.log(`        ...${finding.around}...`);
+  if (finding.around) console.log(`        ${finding.around}`);
 }
 console.log(
   "\n  Repair by restoring the file and reapplying the edit with a tool that\n" +

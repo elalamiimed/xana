@@ -11,6 +11,8 @@ import Settings from "@/components/xana/settings/Settings";
 import { speakable, speak, stopSpeaking, speechSynthesisAvailable } from "@/components/xana/speech";
 import Turn from "@/components/xana/Turn";
 import { useShellSettings } from "@/components/xana/useShellSettings";
+import { useWakeListener } from "@/components/xana/useWakeListener";
+import WakeIndicator from "@/components/xana/WakeIndicator";
 import { useXana } from "@/components/xana/useXana";
 
 /**
@@ -90,7 +92,18 @@ export default function Page() {
    * reply out loud.
    */
   const spokenRef = useRef<string | null>(null);
-  const { speakReplies, voiceName, rate, pitch } = shell.voice;
+  const { speakReplies, voiceName, rate, pitch, wakeEnabled, wakePhrases } = shell.voice;
+
+  /**
+   * Whether she is speaking right now.
+   *
+   * Needed as well as `thinking`, because the microphone has to be shut while
+   * the speakers are open. Without this the recogniser hears her reply, which is
+   * a loop that ends in her answering herself. `speaking` is cleared from the
+   * utterance's own `onend` and `onerror` rather than guessed at with a timer,
+   * so a cancelled or failed sentence cannot leave the listener paused forever.
+   */
+  const [speaking, setSpeaking] = useState(false);
 
   useEffect(() => {
     const latest = latestXana;
@@ -99,8 +112,27 @@ export default function Page() {
     spokenRef.current = latest.id;
 
     const line = speakable(latest.text);
-    if (line) speak(line, { voiceName, rate, pitch });
+    if (!line) return;
+    setSpeaking(true);
+    speak(line, { voiceName, rate, pitch, onDone: () => setSpeaking(false) });
   }, [latestXana, speakReplies, voiceName, rate, pitch]);
+
+  /**
+   * Hands-free: answer to her name without a button press.
+   *
+   * Mounted here, once, rather than inside the Composer, because it has to
+   * survive the composer re-rendering and it needs the same two facts the rest
+   * of the page has — whether she is thinking, and whether she is speaking.
+   */
+  const wake = useWakeListener({
+    enabled: wakeEnabled,
+    phrases: wakePhrases,
+    paused: thinking || speaking,
+    onSubmit: (text) => {
+      nudge();
+      void send(text, "voice");
+    },
+  });
 
   // A page unload with a voice mid-sentence is startling. This also covers
   // the case where the tab is backgrounded and the user has forgotten.
@@ -187,6 +219,11 @@ export default function Page() {
               // user most likely wants at that moment.
               if (speakReplies && speechSynthesisAvailable()) {
                 stopSpeaking();
+                // `stopSpeaking` cancels the utterance, and Chromium does not
+                // reliably fire `onend` for a cancellation. Without this the
+                // listener believes she is still talking and stays paused for
+                // the rest of the session — a microphone that never comes back.
+                setSpeaking(false);
                 return;
               }
               shell.openSettings();
@@ -246,9 +283,25 @@ export default function Page() {
           onFocus={nudge}
           onMouseEnter={nudge}
         >
+          {/* Above the field, not inside it: the pill is one line tall, and a
+              status line in it would push the textarea around mid-sentence. */}
+          <WakeIndicator
+            state={wake.state}
+            draft={wake.draft}
+            note={wake.note}
+            onRetry={wake.retry}
+            onDismiss={() => void shell.controller.save({ voice: { wakeEnabled: false } })}
+          />
+          {/* The microphone is one resource. Pressing the mic button while
+              always-listening holds it open would make the recogniser fail with
+              no visible reason, so the button takes it over first — and gives it
+              back when it is done. `wake.stop` acts synchronously; going through
+              settings would be a round trip racing the permission prompt. */}
           <Composer
             ref={composer}
             busy={thinking}
+            onTakeMicrophone={wake.stop}
+            onReleaseMicrophone={wake.resume}
             onSubmit={(text, modality) => {
               nudge();
               void send(text, modality);
