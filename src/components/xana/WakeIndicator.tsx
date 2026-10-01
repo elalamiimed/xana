@@ -34,6 +34,21 @@ const LABELS: Record<WakeState, string> = {
   failed: "",
 };
 
+/**
+ * What the transcriber produced, shown while she is only watching.
+ *
+ * This exists because "she does not respond" has two causes that look identical
+ * and are fixed in completely different places: a microphone that is not passing
+ * audio, and a transcriber that is mishearing the name. Showing the words — even
+ * an empty result, as "nothing" — is the only way the user can tell them apart
+ * without a log. A quiet room produces text; a dead device produces none.
+ */
+function heardNote(draft: string): string {
+  if (!draft) return "";
+  if (draft === "…") return " · heard nothing";
+  return ` · ${draft}`;
+}
+
 export interface WakeIndicatorProps {
   state: WakeState;
   /** The request being assembled, shown back to the user as it is heard. */
@@ -104,10 +119,12 @@ export default function WakeIndicator({
         }`}
       >
         {LABELS[state]}
-        {/* Her own words, echoed as they arrive. This is the feedback that makes
-            hands-free usable: without it the user cannot tell a misheard name
-            from a microphone that is not working. */}
+        {/* Her own words, echoed as they arrive. While listening this is the
+            request being assembled; while merely watching it is what the
+            transcriber thought it heard, which is what makes a misheard name
+            visible instead of silent. */}
         {listening && draft ? <span className="text-dim"> — “{draft}”</span> : null}
+        {!listening && draft ? <span className="text-dim">{heardNote(draft)}</span> : null}
       </p>
 
       {listening ? (

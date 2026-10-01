@@ -229,6 +229,8 @@ export function useWakeListener({
     setState("armed");
     /** Set in one pass when the name arrives without a request after it. */
     let awaitingCommand = false;
+    /** Counts passes that heard nothing, so a dead microphone can be named. */
+    let silentPasses = 0;
 
     while (!localStop.current && enabled) {
       if (live.current.paused) {
@@ -261,11 +263,22 @@ export function useWakeListener({
         return;
       }
       const said = result.text.trim();
-      logMic("wake.local.heard", { chars: said.length, awaiting: awaitingCommand });
+      logMic("wake.local.heard", { chars: said.length, ms: clip.durationMs, awaiting: awaitingCommand });
       if (!said) {
+        // `setDraft` is what the indicator shows. A pass that heard nothing
+        // visible to the user is the difference between "she is listening and
+        // the microphone is dead" and "she is listening and mishearing me",
+        // and those need completely different fixes.
+        silentPasses += 1;
+        if (silentPasses >= 2) {
+          setDraft("nothing yet — speak a little louder?");
+        } else {
+          setDraft("…");
+        }
         setState("armed");
         continue;
       }
+      silentPasses = 0;
 
       const match = matchWake(said, live.current.phraseList);
       logMic("wake.local.match", { matched: match.matched, heard: match.heard });
@@ -277,7 +290,11 @@ export function useWakeListener({
           submitLocal(said);
           setState("armed");
         } else {
-          // Ordinary conversation. Nothing is done with it, and it is not stored.
+          // Ordinary conversation, or a misheard name. Nothing is done with it
+          // and it is not stored — but it IS shown, because the user needs to
+          // see what the transcriber produced to tell a bad model from a bad
+          // microphone.
+          setDraft(`heard “${said}”`);
           setState("armed");
         }
         continue;

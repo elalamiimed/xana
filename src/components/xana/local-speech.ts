@@ -41,6 +41,20 @@ const SPEECH_FLOOR = 0.012;
 /** Quiet for this long after speech ends the sentence. */
 const SILENCE_MS = 850;
 
+/**
+ * Speech must last at least this long before its end is allowed to stop the clip.
+ *
+ * Without it the recorder is fooled by a door, a keyboard or a chair: any
+ * transient that crosses the threshold starts "speech", the quiet that follows
+ * immediately satisfies the silence rule, and the clip ends after a few hundred
+ * milliseconds. What reaches the transcriber is then too short to contain a word,
+ * which is exactly the shape of the failure this was found by — a log full of
+ * `heard chars=0` and `chars=6` where the user had clearly spoken.
+ *
+ * 350ms is shorter than any word and longer than any click.
+ */
+const MIN_SPEECH_MS = 350;
+
 /** No speech at all by now, and the attempt is abandoned. */
 const NO_SPEECH_MS = 7000;
 
@@ -371,7 +385,12 @@ export async function recordUtterance(options: RecordOptions = {}): Promise<Reco
         finish("no-speech");
         return;
       }
-      if (quietSince !== null && now - quietSince > silenceMs) {
+      // The end of speech only ends the clip once the speech has actually lasted
+      // long enough to be a word. See `MIN_SPEECH_MS`: without this a single
+      // click produces a clip too short to transcribe, which reads to the user
+      // as "it listened for half a second and gave up".
+      const speechLasted = speechAt === null ? 0 : (quietSince ?? now) - speechAt;
+      if (quietSince !== null && now - quietSince > silenceMs && speechLasted >= MIN_SPEECH_MS) {
         finish("silence");
         return;
       }
