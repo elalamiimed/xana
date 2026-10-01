@@ -824,6 +824,11 @@ function bodyInputs(state: LifeState, now: Date) {
   return {
     sleepHours: latest?.sleepHours,
     meals: { logged: today?.meals ?? 0, of: 3 },
+    mood: latest?.mood,
+    fitness: {
+      activeMinutes: latest?.activeMinutes,
+      steps: latest?.steps,
+    },
     schedule: {
       bookedMinutes,
       freeMinutes: state.calendar.freeMinutes,

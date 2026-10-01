@@ -81,33 +81,38 @@ export function extractMailList(payload: unknown): RawMail[] {
 /**
  * Build the mail adapter.
  *
- * `mayFetch` gates the bridge lookup. This one reads a URL *or a file*, and
- * both live under `local.read` in the descriptor — a decision worth naming: a
- * local endpoint is still a thing Xana reaches out to, so it follows the same
- * switch as a remote one rather than being quietly exempt because the host
- * happens to be 127.0.0.1.
+ * `mayFetch` gates the *endpoint* only. A JSON file on this machine is read
+ * without asking anyone, for the same reason the notes vault and the health
+ * export folder are: it is the user's own data on the user's own disk, and
+ * making them grant a network capability to read a local file is how a
+ * permission screen ends up being clicked through without being read.
+ *
+ * An endpoint is different even when it points at `127.0.0.1` — Xana is
+ * reaching out to a process, not opening a file — so it follows the switch.
  */
 export function mailAdapter(
   opts: { knownPeople?: () => string[]; mayFetch?: boolean } = {},
 ): LifeAdapter {
   const knownPeople = opts.knownPeople ?? (() => []);
   const mayFetch = opts.mayFetch ?? false;
-  const url = cred("mail.url", "XANA_MAIL_URL");
   const file = cred("mail.file", "XANA_MAIL_FILE");
-  const configured = (url.present || file.present) && mayFetch;
+  const url = cred("mail.url", "XANA_MAIL_URL");
+  const useFile = file.present;
+  const useUrl = mayFetch && url.present;
+  const configured = useFile || useUrl;
   const id = "mail";
   const label = "Mail";
 
   const read = async (): Promise<{ data: { mail: MailSignal[] }; status: AdapterStatus }> => {
     const t0 = Date.now();
     if (!configured) {
-      const pending = (url.present || file.present) && !mayFetch;
+      const pending = url.present && !mayFetch;
       return {
         data: { mail: [] },
         status: status(
           id, label, "offline", "local",
           pending
-            ? "a mail source is set, waiting for permission"
+            ? "an endpoint is set, waiting for permission"
             : "set a mail endpoint or file for ambient signals",
           Date.now() - t0,
         ),
@@ -115,9 +120,9 @@ export function mailAdapter(
     }
 
     try {
-      const payload = url.present
-        ? await httpJson<unknown>(url.value, { timeoutMs: 5000 })
-        : (JSON.parse(readFileSync(file.value, "utf8")) as unknown);
+      const payload = useFile
+        ? (JSON.parse(readFileSync(file.value, "utf8")) as unknown)
+        : await httpJson<unknown>(url.value, { timeoutMs: 5000 });
 
       const people = new Set(knownPeople());
       const signals = extractMailList(payload)

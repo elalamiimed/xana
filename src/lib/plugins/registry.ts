@@ -265,23 +265,31 @@ const DESCRIPTORS: PluginDescriptor[] = [
     core: true,
     tagline: "What is playing, from a local player bridge.",
     dataNote:
-      "Asks a local endpoint, or reads a local file, for the current track. Nothing leaves this machine unless you point the URL at something remote. The focus suggestion works with no bridge at all.",
+      "Reads a local file you point at, or asks a local endpoint. Nothing leaves this machine unless the endpoint is remote, which is why the endpoint needs permission and the file does not. The focus suggestion works with no bridge at all.",
     provides: "The current track, and a focus suggestion matched to your energy.",
     needs: [
-      { kind: "local.read", reason: "Read the now-playing endpoint or file." },
+      { kind: "local.read", reason: "Read the now-playing file." },
+    ],
+    optional: [
+      {
+        kind: "net.read",
+        reason: "Ask the now-playing endpoint.",
+        hosts: ["the endpoint URL you provide"],
+      },
+      { kind: "local.write", reason: "Keep the focus suggestion in her own store." },
     ],
     config: [
       {
         key: "media.url",
         label: "Endpoint URL",
-        hint: "Returns a title and an artist.",
+        hint: "Returns a title and an artist. Needs network permission.",
         kind: "url",
         example: "http://127.0.0.1:9863/now",
       },
       {
         key: "media.file",
         label: "or a file",
-        hint: "The same JSON, read from disk.",
+        hint: "The same JSON, read from disk. Needs no permission.",
         kind: "path",
       },
     ],
@@ -293,22 +301,29 @@ const DESCRIPTORS: PluginDescriptor[] = [
     core: true,
     tagline: "Recent message subjects, from a bridge you run.",
     dataNote:
-      "Asks a local endpoint, or reads a local file, for recent messages. Subject lines only — Xana never reads bodies. Nothing is sent anywhere.",
+      "Reads a local JSON file you point at, or asks a local endpoint. Subject lines only — Xana never reads bodies. The file stays on this machine; the endpoint needs permission because it is a request, not a file.",
     provides: "Urgent messages worth raising before you ask.",
     needs: [
-      { kind: "local.read", reason: "Read the mail endpoint or file." },
+      { kind: "local.read", reason: "Read the mail file." },
+    ],
+    optional: [
+      {
+        kind: "net.read",
+        reason: "Ask the mail endpoint.",
+        hosts: ["the endpoint URL you provide"],
+      },
     ],
     config: [
       {
         key: "mail.url",
         label: "Endpoint URL",
-        hint: "Returns a list of messages.",
+        hint: "Returns a list of messages. Needs network permission.",
         kind: "url",
       },
       {
         key: "mail.file",
         label: "or a file",
-        hint: "The same JSON, read from disk.",
+        hint: "The same JSON, read from disk. Needs no permission.",
         kind: "path",
       },
     ],

@@ -1,6 +1,6 @@
 "use client";
 
-import type { ActionIntent, LifeState, Presence } from "@/lib/api/contract";
+import type { ActionIntent, Analysis, LifeState, Presence } from "@/lib/api/contract";
 
 import { Bar } from "./Rings";
 import GhostButton from "./GhostButton";
@@ -21,6 +21,7 @@ import GhostButton from "./GhostButton";
 
 export interface AmbientCardsProps {
   state: LifeState;
+  analysis: Analysis | null;
   /** Wired to POST /api/action through the hook. */
   onAct: (intent: ActionIntent) => void;
   presence: Presence;
@@ -116,6 +117,7 @@ function Row({
 
 export default function AmbientCards({
   state,
+  analysis,
   onAct,
   presence,
   engine,
@@ -128,7 +130,7 @@ export default function AmbientCards({
   const next = state.calendar.next;
   const nudges = state.nudges.slice(0, 2);
   const pattern = state.patterns[0];
-  const memory = state.memory[0];
+  const modelPattern = analysis?.pattern;
   const now = new Date();
 
   /**
@@ -147,8 +149,8 @@ export default function AmbientCards({
   const sessions = state.focus.sessionsThisWeek;
   const session = sessions.find((s) => !s.completed) ?? sessions[0];
 
-  /** The next few open tasks by the store's own order — priority, then date. */
-  const queued = state.tasks.focus.slice(0, 3);
+  /** Incomplete work, ordered by urgency and fit for today. */
+  const queued = state.tasks.focus.slice(0, 4);
 
   /* --- Energy's working, so the score is not a number you must trust. --- */
   const todayHealth = state.health.latest;
@@ -158,26 +160,24 @@ export default function AmbientCards({
       : undefined;
   const sleepHours = state.health.latest?.sleepHours;
   const meals = { logged: todayHealth?.meals ?? 0, of: 3 };
-
-  const wakingMinutes = 16 * 60;
-  const bookedMinutes = state.calendar.today
-    .filter((e) => !e.allDay)
-    .reduce(
-      (acc, e) =>
-        acc +
-        Math.max(0, Math.round((new Date(e.end).getTime() - new Date(e.start).getTime()) / 60_000)),
-      0,
-    );
-  const busyPercent = Math.min(100, Math.round((bookedMinutes / wakingMinutes) * 100));
+  const mood = todayHealth?.mood;
+  const fitness = typeof todayHealth?.activeMinutes === "number"
+    ? `${todayHealth.activeMinutes} active min`
+    : typeof todayHealth?.steps === "number"
+      ? `${todayHealth.steps.toLocaleString()} steps`
+      : "fitness unrecorded";
 
   /** The event happening right now, if one is. Focus means this first. */
   const live = state.calendar.today.find(
     (e) => !e.allDay && new Date(e.start) <= now && new Date(e.end) > now,
   );
 
-  /** The day's biggest block — what the day is actually about. */
-  const biggest = state.calendar.today
-    .filter((e) => !e.allDay)
+  /** The largest event still ahead today: the major commitment to recall. */
+  const remainingEvents = state.calendar.today.filter((e) => new Date(e.end) > now);
+  if (next && !remainingEvents.some((event) => event.id === next.id)) {
+    remainingEvents.push(next);
+  }
+  const major = remainingEvents
     .map((e) => ({
       title: e.title,
       start: e.start,
@@ -186,7 +186,7 @@ export default function AmbientCards({
         Math.round((new Date(e.end).getTime() - new Date(e.start).getTime()) / 60_000),
       ),
     }))
-    .sort((a, b) => b.minutes - a.minutes)[0];
+    .sort((a, b) => b.minutes - a.minutes || a.start.localeCompare(b.start))[0];
 
   const hasRows =
     state.energy.score > 0 ||
@@ -196,7 +196,7 @@ export default function AmbientCards({
     queued.length > 0 ||
     nudges.length > 0 ||
     Boolean(pattern) ||
-    Boolean(memory);
+    Boolean(major);
 
   if (!hasRows) {
     // Nothing to be peripheral about. The orb is the whole interface.
@@ -215,8 +215,8 @@ export default function AmbientCards({
         <div className="label mb-1">Briefing</div>
 
         <div className="divide-y divide-hairline">
-          {/* Energy — the score, and the three things it is made of: sleep,
-              meals and how booked the day is. A number with no visible working
+          {/* Energy — the score and the four human inputs behind it: sleep,
+              meals, mood and fitness. A number with no visible working
               is one a person can only trust or ignore. */}
           <Row label="Energy">
             <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
@@ -238,7 +238,8 @@ export default function AmbientCards({
                 {sleepHours !== undefined ? `${sleepHours.toFixed(1)}h sleep` : "sleep unrecorded"}
               </span>
               <span className="timestamp">{meals.logged} of {meals.of} meals</span>
-              <span className="timestamp">schedule {busyPercent}% booked</span>
+              <span className="timestamp">{mood ? `${mood} mood` : "mood unrecorded"}</span>
+              <span className="timestamp">{fitness}</span>
             </div>
 
             {state.energy.note ? (
@@ -323,25 +324,12 @@ export default function AmbientCards({
             </Row>
           ) : null}
 
-          {/* Open — the day's biggest block, then the urgent and unfinished
-              work. The nudges live here rather than in a row of their own: a
+          {/* Open — incoming and unfinished work. The nudges live here rather
+              than in a row of their own: a
               separate "Now" was a second name for the same question, which is
               what the user said when they saw it. */}
-          {queued.length > 0 || nudges.length > 0 || biggest ? (
+          {queued.length > 0 || nudges.length > 0 ? (
             <Row label="Open">
-              {biggest ? (
-                <div className="mb-2">
-                  <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
-                    <span className="text-[15px] font-light text-text">{biggest.title}</span>
-                    <span className="timestamp">{span(biggest.minutes)}</span>
-                    {clockTime(biggest.start) ? (
-                      <span className="timestamp">{clockTime(biggest.start)}</span>
-                    ) : null}
-                  </div>
-                  <p className="mt-0.5 timestamp">the biggest block today</p>
-                </div>
-              ) : null}
-
               {queued.length > 0 ? (
                 <>
                   <ul className="space-y-1.5">
@@ -365,7 +353,7 @@ export default function AmbientCards({
                   <p className="mt-2 timestamp">
                     {state.tasks.openCount > queued.length
                       ? `${state.tasks.openCount} open in total`
-                      : "Nothing else open"}
+                      : `${state.tasks.openCount} incomplete`}
                   </p>
                 </>
               ) : null}
@@ -400,42 +388,46 @@ export default function AmbientCards({
           ) : null}
 
           {/* A pattern is only worth the space when it proposes something. */}
-          {pattern ? (
+          {modelPattern || pattern ? (
             <Row
               label="Pattern"
               action={
-                pattern.action ? (
+                pattern?.action ? (
                   <GhostButton
                     label="start focus"
                     onClick={() => {
-                      if (pattern.action) onAct(pattern.action);
+                      if (pattern?.action) onAct(pattern.action);
                     }}
                   />
                 ) : null
               }
             >
               <p className="text-[14px] leading-relaxed font-light text-text">
-                {pattern.observation}
+                {modelPattern?.analysis ?? pattern?.observation}
               </p>
               <p className="mt-0.5 timestamp">
-                {`confidence ${Math.round(pattern.confidence * 100)}%`}
+                {modelPattern
+                  ? `read by ${modelName || "configured model"}`
+                  : `confidence ${Math.round((pattern?.confidence ?? 0) * 100)}% · local detector`}
               </p>
-              {pattern.suggestion ? (
+              {(modelPattern?.suggestion ?? pattern?.suggestion) ? (
                 <p className="mt-1 text-[13px] font-light text-dim">
-                  {pattern.suggestion}
+                  {modelPattern?.suggestion ?? pattern?.suggestion}
                 </p>
               ) : null}
             </Row>
           ) : null}
 
-          {/* One recalled memory, with the reason it surfaced. */}
-          {memory ? (
+          {/* The day's major remaining event, kept separate from the literal
+              next appointment so an important later block is not buried. */}
+          {major ? (
             <Row label="Recall">
               <p className="text-[14px] font-light text-text">
-                {memory.memory.title}
+                {major.title}
               </p>
               <p className="mt-0.5 text-[13px] leading-relaxed font-light text-dim">
-                {memory.reason}
+                {clockTime(major.start) ? `${clockTime(major.start)} · ` : ""}
+                {span(major.minutes)} · major event {relativeDay(major.start) ?? "ahead"}
               </p>
             </Row>
           ) : null}

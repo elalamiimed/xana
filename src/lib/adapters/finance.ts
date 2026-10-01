@@ -59,7 +59,11 @@ export function financeAdapter(): LifeAdapter {
   const symbolsCred = cred("markets.symbols", "XANA_FINANCE_SYMBOLS");
   const symbols = (symbolsCred.present ? symbolsCred.value.split(/[,\s]+/) : DEFAULT_SYMBOLS).filter(Boolean);
   const enabled = process.env.XANA_FINANCE !== "off";
-  const id = "finance";
+  // The plugin id, not a name of this file's own choosing. It was "finance"
+  // while the adapter registry and the plugin list were one namespace; now that
+  // a status row has to be matched to a permission card, an id that differs
+  // between the two is a row nobody can act on.
+  const id = "markets";
   const label = "Markets";
 
   const read = async (): Promise<{ data: { finance: FinanceSignal[] }; status: AdapterStatus }> => {

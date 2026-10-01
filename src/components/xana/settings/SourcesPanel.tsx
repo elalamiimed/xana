@@ -27,8 +27,6 @@ import { Actions, Button, Pill, Section, StatusLine } from "./controls";
 
 export interface SourcesPanelProps {
   view: SettingsView;
-  /** Live adapter statuses, keyed by adapter id, from the life state. */
-  statuses: Record<string, { state: string; mode: string; detail?: string }>;
   onSave: (patch: {
     sources?: Record<string, string>;
     clearSources?: string[];
@@ -36,19 +34,7 @@ export interface SourcesPanelProps {
   saving: boolean;
 }
 
-const STATE_TONE: Record<string, "ok" | "warn" | "idle"> = {
-  connected: "ok",
-  local: "idle",
-  offline: "warn",
-  error: "warn",
-};
-
-export default function SourcesPanel({
-  view,
-  statuses,
-  onSave,
-  saving,
-}: SourcesPanelProps) {
+export default function SourcesPanel({ view, onSave, saving }: SourcesPanelProps) {
   // Drafts are keyed by field, and a key is absent until the user touches
   // it — so "unchanged" and "cleared" stay distinguishable.
   const [drafts, setDrafts] = useState<Record<string, string>>({});
@@ -110,23 +96,9 @@ export default function SourcesPanel({
         </StatusLine>
       </Section>
 
-      {SOURCE_GROUPS.map((group) => {
-        const status = statuses[group.id];
-        return (
-          <Section key={group.id} title={group.label} blurb={group.blurb}>
-            {status ? (
-              <div className="flex flex-wrap items-center gap-2">
-                <Pill tone={STATE_TONE[status.state] ?? "idle"}>
-                  {status.state}
-                </Pill>
-                <span className="font-mono text-[11px] text-faint">{status.mode}</span>
-                {status.detail ? (
-                  <span className="text-[12px] font-normal text-dim">{status.detail}</span>
-                ) : null}
-              </div>
-            ) : null}
-
-            <div className="space-y-4">
+      {SOURCE_GROUPS.map((group) => (
+        <Section key={group.id} title={group.label} blurb={group.blurb}>
+          <div className="space-y-4">
               {group.fields.map((field) => {
                 const secret = field.kind === "secret";
                 const secretView = view.sourceSecrets[field.key];
@@ -230,10 +202,9 @@ export default function SourcesPanel({
                   </div>
                 );
               })}
-            </div>
-          </Section>
-        );
-      })}
+          </div>
+        </Section>
+      ))}
 
       <Section title="Save">
         <Actions>

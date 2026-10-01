@@ -22,6 +22,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type {
   ActionIntent,
+  Analysis,
   Card,
   LifeState,
   Message,
@@ -74,6 +75,7 @@ export interface RenderedMessage {
 
 export interface Xana {
   lifeState: LifeState | null;
+  analysis: Analysis | null;
   /** True once /api/context has settled — success or failure. */
   ready: boolean;
   presence: Presence;
@@ -193,6 +195,7 @@ function toRendered(message: Message): RenderedMessage {
 
 export function useXana(): Xana {
   const [lifeState, setLifeState] = useState<LifeState | null>(null);
+  const [analysis, setAnalysis] = useState<Analysis | null>(null);
   const [ready, setReady] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const [engine, setEngine] = useState<"llm" | "local" | null>(null);
@@ -223,6 +226,7 @@ export function useXana(): Xana {
         if (cancelled) return;
         const next = asLifeState(data.lifeState);
         if (next) setLifeState(next);
+        setAnalysis(data.analysis ?? null);
       } catch {
         // No backend yet. The orb still renders; the ambient region stays empty.
       } finally {
@@ -305,6 +309,7 @@ export function useXana(): Xana {
       const data = await getContext();
       const next = asLifeState(data.lifeState);
       if (!next) return;
+      setAnalysis(data.analysis ?? null);
       setLifeState((previous) =>
         previous ? reduceLifeState(previous, next) : next,
       );
@@ -413,6 +418,7 @@ export function useXana(): Xana {
 
   return {
     lifeState,
+    analysis,
     ready,
     presence,
     messages: rendered,

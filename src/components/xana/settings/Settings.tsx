@@ -46,8 +46,6 @@ export interface SettingsProps {
   controller: SettingsController;
   /** Applied to the live document as the user changes appearance. */
   onAppearancePreview: (next: AppearanceSettings) => void;
-  /** Live adapter statuses for the sources panel. */
-  statuses: Record<string, { state: string; mode: string; detail?: string }>;
 }
 
 const TABS: readonly { id: SettingsTab; label: string; badge?: boolean }[] = [
@@ -67,7 +65,6 @@ export default function Settings({
   onClose,
   controller,
   onAppearancePreview,
-  statuses,
 }: SettingsProps) {
   const [tab, setTab] = useState<SettingsTab>("appearance");
   const panelRef = useRef<HTMLDivElement | null>(null);
@@ -274,12 +271,7 @@ export default function Settings({
                 ) : null}
 
                 {tab === "sources" ? (
-                  <SourcesPanel
-                    view={view}
-                    statuses={statuses}
-                    onSave={save}
-                    saving={controller.saving}
-                  />
+                  <SourcesPanel view={view} onSave={save} saving={controller.saving} />
                 ) : null}
 
                 {tab === "plugins" ? <PluginsPanel /> : null}

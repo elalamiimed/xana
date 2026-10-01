@@ -65,18 +65,25 @@ function fromNowPlaying(raw: Record<string, unknown>): MediaContext | undefined 
 /**
  * Build the media adapter.
  *
- * `mayFetch` gates the bridge lookup. The focus suggestion needs nothing — it
- * is derived from the energy band — so this adapter is genuinely useful with
- * every permission refused, and its ungated half is why the plugin is core.
+ * `mayFetch` gates the *endpoint* only. A file on this machine is read without
+ * asking anyone: it is the user's own bridge, on their own disk, and putting a
+ * file behind a network permission is the kind of over-broad gate that teaches
+ * people to grant everything just to make their own data work again.
+ *
+ * The focus suggestion needs nothing at all — it is derived from the energy
+ * band — which is why this plugin is core.
  */
 export function mediaAdapter(
   opts: { band?: () => EnergyBand; mayFetch?: boolean } = {},
 ): LifeAdapter {
   const band = opts.band ?? (() => "steady");
   const mayFetch = opts.mayFetch ?? false;
-  const url = cred("media.url", "XANA_NOWPLAYING_URL");
   const file = cred("media.file", "XANA_NOWPLAYING_FILE");
-  const configured = (url.present || file.present) && mayFetch;
+  const url = cred("media.url", "XANA_NOWPLAYING_URL");
+  // Two sources, two independent answers.
+  const useFile = file.present;
+  const useUrl = mayFetch && url.present;
+  const configured = useFile || useUrl;
   const id = "media";
 
   const read = async (): Promise<{ data: { media: MediaContext }; status: AdapterStatus }> => {
@@ -84,11 +91,14 @@ export function mediaAdapter(
     const suggestion = focusSuggestionFor(band());
 
     if (!configured) {
+      const waiting = url.present && !mayFetch;
       return {
         data: { media: { focusSuggestion: suggestion, source: "local" } },
         status: status(
           id, "Media", "local", "local",
-          "set a now-playing endpoint or file",
+          waiting
+            ? "an endpoint is set, waiting for permission"
+            : "set a now-playing endpoint or file",
           Date.now() - t0,
         ),
       };
@@ -96,13 +106,15 @@ export function mediaAdapter(
 
     try {
       let parsed: Record<string, unknown> | undefined;
-      if (url.present) {
-        parsed = await httpJson<Record<string, unknown>>(url.value, { timeoutMs: 2500 });
-      } else if (file.present) {
+      // The file is preferred when both are configured: it is local, so it
+      // cannot fail on a network the user has not granted.
+      if (useFile) {
         const text = readFileSync(file.value, "utf8").trim();
         parsed = text.startsWith("{")
           ? (JSON.parse(text) as Record<string, unknown>)
           : { name: text.split("\n")[0] };
+      } else if (useUrl) {
+        parsed = await httpJson<Record<string, unknown>>(url.value, { timeoutMs: 2500 });
       }
 
       const live = parsed ? fromNowPlaying(parsed) : undefined;

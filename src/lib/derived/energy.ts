@@ -137,9 +137,33 @@ export function energyForecast(input: EnergyInputs): EnergyForecast {
   const moods = recent.map((h) => h.mood).filter(Boolean);
   const lastMood = moods[moods.length - 1];
   if (lastMood === "bright") score += 4;
+  if (lastMood === "good") score += 2;
+  if (lastMood === "flat") score -= 3;
   if (lastMood === "low") {
     score -= 8;
     evidence.push("mood has been low");
+  }
+
+  /* --- Fuel and movement: today's direct, user-checkable signals. --- */
+  const meals = lastNight?.meals;
+  if (typeof meals === "number") {
+    const expected = hour < 10 ? 0 : hour < 14 ? 1 : hour < 19 ? 2 : 3;
+    if (meals < expected) {
+      score -= (expected - meals) * 5;
+      evidence.push(`${meals} of ${expected} meals by this time`);
+    } else if (expected > 0) {
+      score += Math.min(3, meals);
+    }
+  }
+
+  const activeMinutes = lastNight?.activeMinutes;
+  const steps = lastNight?.steps;
+  if (typeof activeMinutes === "number") {
+    score += clamp((activeMinutes - 20) / 10, -2, 5);
+    if (activeMinutes >= 30) evidence.push(`${Math.round(activeMinutes)} active minutes`);
+  } else if (typeof steps === "number") {
+    score += clamp((steps - 4_000) / 1_500, -2, 4);
+    if (steps >= 6_000) evidence.push(`${Math.round(steps).toLocaleString()} steps`);
   }
 
   score = clamp(Math.round(score), 5, 98);

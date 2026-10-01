@@ -205,6 +205,44 @@ function sleepMoodCoupling(input: PatternInputs): Pattern | undefined {
   };
 }
 
+/**
+ * Sleep and the user's own energy reading on the same day. Unlike the mood
+ * detector, this is not lagged: the energy check-in describes the capacity
+ * available after that night's sleep.
+ */
+function sleepEnergyCoupling(input: PatternInputs): Pattern | undefined {
+  const pairs = input.health
+    .filter((h): h is typeof h & { sleepHours: number; energy: number } =>
+      typeof h.sleepHours === "number" && typeof h.energy === "number")
+    .map((h) => ({ sleep: h.sleepHours, energy: h.energy }));
+
+  if (pairs.length < 6) return undefined;
+  const short = pairs.filter((p) => p.sleep < 6.5);
+  const rested = pairs.filter((p) => p.sleep >= 7);
+  if (short.length < 2 || rested.length < 2) return undefined;
+
+  const average = (items: typeof pairs) =>
+    items.reduce((total, item) => total + item.energy, 0) / items.length;
+  const shortEnergy = average(short);
+  const restedEnergy = average(rested);
+  const gap = restedEnergy - shortEnergy;
+  if (gap < 0.6) return undefined;
+
+  return {
+    id: uid("pat"),
+    key: "sleep-energy-coupling",
+    observation: `After nights under 6.5h, your reported energy is ${gap.toFixed(1)} points lower than after rested nights.`,
+    confidence: round(Math.min(0.88, 0.42 + pairs.length * 0.025 + gap * 0.12), 2),
+    basis: `the energy difference across ${pairs.length} sleep and energy check-ins`,
+    evidence: [
+      `${short.length} short nights, energy averaging ${shortEnergy.toFixed(1)}/5`,
+      `${rested.length} rested nights, energy averaging ${restedEnergy.toFixed(1)}/5`,
+    ],
+    suggestion: "Protect sleep before a demanding day.",
+    detectedAt: nowIso(),
+  };
+}
+
 /** A goal that has stopped moving. */
 function stalledGoal(input: PatternInputs): Pattern | undefined {
   const stalled = input.goals
@@ -378,7 +416,7 @@ function streakMilestone(input: PatternInputs): Pattern | undefined {
   };
 }
 
-const DETECTORS = [deepWorkDay, habitAtRisk, sleepMoodCoupling, stalledGoal, calendarCrowding, productiveWindow, focusTrend, streakMilestone];
+const DETECTORS = [deepWorkDay, habitAtRisk, sleepEnergyCoupling, sleepMoodCoupling, stalledGoal, calendarCrowding, productiveWindow, focusTrend, streakMilestone];
 
 /**
  * Which family a pattern belongs to, derived from its key. Used to keep the
@@ -388,7 +426,7 @@ const DETECTORS = [deepWorkDay, habitAtRisk, sleepMoodCoupling, stalledGoal, cal
 export function patternFamily(key: string): string {
   if (key.startsWith("deep-work") || key.startsWith("focus-trend")) return "focus";
   if (key.startsWith("habit") || key.startsWith("streak")) return "habit";
-  if (key.startsWith("sleep-mood")) return "sleep";
+  if (key.startsWith("sleep-")) return "sleep";
   if (key.startsWith("goal-stalled")) return "goal";
   if (key.startsWith("calendar")) return "calendar";
   if (key.startsWith("productive")) return "rhythm";

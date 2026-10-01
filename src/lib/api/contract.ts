@@ -11,6 +11,7 @@
 import type {
   ActionIntent,
   ActionOutcome,
+  Analysis,
   BriefingSection,
   Card,
   LifeState,
@@ -43,6 +44,8 @@ export interface StateResponse {
 
 export interface ContextResponse {
   lifeState: LifeState;
+  /** Optional model reading used by the cold-start briefing. */
+  analysis?: Analysis;
 }
 
 export interface ActionRequest {
@@ -58,4 +61,4 @@ export interface ChatApiResponse {
   lifeState: LifeState;
 }
 
-export type { BriefingSection, Card, LifeState, Message, ActionIntent, ActionOutcome };
+export type { Analysis, BriefingSection, Card, LifeState, Message, ActionIntent, ActionOutcome };

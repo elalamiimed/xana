@@ -80,7 +80,16 @@ export async function analyseLifeState(input: AnalysisInput): Promise<Analysis |
 
   const patterns = lifeState.patterns.slice(0, 4);
   const memories = lifeState.memory.filter((m) => !m.memory.pinned).slice(0, 8);
-  if (patterns.length === 0 && memories.length === 0) return undefined;
+  const latestHealth = lifeState.health.latest;
+  const healthSignalCount = [
+    lifeState.health.sleepAvgHours,
+    latestHealth?.energy,
+    latestHealth?.mood,
+    latestHealth?.meals,
+    latestHealth?.activeMinutes,
+    latestHealth?.steps,
+  ].filter((value) => value !== undefined).length;
+  if (patterns.length === 0 && memories.length === 0 && healthSignalCount < 2) return undefined;
 
   const facts: string[] = [];
 
@@ -124,6 +133,13 @@ export async function analyseLifeState(input: AnalysisInput): Promise<Analysis |
     typeof health.latest?.energy === "number"
       ? `they report their energy as ${health.latest.energy}/5`
       : null,
+    health.latest?.mood ? `current mood is ${health.latest.mood}` : null,
+    typeof health.latest?.meals === "number" ? `${health.latest.meals} of 3 meals logged today` : null,
+    typeof health.latest?.activeMinutes === "number"
+      ? `${health.latest.activeMinutes} active minutes today`
+      : typeof health.latest?.steps === "number"
+        ? `${health.latest.steps} steps today`
+        : null,
   ].filter(Boolean);
   if (healthBits.length > 0) facts.push(`HEALTH: ${healthBits.join("; ")}`);
 

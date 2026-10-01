@@ -33,6 +33,7 @@ const AMBIENT_IDLE_MS = 20_000;
 export default function Page() {
   const {
     lifeState,
+    analysis,
     ready,
     presence,
     messages,
@@ -214,6 +215,7 @@ export default function Page() {
           <section className="mt-12 pb-10">
             <AmbientCards
               state={lifeState}
+              analysis={analysis}
               onAct={(intent) => {
                 nudge();
                 void act(intent);
@@ -260,7 +262,6 @@ export default function Page() {
         onClose={shell.closeSettings}
         controller={shell.controller}
         onAppearancePreview={shell.onAppearancePreview}
-        statuses={shell.statuses}
       />
 
       <Cave open={shell.caveOpen} onClose={shell.closeCave} />

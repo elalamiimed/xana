@@ -164,6 +164,10 @@ export type BriefingSection =
         sleepHours?: number;
         /** Meals logged today, against the three a day is measured in. */
         meals: { logged: number; of: number };
+        /** Latest mood report, when available. */
+        mood?: MoodLabel;
+        /** Movement used by the energy forecast. */
+        fitness: { activeMinutes?: number; steps?: number };
         /** How much of the waking day the calendar has taken. */
         schedule: { bookedMinutes: number; freeMinutes: number; busyPercent: number };
       };

@@ -86,7 +86,10 @@ export function readVault(vaultPath: string): Note[] {
 
 export function knowledgeAdapter(): LifeAdapter {
   const vault = cred("notes.vault", "XANA_OBSIDIAN_VAULT");
-  const id = "knowledge";
+  // The plugin id: a status row and a permission card have to agree on what to
+  // call this, or "Notes: waiting for permission" cannot be clicked through to
+  // anything.
+  const id = "notes";
   const label = vault.present ? "Notes (Obsidian)" : "Notes";
 
   const read = async (): Promise<{ data: { notes: Note[] }; status: AdapterStatus }> => {
