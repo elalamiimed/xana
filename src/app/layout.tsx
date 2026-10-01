@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
 import { loadSettings, themeStyle } from "@/lib/settings/store";
+import { PALETTE } from "@/lib/settings/types";
 
 /**
  * The root layout.
@@ -38,7 +39,12 @@ export async function generateViewport(): Promise<Viewport> {
     .map((n) => Number(n));
 
   // A slightly deepened accent, so the browser chrome sits below the
-  // interface rather than competing with it.
+  // interface rather than competing with it. `<meta name="theme-color">` is
+  // consumed before the document exists and cannot read a custom property, so
+  // this is one of the two places in the app that has to hold a finished
+  // colour — and it takes it from the one declaration of it rather than
+  // repeating a literal. The fallback used to be `#07070A`, which was not
+  // `--void` and had not been for some time.
   const chrome =
     [r, g, b].every((n) => Number.isFinite(n)) && r !== undefined
       ? `#${[r, g, b]
@@ -48,7 +54,7 @@ export async function generateViewport(): Promise<Viewport> {
               .padStart(2, "0"),
           )
           .join("")}`
-      : "#07070A";
+      : PALETTE.void;
 
   return {
     themeColor: chrome,

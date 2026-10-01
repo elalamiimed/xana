@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { contrastWithVoid, findTheme, THEME_PRESETS } from "@/lib/settings/themes";
+import { PALETTE } from "@/lib/settings/types";
 import type {
   AppearanceSettings,
   SettingsPatch,
@@ -135,7 +136,9 @@ export interface AppearancePanelProps {
 
 function channelsToHex(value: string): string {
   const [r, g, b] = value.trim().split(/[\s,]+/).map(Number);
-  if (![r, g, b].every((n) => Number.isFinite(n))) return "#7fe3e3";
+  // The fallback is the one finished colour the settings layer declares; an
+  // `<input type="color">` cannot be handed `rgb(var(--accent-rgb))`.
+  if (![r, g, b].every((n) => Number.isFinite(n))) return PALETTE.accentDefault;
   return `#${[r, g, b]
     .map((n) => Math.round(Math.max(0, Math.min(255, n as number))).toString(16).padStart(2, "0"))
     .join("")}`;

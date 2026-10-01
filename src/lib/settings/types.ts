@@ -17,6 +17,42 @@
 
 export type ModelProvider = "openai" | "anthropic";
 
+/**
+ * The palette, as values, for the two places a CSS variable cannot reach.
+ *
+ * WHY THIS EXISTS AT ALL, WHEN DESIGN.md SAYS NEVER AUTHOR A COLOUR
+ *
+ * Almost nothing should use this. Every component composes from
+ * `rgb(var(--accent-rgb) / <alpha>)` and the whole interface re-derives from
+ * three integers — that rule is what makes the theme picker possible. But two
+ * things genuinely cannot read a custom property:
+ *
+ *  1. **The browser chrome.** `<meta name="theme-color">` is consumed before the
+ *     document exists, so it needs a finished colour; the root layout deepens
+ *     the accent for it.
+ *  2. **`<input type="color">`.** The native picker takes `#rrggbb` and nothing
+ *     else, so the appearance panel converts channels to hex and back.
+ *
+ * Both need the same non-accent colours as a fallback, and before this constant
+ * they spelled them out separately — one stale hex in the layout, the accent
+ * default in the panel — each correct-looking, each a second definition of a
+ * value that lives in `globals.css`. That is how a palette drifts, and in this
+ * case it already had: the layout carried `#07070A` for the browser chrome while
+ * `--void` is `#040406`, a difference nobody would ever see on a title bar and
+ * nobody would ever think to look for.
+ *
+ * `void` and `accentDefault` mirror `--void` and `--accent-rgb` in
+ * `globals.css`; when the palette's defaults change, these change together.
+ * That is the most a constant in a stylesheet-free module can promise, and it is
+ * strictly more than two components repeating a literal each.
+ */
+export const PALETTE = {
+  /** `--void`. The page behind the document, for the browser's own chrome. */
+  void: "#040406",
+  /** The built-in accent, as hex, for controls that cannot take channels. */
+  accentDefault: "#7fe3e3",
+} as const;
+
 /** `R G B`, space separated. The one accent representation in the system. */
 export type AccentChannels = string;
 

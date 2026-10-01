@@ -319,6 +319,53 @@ function ruleCardSurface() {
 }
 
 /* ------------------------------------------------------------------ */
+/* Rule 7 — a component never authors a colour                        */
+/* ------------------------------------------------------------------ */
+
+/**
+ * No hex or `rgb()` literal in a component.
+ *
+ * The one structural rule DESIGN.md states outright: accents are stored as raw
+ * sRGB channels and every shade is *composed* from them, which is what lets a
+ * theme picker recolour the interface without any component knowing it exists.
+ * A component that writes `#7fe3e3` opts itself out of every theme, silently,
+ * and it looks correct in the default palette — which is exactly why nobody
+ * reports it.
+ *
+ * **Where the finished colours are allowed to live, and why.** Two things in
+ * this app genuinely cannot read a custom property: `<meta name="theme-color">`
+ * (consumed before the document exists) and `<input type="color">` (takes
+ * `#rrggbb` and nothing else). Both now take their values from `PALETTE` in
+ * `lib/settings/types.ts`, so the rule is enforced everywhere except that one
+ * declaration — and the rule caught a real drift while it was being written:
+ * the layout's fallback was `#07070A` while `--void` is `#040406`.
+ */
+const LITERAL_COLOUR_ALLOWED = new Set(["src/lib/settings/types.ts"]);
+
+function ruleNoLiteralColour() {
+  const rule = "colour — components compose from channels, never author a colour";
+  for (const file of UI_FILES) {
+    const rel = relative(ROOT, file).split(sep).join("/");
+    if (LITERAL_COLOUR_ALLOWED.has(rel)) continue;
+    const lines = readFileSync(file, "utf8").split(/\r?\n/);
+    lines.forEach((line, index) => {
+      if (/^\s*(\*|\/\/)/.test(line)) return;
+      checked++;
+      const literal = line.match(/#[0-9a-fA-F]{3,8}\b/);
+      if (!literal) return;
+      if (/href="#|viewBox|xlinkHref/.test(line)) return;
+      fail(
+        rule,
+        file,
+        index + 1,
+        `"${line.trim().slice(0, 96)}" — ${literal[0]} is a finished colour`,
+        "Compose from the channels: `rgb(var(--accent-rgb) / 0.4)`, or take it from PALETTE if a CSS variable genuinely cannot reach.",
+      );
+    });
+  }
+}
+
+/* ------------------------------------------------------------------ */
 
 console.log("Design system — the craft floor, checked against the source");
 
@@ -327,6 +374,7 @@ ruleSingleH1();
 ruleHeadingOrder();
 ruleLongValueWrap();
 ruleCardSurface();
+ruleNoLiteralColour();
 await ruleBrowserSurfaces();
 
 console.log(
