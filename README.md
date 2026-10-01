@@ -475,9 +475,13 @@ service says about itself, so you find out before relying on it rather than
 mid-sentence.
 
 `setup.ps1` installs into `python\.venv`, so nothing touches your system Python
-and no administrator rights are needed; deleting the folder undoes it. The model
-downloads on first use (about 150 MB for `base`; set `XANA_STT_MODEL=tiny` for a
-smaller, faster one). See **[python/README.md](python/README.md)**.
+and no administrator rights are needed; deleting the folder undoes it. **It uses
+the Tsinghua PyPI mirror**, because `pypi.org` is often the thing that is blocked
+on the same networks that block speech recognition, and it **fetches the model
+weights itself** — from ModelScope, falling back to Hugging Face — because a
+library with no weights reports itself as not ready and looks like a broken
+install. `serve.ps1` finds both the environment and the model on its own, with no
+environment variables to set. See **[python/README.md](python/README.md)**.
 
 **What changes when it is on.** Audio is recorded locally, the end of your
 sentence is found from the waveform rather than a timer, and the clip goes to

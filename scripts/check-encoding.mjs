@@ -35,6 +35,15 @@ const SKIP_DIRS = new Set([
   ".impeccable",
   ".impeccable-review",
   "data",
+  // `python/setup.ps1` builds a virtual environment here. It is someone else's
+  // source with its own encodings — 3057 "damaged locations" were reported from
+  // inside it, all of them legitimate CJK in ModelScope's own fixtures. Scanning
+  // dependencies for the project's own mistake is how a gate becomes noise, and
+  // a gate nobody reads is worse than no gate. `models/` holds binary weights,
+  // which are not in TEXT_EXTENSIONS and are skipped by extension anyway.
+  ".venv",
+  "venv",
+  "models",
 ]);
 
 const TEXT_EXTENSIONS = new Set([

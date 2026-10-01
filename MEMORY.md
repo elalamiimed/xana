@@ -432,6 +432,46 @@ assuming otherwise is what made this look like broken hardware.
 The general shape: **when a feature fails with `network` and the user's
 microphone is fine, the feature has a transport problem, not a hardware one.**
 
+### 20. "Blocked" is usually "unreachable from where I was standing"
+
+The local transcriber was written, tested at the HTTP layer, and shipped with an
+honest note that its core was unexercised: PyPI was unreachable, so
+faster-whisper was never installed and Whisper's decode path had never run.
+**That note was the defect, not the caveat.** A feature whose central path has
+never executed is not "verified with a limitation"; it is unfinished.
+
+The fix was not to accept the network. It was to find a route through it:
+
+- **`pip install faster-whisper` stalled** against `pypi.org`. But TCP to
+  `pypi.org:443` connected fine — the request stalled, which is what a
+  deep-inspection proxy does. The **Tsinghua mirror installed it in seconds.**
+- **Hugging Face is where the model weights live, and it is blocked the same
+  way** — `SSL: UNEXPECTED_EOF_WHILE_READING`, immediately, on both the real host
+  and `hf-mirror.com`. **ModelScope served the same weights in 9 seconds.**
+- **WinRT speech needs a live session** it does not have here, so the built-in
+  Windows recognizer (`zh-CN Embedded DNN v11.1`) is real but unusable from a
+  background process. Worth knowing before designing around it.
+
+Two lessons, and the second is the one that generalises:
+
+**A half-installed dependency is worse than a missing one.** After the library
+went in, the service still reported `ready:false` because the weights had not
+arrived — a state that reads as "broken install" rather than "one more download
+needed". So `setup.ps1` fetches the weights too, and `serve.ps1` finds both the
+venv and the model folder by itself. A setup script that leaves the launcher
+guessing has not finished its job.
+
+**Confirm a limitation before shipping it.** "PyPI is unreachable from my
+sandbox" was true and became "no real transcription has ever run" — which was
+also true, and should have been unacceptable. Two commands found a working
+route. The unverified path is now covered by `npm run verify:transcribe`, which
+runs the real service against real audio: a decoded WAV, a loaded model, a
+computed duration, and a report of exactly what the model heard.
+
+What remains genuinely unproven is **quality** — synthetic audio has no words in
+it, so nothing asserts that Whisper transcribes accurately. That is a different
+claim from "the path works", and it is the one still owed a real microphone.
+
 ---
 
 ## Traps that have already bitten

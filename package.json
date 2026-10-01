@@ -30,6 +30,7 @@
     "verify:dictation": "node --import ./scripts/ts-loader.mjs scripts/check-dictation.ts",
     "verify:task-edit": "node --import ./scripts/ts-loader.mjs scripts/check-task-edit.ts",
     "verify:stt": "node scripts/check-stt.mjs",
+    "verify:transcribe": "node scripts/check-transcribe-live.mjs",
     "verify:durability": "node --import ./scripts/ts-loader.mjs scripts/check-durability.ts",
     "backup": "node --import ./scripts/ts-loader.mjs scripts/backup.ts",
     "verify:crypto": "node --import ./scripts/ts-loader.mjs scripts/check-crypto.ts",

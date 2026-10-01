@@ -5,3 +5,9 @@ __pycache__/
 # someone else's packages, specific to this machine's Python, and reproducible
 # from the script. Committing it would be committing a wheel cache.
 .venv/
+
+# The model weights, fetched by setup.ps1: 75 MB for `tiny` and closer to 500 MB
+# for `base`. Reproducible with one command, and far past what belongs in a
+# repository — git would keep every byte forever, and the user would pay for it
+# on every clone.
+models/
