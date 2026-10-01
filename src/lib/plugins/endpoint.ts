@@ -56,13 +56,17 @@ import {
 import {
   CAPABILITY_INFO,
   CAPABILITY_ORDER,
+  CONNECTION_KIND_BLURB,
+  CONNECTION_KIND_LABEL,
+  CONNECTION_KIND_ORDER,
   type CapabilityKind,
   type CapabilityView,
+  type ConnectionGroup,
+  type ConnectionsResponse,
   type PluginAction,
   type PluginActionResponse,
   type PluginConfigView,
   type PluginStatus,
-  type PluginsResponse,
 } from "./types";
 
 /* ------------------------------------------------------------------ */
@@ -131,6 +135,7 @@ export function pluginView(entry: PluginEntry): PluginStatus {
     ...base,
     name: descriptor.name,
     category: descriptor.category,
+    kind: descriptor.kind,
     tagline: descriptor.tagline,
     dataNote: descriptor.dataNote,
     provides: descriptor.provides,
@@ -142,13 +147,44 @@ export function pluginView(entry: PluginEntry): PluginStatus {
   };
 }
 
-export function pluginsResponse(): PluginsResponse {
+/**
+ * Group the rows by what it takes to connect them.
+ *
+ * Grouping here rather than in the panel for one reason: the counts and the
+ * rows have to come from the same list. A panel that regrouped would be free to
+ * disagree with the response it was handed, and "4 of 9 connected" over five
+ * cards is the kind of arithmetic error a user has no way to check.
+ *
+ * Every kind appears even when empty, so the screen does not silently lose its
+ * "Devices" heading on a fresh install and reappear once a phone is paired.
+ */
+function connectionGroups(plugins: PluginStatus[]): ConnectionGroup[] {
+  return CONNECTION_KIND_ORDER.map((kind) => {
+    const members = plugins.filter((p) => p.kind === kind);
+    return {
+      kind,
+      label: CONNECTION_KIND_LABEL[kind],
+      blurb: CONNECTION_KIND_BLURB[kind],
+      plugins: members,
+      ready: members.filter((p) => p.ready).length,
+      pending: members.filter((p) => !p.ready).length,
+    };
+  });
+}
+
+export function connectionsResponse(): ConnectionsResponse {
   // Warm the register first. The statuses below come from each plugin's own
   // last read, which the registry owns, so the two must be the same object.
   getRegistry();
   const plugins = allPlugins().map(pluginView);
   return {
     plugins,
+    groups: connectionGroups(plugins),
+    kinds: CONNECTION_KIND_ORDER.map((kind) => ({
+      kind,
+      label: CONNECTION_KIND_LABEL[kind],
+      blurb: CONNECTION_KIND_BLURB[kind],
+    })),
     grants: grants(),
     awaitingConsent: plugins.filter((p) => p.missing.length > 0).length,
     unconfigured: plugins.filter((p) => p.missing.length === 0 && p.missingConfig.length > 0).length,
@@ -159,12 +195,12 @@ export function pluginsResponse(): PluginsResponse {
 /* GET                                                                */
 /* ------------------------------------------------------------------ */
 
-export function getPlugins(): NextResponse {
+export function getConnections(): NextResponse {
   try {
-    return NextResponse.json(pluginsResponse());
+    return NextResponse.json(connectionsResponse());
   } catch (err) {
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : "plugins.failed" },
+      { error: err instanceof Error ? err.message : "connections.failed" },
       { status: 500 },
     );
   }
@@ -180,7 +216,7 @@ function originOf(request: Request): string {
   return `${url.protocol}//${url.host}`;
 }
 
-export async function postPlugins(request: Request): Promise<NextResponse> {
+export async function postConnections(request: Request): Promise<NextResponse> {
   let body: unknown;
   try {
     body = await request.json();
@@ -241,7 +277,7 @@ export async function postPlugins(request: Request): Promise<NextResponse> {
         }
         const wantWrite = mayWriteRemotely(GOOGLE_PLUGIN_ID).allowed;
         const { url } = beginAuthorization(
-          `${originOf(request)}/api/plugins/google/callback`,
+          `${originOf(request)}/api/connections/google/callback`,
           wantWrite,
         );
         authUrl = url;
@@ -287,7 +323,7 @@ export async function postPlugins(request: Request): Promise<NextResponse> {
 }
 
 function fail(status: number, message: string): NextResponse {
-  return NextResponse.json({ ok: false, message, ...pluginsResponse() }, { status });
+  return NextResponse.json({ ok: false, message, ...connectionsResponse() }, { status });
 }
 
 /**
@@ -324,15 +360,15 @@ function normaliseActions(body: unknown): PluginAction[] {
 /* ------------------------------------------------------------------ */
 
 /**
- * Save plugin settings.
+ * Save connection settings.
  *
- * Separate from the generic settings PUT because a plugin's fields are its own:
- * this refuses any key no plugin declared, and it rebuilds every adapter whose
- * configuration just changed. Without the rebuild, pasting a calendar URL
- * would appear to do nothing until a restart — the adapter resolves its
- * configuration once, at construction.
+ * Separate from the generic settings PUT because a connection's fields are its
+ * own: this refuses any key no connection declared, and it rebuilds every
+ * adapter whose configuration just changed. Without the rebuild, pasting a
+ * calendar URL would appear to do nothing until a restart — the adapter
+ * resolves its configuration once, at construction.
  */
-export async function putPluginSettings(request: Request): Promise<NextResponse> {
+export async function putConnectionSettings(request: Request): Promise<NextResponse> {
   let body: unknown;
   try {
     body = await request.json();
@@ -364,7 +400,7 @@ export async function putPluginSettings(request: Request): Promise<NextResponse>
     // The file is already written; the next cold read picks it up regardless.
   }
 
-  return NextResponse.json({ ok: true, message: "Saved.", ...pluginsResponse() });
+  return NextResponse.json({ ok: true, message: "Saved.", ...connectionsResponse() });
 }
 
 /* ------------------------------------------------------------------ */
@@ -380,4 +416,4 @@ export {
   mayWriteRemotely,
   allGranted,
 };
-export type { CapabilityKind, PluginStatus };
+export type { CapabilityKind, PluginStatus as ConnectionStatus };

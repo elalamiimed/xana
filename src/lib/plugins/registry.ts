@@ -95,6 +95,9 @@ const DESCRIPTORS: PluginDescriptor[] = [
     id: "calendar",
     name: "Calendar",
     category: "life",
+    // A feed you already publish, plus events she booked herself. The feed is
+    // a read; her own events are not a connection at all.
+    kind: "source",
     // Core: her own events are always in the schedule, and reading them reaches
     // nothing but her own table.
     core: true,
@@ -139,6 +142,9 @@ const DESCRIPTORS: PluginDescriptor[] = [
     id: "weather",
     name: "Weather",
     category: "environment",
+    // A public API with no key and no account. The only thing it wants from you
+    // is a location.
+    kind: "service",
     tagline: "The forecast for where you actually are.",
     dataNote:
       "Sends your coordinates to api.open-meteo.com, or your city name to its geocoder. If neither is set, it asks ipapi.co to guess from your IP address — that is the one that reveals roughly where you are to a third party.",
@@ -182,6 +188,8 @@ const DESCRIPTORS: PluginDescriptor[] = [
     id: "tasks",
     name: "Todoist",
     category: "life",
+    // A hosted list you already own, reached with your token.
+    kind: "service",
     // Core: the local task list lives in her own table and always works. The
     // hosted list is the optional half, and it is where the network read lives.
     core: true,
@@ -215,6 +223,8 @@ const DESCRIPTORS: PluginDescriptor[] = [
     id: "notes",
     name: "Notes folder",
     category: "knowledge",
+    // A folder you name, on this machine.
+    kind: "source",
     // NOT core, and this is the finding that made the distinction: the vault is
     // a folder the user names, outside `xana.db`, and a core plugin skips the
     // gate. Reading it needs `local.read` like any other external source. What
@@ -244,6 +254,10 @@ const DESCRIPTORS: PluginDescriptor[] = [
     id: "health",
     name: "Health export",
     category: "life",
+    // A folder of exports you drop on this machine. The phone that produces
+    // them posts to the ingest endpoint instead, which is the same plugin's
+    // device half — see `health-bridge.ts`.
+    kind: "source",
     // NOT core: an export folder is outside her store. Readings you log by hand
     // live in `xana.db` and are never gated — that is the half worth keeping
     // unasked, and it is why the energy forecast still works on a fresh install.
@@ -268,6 +282,8 @@ const DESCRIPTORS: PluginDescriptor[] = [
     id: "media",
     name: "Now playing",
     category: "signal",
+    // Your player or a bridge beside it, on your own network.
+    kind: "device",
     // NOT core: both sources are outside her store — a file the user names, or
     // an endpoint. The focus suggestion is derived from the energy band and
     // needs no bridge at all, so the plugin's *helpful* half is ungated without
@@ -307,6 +323,8 @@ const DESCRIPTORS: PluginDescriptor[] = [
     id: "mail",
     name: "Mail",
     category: "signal",
+    // A bridge you run, on this machine or your own network.
+    kind: "device",
     // NOT core: a bridge file or endpoint, both outside her store.
     tagline: "Recent message subjects, from a bridge you run.",
     dataNote:
@@ -341,6 +359,9 @@ const DESCRIPTORS: PluginDescriptor[] = [
     id: "markets",
     name: "Markets",
     category: "signal",
+    // A public quote endpoint. No key, no account — the symbols you list are
+    // the whole of what you tell it.
+    kind: "service",
     tagline: "Quotes for the symbols you follow.",
     dataNote:
       "Requests the symbols you list from stooq.com. The list is visible to them; nothing else is sent.",

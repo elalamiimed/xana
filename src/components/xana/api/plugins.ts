@@ -18,6 +18,8 @@
  */
 
 import type {
+  ConnectionGroup,
+  ConnectionsResponse,
   PermissionGrants,
   PluginAction,
   PluginActionResponse,
@@ -25,8 +27,13 @@ import type {
   PluginsResponse,
 } from "../../../lib/plugins/types";
 
-export const PLUGINS_ENDPOINT = "/api/plugins";
-export const PLUGIN_SETTINGS_ENDPOINT = "/api/plugins/settings";
+/** The canonical surface. `/api/plugins` still answers the same handlers. */
+export const CONNECTIONS_ENDPOINT = "/api/connections";
+export const CONNECTION_SETTINGS_ENDPOINT = "/api/connections/settings";
+
+/** Kept as the old names, so an older import keeps compiling. */
+export const PLUGINS_ENDPOINT = CONNECTIONS_ENDPOINT;
+export const PLUGIN_SETTINGS_ENDPOINT = CONNECTION_SETTINGS_ENDPOINT;
 
 /** The list the GET returns, plus the sentence that came back with a write. */
 export type PluginSettingsResponse = PluginsResponse & { ok: boolean; message: string };
@@ -61,7 +68,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * The list and the two counts, or null when the body is not that shape.
+ * The list, the groups and the two counts, or null when the body is not that shape.
  *
  * Only the envelope is checked. The array is handed on as `PluginStatus[]`
  * rather than re-validated field by field, because the server builds it from
@@ -70,7 +77,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * is how the two drift apart.
  *
  * The counts are required rather than defaulted. They are the header's whole
- * text, and the panel is not allowed to invent them.
+ * text, and the panel is not allowed to invent them. `groups` is the same
+ * bargain: the server computed it from the same rows, so the panel renders it
+ * rather than recomputing a total that could disagree with the cards below.
  */
 function asPluginsResponse(payload: unknown): PluginsResponse | null {
   if (!isRecord(payload)) return null;
@@ -84,6 +93,8 @@ function asPluginsResponse(payload: unknown): PluginsResponse | null {
 
   return {
     plugins: payload.plugins as PluginStatus[],
+    groups: Array.isArray(payload.groups) ? (payload.groups as ConnectionGroup[]) : [],
+    kinds: Array.isArray(payload.kinds) ? (payload.kinds as ConnectionsResponse["kinds"]) : [],
     grants,
     awaitingConsent: payload.awaitingConsent,
     unconfigured: payload.unconfigured,

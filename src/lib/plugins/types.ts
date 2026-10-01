@@ -261,6 +261,80 @@ export const CATEGORY_LABEL: Record<PluginCategory, string> = {
 };
 
 /**
+ * How a connection reaches the world. The one axis the Connections screen
+ * groups by.
+ *
+ * WHY THIS EXISTS BESIDE `category`
+ *
+ * `category` says what a feature is *about* — your life, the world, what you
+ * know. That is the right axis for the briefing and for reading the list top to
+ * bottom. It is the wrong axis for a settings screen, where the user's actual
+ * question is "what has to be switched on, and what does it need from me":
+ * an API key, a folder on this machine, a phone, or nothing at all.
+ *
+ * The four answers to that question are the four kinds. A screen grouped this
+ * way can say, honestly and once, what each group costs you in configuration —
+ * "these need a key", "these read a folder you name", "this one is a device you
+ * own" — instead of repeating it inside every card.
+ *
+ * It is also the answer to the join the app used to have: keys, folders and
+ * sign-ins lived on three different screens under three different names, and
+ * none of them was the place you looked for "everything Xana can reach". One
+ * list, grouped by what it takes to connect, is that place.
+ */
+export type ConnectionKind =
+  /** Reads something that is already yours. Usually no key, sometimes a folder. */
+  | "source"
+  /** A third-party API, reached with a key or with no key at all. */
+  | "service"
+  /** Something you carry that reports to her: a phone, a bridge, a player. */
+  | "device"
+  /** On your machine already. Part of Xana rather than a subscription. */
+  | "library";
+
+export const CONNECTION_KIND_ORDER: readonly ConnectionKind[] = [
+  "source",
+  "service",
+  "device",
+  "library",
+] as const;
+
+export const CONNECTION_KIND_LABEL: Record<ConnectionKind, string> = {
+  source: "Your data",
+  service: "Services",
+  device: "Devices",
+  library: "Bundled",
+};
+
+/**
+ * What each group costs in configuration, as one sentence.
+ *
+ * Written per group rather than per card on purpose: the sentence is about the
+ * *kind* of thing being connected, and repeating it sixteen times would turn
+ * the one line a user actually reads into noise.
+ */
+export const CONNECTION_KIND_BLURB: Record<ConnectionKind, string> = {
+  source: "Things you already have. Most need no key at all.",
+  service: "Reached over the internet. Some need a key, some do not.",
+  device: "Something you carry, posting to her on your own network.",
+  library: "Already part of Xana. Nothing to connect, nothing to pay.",
+};
+
+/**
+ * What the whole screen is called, in one place.
+ *
+ * The user asked for one thing rather than two — keys, folders, sign-ins and
+ * bundled sources under a single name — so the name appears in the tab, the
+ * panel heading and the API route. Kept as a constant because three copies of
+ * a title that must agree is three chances for them not to.
+ */
+export const CONNECTIONS_LABEL = "Connections";
+
+/** How to read the list, once, above the groups. */
+export const CONNECTIONS_BLURB =
+  "Everything Xana can reach, in one place: public APIs, keys, folders on this machine, and devices that report to her. Nothing here is required — her own engine covers the day without any of it.";
+
+/**
  * Where the data physically comes from. This is the distinction the UI needs
  * to be honest about, because "local" and "live" are not the same promise as
  * "synthetic" and users cannot tell them apart from a green dot.
@@ -281,6 +355,15 @@ export interface PluginDescriptor {
   /** What the user sees. */
   name: string;
   category: PluginCategory;
+  /**
+   * How this connection is reached, and therefore which group it sits in.
+   *
+   * Required rather than defaulted. A default would be wrong for at least one
+   * plugin and nothing would catch it — the value decides where a card appears
+   * on the only screen that can grant it, so "I forgot to set it" has to be a
+   * typecheck error rather than a card filed under the wrong heading.
+   */
+  kind: ConnectionKind;
   /** One line, no full stop needed, describing what it gives Xana. */
   tagline: string;
   /**
@@ -452,6 +535,15 @@ export interface RuntimeStatus {
 export interface PluginStatus extends RuntimeStatus {
   name: string;
   category: PluginCategory;
+  /**
+   * How it is reached: your data, a service, a device, or bundled.
+   *
+   * Carried on the wire rather than left to the client to look up, so the one
+   * screen that groups connections cannot file a card under a heading the
+   * descriptor never agreed to. The label and order travel with the response
+   * for the same reason.
+   */
+  kind: ConnectionKind;
   tagline: string;
   /** What leaves this machine, in plain words. The sentence being consented to. */
   dataNote: string;
@@ -468,17 +560,53 @@ export interface PluginStatus extends RuntimeStatus {
   ready: boolean;
 }
 
-/** The wire shape `GET /api/plugins` returns. */
-export interface PluginsResponse {
+/**
+ * One group on the connections screen, with its counts already worked out.
+ *
+ * The counts are computed server-side because "3 of 4 connected" has to agree
+ * with the rows rendered underneath it, and a client-side recomputation is a
+ * second opinion waiting to disagree. The blurb is the server's too: it is a
+ * sentence about the *kind*, and it stays true as cards are added to the group.
+ */
+export interface ConnectionGroup {
+  kind: ConnectionKind;
+  label: string;
+  blurb: string;
+  /** Every connection in this group, in descriptor order. */
   plugins: PluginStatus[];
+  /** How many of them can run right now. */
+  ready: number;
+  /** How many are waiting on a permission, a setting, or a key. */
+  pending: number;
+}
+
+/** The wire shape `GET /api/connections` returns. */
+export interface ConnectionsResponse {
+  plugins: PluginStatus[];
+  /** The same rows, grouped by what it takes to connect them. */
+  groups: ConnectionGroup[];
+  /** Every kind in display order, including groups with nothing in them yet. */
+  kinds: { kind: ConnectionKind; label: string; blurb: string }[];
   grants: PermissionGrants;
-  /** How many plugins are blocked purely on consent. */
+  /** How many connections are blocked purely on consent. */
   awaitingConsent: number;
   /** How many are allowed but still missing a setting. */
   unconfigured: number;
 }
 
-/** The body `POST /api/plugins` accepts. */
+/**
+ * The old name for the same response.
+ *
+ * Kept as an alias rather than deleted: the wire shape did not change when the
+ * screen was renamed, and a bundle or a script built against `/api/plugins`
+ * should keep typechecking. New code uses `ConnectionsResponse`.
+ */
+export type PluginsResponse = ConnectionsResponse;
+
+/** A connection's status row. Same shape; the new name for new code. */
+export type ConnectionStatus = PluginStatus;
+
+/** The body `POST /api/connections` accepts. */
 export interface PluginAction {
   id: string;
   action: "grant" | "revoke" | "connect" | "disconnect";

@@ -1,17 +1,10 @@
 /**
- * PUT /api/plugins/settings — one plugin's configuration.
+ * PUT /api/plugins/settings — the pre-rename address of connection settings.
  *
- * A separate path from `/api/plugins` because these writes are a different
- * kind of decision: a grant says what Xana may do, a setting says where. They
- * fail differently too — a bad grant is a rejected permission, a bad setting is
- * a key no plugin declared.
+ * Re-exports the canonical handler; see `/api/connections/settings`.
  */
 
-import { putPluginSettings } from "@/lib/plugins/endpoint";
+export { PUT } from "@/app/api/connections/settings/route";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-
-export async function PUT(request: Request) {
-  return putPluginSettings(request);
-}

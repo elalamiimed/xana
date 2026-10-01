@@ -143,16 +143,19 @@ export const PLUGIN_SETTING_KEYS = [
   "tasks.token",
   // notes
   "notes.vault",
-  // health
+  // health — a folder, and the device that posts to her
   "health.folder",
+  "health.deviceToken",
+  "health.ingest",
   // now playing
   "media.url",
   "media.file",
   // mail
   "mail.url",
   "mail.file",
-  // markets
+  // markets and crypto
   "markets.symbols",
+  "crypto.coins",
   // google calendar (OAuth)
   "google.clientId",
   "google.clientSecret",
@@ -334,18 +337,18 @@ export interface SourceGroup {
  * deleted outright. A key a user can set but cannot unset is worse than a key
  * with no form at all.
  *
- * New configuration does not go here. A plugin declares its own `config` in
- * `lib/plugins/registry.ts`, keyed `plugin.field`, and the Plugins panel builds
- * the form from that. The two lists are kept separate because they answer
+ * New configuration does not go here. A connection declares its own `config` in
+ * `lib/plugins/registry.ts`, keyed `plugin.field`, and the Connections panel
+ * builds the form from that. The two lists are kept separate because they answer
  * different questions: this one is "what is still in the environment", the
- * plugin registry is "what can Xana do".
+ * connection registry is "what can Xana do".
  */
 export const SOURCE_GROUPS: readonly SourceGroup[] = [
   {
     id: "legacy-weather",
     label: "Weather (old keys)",
     blurb:
-      "Set these in the Plugins panel instead. Shown here only so an older value can be cleared.",
+      "Set these under Weather in Connections instead. Shown here only so an older value can be cleared.",
     fields: [
       { key: "XANA_LAT", label: "Latitude", hint: "Superseded by weather.latitude", kind: "number", example: "51.5072" },
       { key: "XANA_LON", label: "Longitude", hint: "Superseded by weather.longitude", kind: "number", example: "-0.1276" },
@@ -355,7 +358,7 @@ export const SOURCE_GROUPS: readonly SourceGroup[] = [
   {
     id: "legacy-calendar",
     label: "Calendar (old key)",
-    blurb: "Set this in the Plugins panel instead, under Calendar.",
+    blurb: "Set this under Calendar in Connections instead.",
     fields: [
       {
         key: "XANA_CALENDAR_ICS_URLS",
@@ -369,7 +372,7 @@ export const SOURCE_GROUPS: readonly SourceGroup[] = [
   {
     id: "legacy-tasks",
     label: "Tasks (old key)",
-    blurb: "Set this in the Plugins panel instead, under Todoist.",
+    blurb: "Set this under Todoist in Connections instead.",
     fields: [
       {
         key: "XANA_TODOIST_TOKEN",
@@ -382,7 +385,7 @@ export const SOURCE_GROUPS: readonly SourceGroup[] = [
   {
     id: "legacy-knowledge",
     label: "Notes (old key)",
-    blurb: "Set this in the Plugins panel instead, under Notes folder.",
+    blurb: "Set this under Notes folder in Connections instead.",
     fields: [
       {
         key: "XANA_OBSIDIAN_VAULT",
@@ -396,7 +399,7 @@ export const SOURCE_GROUPS: readonly SourceGroup[] = [
   {
     id: "legacy-health",
     label: "Health (old key)",
-    blurb: "Set this in the Plugins panel instead, under Health export.",
+    blurb: "Set this under Health in Connections instead.",
     fields: [
       {
         key: "XANA_HEALTH_DIR",
@@ -410,7 +413,7 @@ export const SOURCE_GROUPS: readonly SourceGroup[] = [
   {
     id: "legacy-media",
     label: "Now playing (old keys)",
-    blurb: "Set these in the Plugins panel instead, under Now playing.",
+    blurb: "Set these under Now playing in Connections instead.",
     fields: [
       { key: "XANA_NOWPLAYING_URL", label: "Endpoint URL", hint: "Superseded by media.url", kind: "url" },
       { key: "XANA_NOWPLAYING_FILE", label: "or a file", hint: "Superseded by media.file", kind: "path" },
@@ -419,7 +422,7 @@ export const SOURCE_GROUPS: readonly SourceGroup[] = [
   {
     id: "legacy-mail",
     label: "Mail (old keys)",
-    blurb: "Set these in the Plugins panel instead, under Mail.",
+    blurb: "Set these under Mail in Connections instead.",
     fields: [
       { key: "XANA_MAIL_URL", label: "Endpoint URL", hint: "Superseded by mail.url", kind: "url" },
       { key: "XANA_MAIL_FILE", label: "or a file", hint: "Superseded by mail.file", kind: "path" },
@@ -428,7 +431,7 @@ export const SOURCE_GROUPS: readonly SourceGroup[] = [
   {
     id: "legacy-finance",
     label: "Markets (old key)",
-    blurb: "Set this in the Plugins panel instead, under Markets.",
+    blurb: "Set this under Markets in Connections instead.",
     fields: [
       {
         key: "XANA_FINANCE_SYMBOLS",
@@ -436,6 +439,20 @@ export const SOURCE_GROUPS: readonly SourceGroup[] = [
         hint: "Superseded by markets.symbols",
         kind: "text",
         example: "aapl.us, msft.us, btcusd",
+      },
+    ],
+  },
+  {
+    id: "legacy-crypto",
+    label: "Crypto (old key)",
+    blurb: "Set this under Crypto in Connections instead.",
+    fields: [
+      {
+        key: "XANA_CRYPTO_COINS",
+        label: "Coins",
+        hint: "Superseded by crypto.coins",
+        kind: "text",
+        example: "bitcoin, ethereum, solana",
       },
     ],
   },

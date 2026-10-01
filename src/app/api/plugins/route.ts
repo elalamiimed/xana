@@ -1,19 +1,15 @@
 /**
- * GET /api/plugins  — every plugin, its capabilities, and its last read.
- * POST /api/plugins — grant, revoke, connect, disconnect.
+ * GET /api/plugins — the pre-rename address of the connection surface.
  *
- * Paired with the canonical `/xana/plugins`, which serves the same handlers.
+ * Kept because the name was public: a script, a bookmark, or a client bundle
+ * built before the rename points here. It re-exports the canonical handlers
+ * rather than reimplementing them, so there is exactly one behaviour and the
+ * two paths cannot disagree.
+ *
+ * `POST` accepts the same `{ id, action }` body as before.
  */
 
-import { getPlugins, postPlugins } from "@/lib/plugins/endpoint";
+export { GET, POST } from "@/app/api/connections/route";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-
-export async function GET() {
-  return getPlugins();
-}
-
-export async function POST(request: Request) {
-  return postPlugins(request);
-}

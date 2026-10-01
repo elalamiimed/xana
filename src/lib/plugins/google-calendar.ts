@@ -596,6 +596,10 @@ export const GOOGLE_DESCRIPTOR: PluginDescriptor = {
   id: GOOGLE_PLUGIN_ID,
   name: "Google Calendar",
   category: "life",
+  // A source you sign into. Grouped with the other things that are already
+  // yours rather than with the keyless public services, because the thing it
+  // takes from the user is a sign-in, not a key.
+  kind: "source",
   tagline: "Your real Google calendar, read and written.",
   dataNote:
     "Sends your calendar data to and from www.googleapis.com, authenticated as you. Xana stores a refresh token in her settings file on this machine, and can create events in your calendar once you allow it.",
@@ -740,6 +744,9 @@ export function googleSetup(): {
     clientIdFrom: client.from,
     connected: googleConnected(),
     account: googleTokens().account,
-    redirectHint: "http://127.0.0.1:4310/api/plugins/google/callback",
+    // The current path, and the one the flow actually begins with. The
+    // pre-rename `/api/plugins/google/callback` still answers too, so a project
+    // that already registered the older URI keeps working.
+    redirectHint: "http://127.0.0.1:4310/api/connections/google/callback",
   };
 }
