@@ -352,6 +352,42 @@ version freed it by *saving* `wakeEnabled: false` through the settings API — a
 network round trip racing the permission prompt, arriving long after
 `getUserMedia` had already been called.
 
+### 18. An edit is not a delete-and-retype, and a partial edit is a promise
+
+The task list could be added to, ticked off and deleted — and nothing else. The
+most common edit there is, moving something to another day, therefore meant
+deleting the task and retyping it, which throws away the id, the creation date
+and anything attached to it. `setTaskStatus` even said so in a comment: "title
+and date edits are the chat's job for now." They were nobody's job, and an
+overdue item stayed overdue because fixing it cost more than ignoring it.
+
+Two rules came out of building the missing verb, and both are about partial
+updates:
+
+**Absent is not empty.** A patch must touch only the fields it mentions.
+`undefined` means "leave it", `null` means "clear it", and the two are not
+interchangeable — a rename that blanked the due date would silently drop a
+commitment, and the code that does it looks completely reasonable. The check for
+this is a title-only patch followed by an assertion that the date survived.
+
+**A value the server cannot read must be refused, not coerced.** `cleanDate`
+returns `null` for an unparseable string, and mapping that straight into the
+patch turned `due: "next tuesday"` into a DELETED deadline — a typo in the most
+common edit there is, destroying the field it was trying to set. The three
+intentions have to stay distinct: a valid date sets it, an explicit `null` or `""`
+clears it, and anything else is a 400 that says what format to use. The test
+asserts the deadline is still there after the refusal, which is the part a
+status-code check would miss.
+
+The general shape, and it applies well beyond tasks: **when a field can mean
+"unset" and "do not touch", those must be different values all the way down.**
+Collapsing them is how a form silently eats data.
+
+Status keeps its own verb because it carries `completed_at`, which the "what did
+I finish" briefing reads. Folding it into the general update would make every
+rename decide what to do about a completion timestamp it has no business
+touching.
+
 ---
 
 ## Traps that have already bitten

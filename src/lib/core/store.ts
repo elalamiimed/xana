@@ -731,6 +731,70 @@ export class XanaStore {
     return row ? rowToTask(row) : undefined;
   }
 
+  /**
+   * Change a task's own fields — anything except its status.
+   *
+   * Status has its own method because it carries a side effect: completing a task
+   * stamps `completed_at`, and that timestamp is what the "what did I finish"
+   * briefing reads. Folding that in here would mean every title edit had to
+   * decide what to do about a completion date it has no business touching.
+   *
+   * `due` is the field this exists for. The distinguishing rule is that
+   * `undefined` means "leave it alone" and `null` means "remove the date", and
+   * the two are not interchangeable: a reschedule that cleared the deadline
+   * instead of skipping it would silently drop a commitment, and a caller
+   * patching only the title must not do that either.
+   */
+  updateTask(
+    id: string,
+    patch: {
+      title?: string;
+      due?: string | null;
+      project?: string | null;
+      priority?: Task["priority"];
+      estimateMinutes?: number | null;
+      energy?: Task["energy"] | null;
+      tags?: string[];
+    },
+  ): Task | undefined {
+    const existing = this.taskById(id);
+    if (!existing) return undefined;
+
+    const next: Task = {
+      ...existing,
+      title: patch.title ?? existing.title,
+      // `in`-style semantics: only an explicit `null` clears a date, and only an
+      // explicit value sets one.
+      due: patch.due === undefined ? existing.due : (patch.due ?? undefined),
+      project: patch.project === undefined ? existing.project : (patch.project ?? undefined),
+      priority: patch.priority ?? existing.priority,
+      estimateMinutes:
+        patch.estimateMinutes === undefined ? existing.estimateMinutes : (patch.estimateMinutes ?? undefined),
+      energy: patch.energy === undefined ? existing.energy : (patch.energy ?? undefined),
+      tags: patch.tags ?? existing.tags,
+    };
+
+    this.db
+      .prepare(
+        `UPDATE tasks
+            SET title = @title, due = @due, project = @project, priority = @priority,
+                estimate_minutes = @estimateMinutes, energy = @energy, tags = @tags
+          WHERE id = @id`,
+      )
+      .run({
+        id,
+        title: next.title,
+        due: next.due ?? null,
+        project: next.project ?? null,
+        priority: next.priority,
+        estimateMinutes: next.estimateMinutes ?? null,
+        energy: next.energy ?? null,
+        tags: JSON.stringify(next.tags),
+      });
+
+    return this.taskById(id);
+  }
+
   updateTaskStatus(id: string, status: TaskStatus): Task | undefined {
     this.db
       .prepare(`UPDATE tasks SET status = ?, completed_at = ? WHERE id = ?`)

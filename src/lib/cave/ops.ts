@@ -576,6 +576,93 @@ export function setTaskStatus(input: Record<string, unknown>): CavePayload {
   return { task, tasks: listCaveTasks() };
 }
 
+/**
+ * Edit a task that already exists.
+ *
+ * The counterpart to `setTaskStatus`, which deliberately does one thing. This is
+ * the other half: the title, the date, the priority, the estimate.
+ *
+ * It exists because the missing verb had a real cost. Moving one task to
+ * tomorrow — the most common edit there is, and the one that stops an overdue
+ * item being noise on tonight's briefing — meant deleting the task and retyping
+ * it, which throws away its id, its creation date and any history attached to
+ * it. "Delete and recreate" is not an edit.
+ *
+ * ONLY the fields present in the input are touched. A patch that carries a title
+ * must not blank the due date, and vice versa, which is why each field is
+ * checked with `in` rather than read for a truthy value. Clearing a date is a
+ * real intention and is expressed with an explicit `null` or an empty string —
+ * both are honoured, because a form that has been emptied sends `""` and the
+ * user's meaning is unmistakable.
+ */
+export function updateTask(input: Record<string, unknown>): CavePayload {
+  const id = bareId(input.id, "task");
+  const patch: Parameters<ReturnType<typeof getStore>["updateTask"]>[1] = {};
+
+  if ("title" in input) {
+    const title = cleanText(input.title, 200);
+    if (!title) throw new CaveError("A task needs a title.");
+    patch.title = title;
+  }
+  if ("due" in input) {
+    /**
+     * Three distinct intentions, and conflating them destroys data.
+     *
+     *   null or ""  -> the user cleared the date. That is an intention.
+     *   a valid date-> set it.
+     *   anything else -> refuse, loudly.
+     *
+     * The third case is the one that bit: `cleanDate` returns `null` for an
+     * unparseable string, and an earlier version of this mapped that straight
+     * into the patch — so "next tuesday" DELETED the deadline instead of being
+     * rejected. A typo in a date field silently dropped a commitment, which is
+     * the worst possible outcome for the single most common edit there is.
+     */
+    if (input.due === null || input.due === "") {
+      patch.due = null;
+    } else {
+      const cleaned = cleanDate(input.due);
+      if (cleaned === null || cleaned === undefined) {
+        throw new CaveError("That is not a date I can read. Use YYYY-MM-DD, or clear it to remove the date.");
+      }
+      patch.due = cleaned;
+    }
+  }
+  if ("project" in input) {
+    patch.project = cleanText(input.project, 60) ?? null;
+  }
+  if ("priority" in input) {
+    const priority = cleanPriority(input.priority);
+    if (priority === undefined) throw new CaveError("Priority is 1 to 4 (1 is the most urgent).");
+    patch.priority = priority;
+  }
+  if ("estimateMinutes" in input) {
+    patch.estimateMinutes = input.estimateMinutes === null ? null : (cleanEstimate(input.estimateMinutes) ?? null);
+  }
+  if ("energy" in input) {
+    const energy = input.energy === null || input.energy === "" ? null : String(input.energy).trim();
+    if (energy !== null && !["low", "medium", "high"].includes(energy)) {
+      throw new CaveError("Energy is low, medium or high.");
+    }
+    patch.energy = energy as Task["energy"] | null;
+  }
+  if (Array.isArray(input.tags)) {
+    patch.tags = input.tags
+      .filter((tag): tag is string => typeof tag === "string")
+      .map((tag) => tag.trim())
+      .filter(Boolean)
+      .slice(0, 12);
+  }
+
+  if (Object.keys(patch).length === 0) throw new CaveError("Nothing to change.");
+
+  const task = getStore().updateTask(id, patch);
+  if (!task) throw new CaveError("That task no longer exists.", 404);
+
+  invalidateContext();
+  return { task, tasks: listCaveTasks() };
+}
+
 export function deleteTask(input: Record<string, unknown>): CavePayload {
   const id = bareId(input.id, "task");
   const removed = getStore().deleteTask(id);
@@ -683,6 +770,7 @@ const OPERATIONS = {
   "milestone.update": updateMilestone,
   "milestone.delete": deleteMilestone,
   "task.create": createTask,
+  "task.update": updateTask,
   "task.setStatus": setTaskStatus,
   "task.delete": deleteTask,
   "event.create": createEvent,

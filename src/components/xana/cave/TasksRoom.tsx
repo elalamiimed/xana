@@ -21,6 +21,19 @@ import type { CaveController } from "./useCave";
  * So this is the second door, not a replacement for the first. Nothing here
  * is required except the title, because a form that demands four fields before
  * it will accept a name is a form nobody fills in.
+ *
+ * WHY EVERY ROW IS NOW EDITABLE
+ *
+ * Adding and completing were the only two things this screen could do, so the
+ * most common edit there is — moving something to another day — could only be
+ * done by deleting the task and retyping it. That throws away the id, the
+ * creation date and any history attached to it, and it is not an edit.
+ *
+ * The row edits in place rather than opening a dialog, because the thing being
+ * changed is one field on one line and a modal for that is a modal the user has
+ * to dismiss afterwards. The date shortcuts ("today", "tomorrow", "+1w") exist
+ * because the reason people reschedule is almost never "the 14th", it is
+ * "not today" — and a native date picker makes you find that on a calendar.
  */
 
 const PRIORITY_LABEL: Record<number, string> = {
@@ -50,6 +63,47 @@ function dueLabel(due: string | undefined): { text: string; late: boolean } | nu
   };
 }
 
+/**
+ * A date a person would type, as YYYY-MM-DD.
+ *
+ * Deliberately tiny and deliberately not clever: it understands the four things
+ * someone actually says when they reschedule, and returns null for everything
+ * else so the caller can leave the stored date alone rather than guess.
+ */
+function quickDate(input: string, now = new Date()): string | null {
+  const text = input.trim().toLowerCase();
+  if (!text) return null;
+
+  const shift = (days: number) => {
+    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + days);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  };
+
+  if (text === "today") return shift(0);
+  if (text === "tomorrow") return shift(1);
+  if (text === "yesterday") return shift(-1);
+
+  // "+3d", "3d", "+2w", "1w" — enough arithmetic for "next week", no more.
+  const relative = /^\+?(\d+)\s*([dw])$/.exec(text);
+  if (relative) {
+    const amount = Number(relative[1]);
+    const unit = relative[2];
+    if (Number.isFinite(amount)) return shift(unit === "w" ? amount * 7 : amount);
+  }
+
+  // A weekday name means the next one of those, which is what people mean.
+  const days = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+  const named = days.findIndex((day) => day.startsWith(text) && text.length >= 3);
+  if (named >= 0) {
+    const today = now.getDay();
+    const ahead = (named - today + 7) % 7 || 7;
+    return shift(ahead);
+  }
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+  return null;
+}
+
 export interface TasksRoomProps {
   controller: CaveController;
 }
@@ -60,6 +114,11 @@ export default function TasksRoom({ controller }: TasksRoomProps) {
   const [project, setProject] = useState("");
   const [priority, setPriority] = useState("3");
   const [confirming, setConfirming] = useState<string | null>(null);
+  /** The task currently being edited in place, by id. */
+  const [editing, setEditing] = useState<string | null>(null);
+  const [draft, setDraft] = useState({ title: "", due: "", project: "", priority: "3" });
+  const [editError, setEditError] = useState("");
+  const [addError, setAddError] = useState("");
 
   const tasks = controller.tasks;
 
@@ -73,9 +132,25 @@ export default function TasksRoom({ controller }: TasksRoomProps) {
   const add = () => {
     const text = title.trim();
     if (!text) return;
+
+    // Resolve the same shorthand the edit form accepts. A `type="date"` input
+    // here used to mean a typed "tomorrow" was discarded without a word — the
+    // field silently refused to hold a value it could not parse, and the task
+    // was created with no date at all.
+    const typed = due.trim();
+    let resolved: string | null = null;
+    if (typed) {
+      resolved = /^\d{4}-\d{2}-\d{2}$/.test(typed) ? typed : quickDate(typed);
+      if (!resolved) {
+        setAddError("I cannot read that date. Try “tomorrow”, “friday”, “+3d”, or leave it empty.");
+        return;
+      }
+    }
+    setAddError("");
+
     void controller.run("task.create", {
       title: text,
-      due: due || null,
+      due: resolved,
       project: project.trim() || null,
       priority: Number(priority),
     });
@@ -86,6 +161,76 @@ export default function TasksRoom({ controller }: TasksRoomProps) {
   };
 
   const late = tasks.filter((task) => dueLabel(task.due ?? undefined)?.late).length;
+
+  const openEditor = (task: Task) => {
+    setConfirming(null);
+    setEditError("");
+    setEditing(task.id);
+    setDraft({
+      title: task.title,
+      due: task.due ? task.due.slice(0, 10) : "",
+      project: task.project ?? "",
+      priority: String(task.priority),
+    });
+  };
+
+  /**
+   * Save the row.
+   *
+   * Every field is sent as an explicit value rather than only the ones that
+   * changed, because the form always shows the whole task — a date the user
+   * cleared must arrive as `null`, not be omitted, or clearing it would silently
+   * fail. The server distinguishes "absent" from "empty" for exactly this.
+   */
+  const saveEdit = async (id: string) => {
+    const text = draft.title.trim();
+    if (!text) {
+      setEditError("A task needs a title.");
+      return;
+    }
+    setEditError("");
+
+    const typed = draft.due.trim();
+    let nextDue: string | null = draft.due;
+    if (typed && !/^\d{4}-\d{2}-\d{2}$/.test(typed)) {
+      // A shorthand the calendar field cannot express, resolved locally.
+      const resolved = quickDate(typed);
+      if (!resolved) {
+        setEditError("I cannot read that date. Try “tomorrow”, “friday”, “+3d” or a calendar date.");
+        return;
+      }
+      nextDue = resolved;
+    }
+
+    const ok = await controller.run(
+      "task.update",
+      {
+        id,
+        title: text,
+        due: nextDue === "" ? null : nextDue,
+        project: draft.project.trim() || null,
+        priority: Number(draft.priority),
+      },
+      id,
+    );
+    if (ok) setEditing(null);
+    else setEditError(controller.error ?? "That edit did not save.");
+  };
+
+  /** One shortcut, applied to the draft rather than saved outright. */
+  const nudgeDue = (days: number | null) => {
+    if (days === null) {
+      setDraft((d) => ({ ...d, due: "" }));
+      return;
+    }
+    const base = draft.due ? new Date(`${draft.due}T00:00:00`) : new Date();
+    const from = Number.isNaN(base.getTime()) ? new Date() : base;
+    const next = new Date(from.getFullYear(), from.getMonth(), from.getDate() + days);
+    setDraft((d) => ({
+      ...d,
+      due: `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, "0")}-${String(next.getDate()).padStart(2, "0")}`,
+    }));
+  };
 
   return (
     <div>
@@ -118,9 +263,9 @@ export default function TasksRoom({ controller }: TasksRoomProps) {
           <label>
             <span className="label">due</span>
             <input
-              type="date"
               value={due}
               onChange={(event) => setDue(event.target.value)}
+              placeholder="tomorrow"
               aria-label="Due date"
               className="field mt-1.5 w-[170px]"
             />
@@ -163,12 +308,124 @@ export default function TasksRoom({ controller }: TasksRoomProps) {
             Add
           </button>
         </form>
+        {addError ? (
+          <p aria-live="polite" className="mt-2 text-[12px] leading-relaxed text-danger">
+            {addError}
+          </p>
+        ) : null}
       </div>
 
       {/* ---------------- the list ---------------- */}
       <ul className="divide-y divide-hairline">
         {tasks.map((task) => {
           const when = dueLabel(task.due ?? undefined);
+
+          if (editing === task.id) {
+            return (
+              <li key={task.id} className="bg-surface-2/40 px-6 py-4">
+                <form
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void saveEdit(task.id);
+                  }}
+                  className="flex flex-wrap items-end gap-3"
+                >
+                  <label className="min-w-[220px] flex-1">
+                    <span className="label">task</span>
+                    <input
+                      value={draft.title}
+                      onChange={(event) => setDraft((d) => ({ ...d, title: event.target.value }))}
+                      aria-label="Task title"
+                      className="field mt-1.5"
+                    />
+                  </label>
+
+                  <label>
+                    <span className="label">due</span>
+                    <input
+                      value={draft.due}
+                      onChange={(event) => setDraft((d) => ({ ...d, due: event.target.value }))}
+                      placeholder="tomorrow"
+                      aria-label="Due date"
+                      className="field mt-1.5 w-[150px]"
+                    />
+                  </label>
+
+                  <label>
+                    <span className="label">project</span>
+                    <input
+                      value={draft.project}
+                      onChange={(event) => setDraft((d) => ({ ...d, project: event.target.value }))}
+                      placeholder="optional"
+                      list="cave-projects"
+                      aria-label="Project"
+                      className="field mt-1.5 w-[150px]"
+                    />
+                  </label>
+
+                  <label>
+                    <span className="label">priority</span>
+                    <select
+                      value={draft.priority}
+                      onChange={(event) => setDraft((d) => ({ ...d, priority: event.target.value }))}
+                      aria-label="Priority"
+                      className="field select mt-1.5 w-[130px]"
+                    >
+                      {[1, 2, 3, 4].map((n) => (
+                        <option key={n} value={n}>
+                          {PRIORITY_LABEL[n]}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <div className="flex items-center gap-2">
+                    <button type="submit" className="btn btn-primary">
+                      Save
+                    </button>
+                    <button type="button" onClick={() => setEditing(null)} className="btn">
+                      Cancel
+                    </button>
+                  </div>
+
+                  {/* The reason people reschedule is almost never a date, it is
+                      "not today". A calendar picker makes you find that. */}
+                  <div className="flex w-full flex-wrap items-center gap-2 pt-1">
+                    <span className="timestamp">move to</span>
+                    {[
+                      { label: "today", days: 0 },
+                      { label: "tomorrow", days: 1 },
+                      { label: "+3 days", days: 3 },
+                      { label: "+1 week", days: 7 },
+                    ].map((option) => (
+                      <button
+                        key={option.label}
+                        type="button"
+                        onClick={() => nudgeDue(option.days)}
+                        className="rounded-[var(--r-sm)] border border-hairline px-2 py-1 text-[11px] font-normal text-dim transition-colors duration-[var(--t-fast)] hover:bg-surface-2 hover:text-text"
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={() => nudgeDue(null)}
+                      className="rounded-[var(--r-sm)] border border-hairline px-2 py-1 text-[11px] font-normal text-faint transition-colors duration-[var(--t-fast)] hover:bg-surface-2 hover:text-dim"
+                    >
+                      clear date
+                    </button>
+                  </div>
+
+                  {editError ? (
+                    <p aria-live="polite" className="w-full text-[12px] leading-relaxed text-danger">
+                      {editError}
+                    </p>
+                  ) : null}
+                </form>
+              </li>
+            );
+          }
+
           return (
             <li key={task.id} className="flex items-start gap-3 px-6 py-3">
               {/* This list is the OPEN list — the endpoint returns open and
@@ -237,14 +494,27 @@ export default function TasksRoom({ controller }: TasksRoomProps) {
                   </button>
                 </div>
               ) : (
-                <button
-                  type="button"
-                  onClick={() => setConfirming(task.id)}
-                  aria-label={`Delete ${task.title}`}
-                  className="shrink-0 rounded-[var(--r-sm)] px-2 py-1 text-[11px] font-normal text-faint hover:bg-surface-2 hover:text-danger"
-                >
-                  delete
-                </button>
+                <div className="flex shrink-0 items-center gap-1">
+                  {/* Edit sits before delete and is the quieter of the two,
+                      because the destructive one should never be the easier
+                      target to hit by accident. */}
+                  <button
+                    type="button"
+                    onClick={() => openEditor(task)}
+                    aria-label={`Edit ${task.title}`}
+                    className="rounded-[var(--r-sm)] px-2 py-1 text-[11px] font-normal text-faint hover:bg-surface-2 hover:text-text"
+                  >
+                    edit
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirming(task.id)}
+                    aria-label={`Delete ${task.title}`}
+                    className="rounded-[var(--r-sm)] px-2 py-1 text-[11px] font-normal text-faint hover:bg-surface-2 hover:text-danger"
+                  >
+                    delete
+                  </button>
+                </div>
               )}
             </li>
           );

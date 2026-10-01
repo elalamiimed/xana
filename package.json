@@ -28,6 +28,7 @@
     "verify:plugins": "node --import ./scripts/ts-loader.mjs scripts/check-plugins.ts",
     "verify:wake": "node --import ./scripts/ts-loader.mjs scripts/check-wake-word.ts",
     "verify:dictation": "node --import ./scripts/ts-loader.mjs scripts/check-dictation.ts",
+    "verify:task-edit": "node --import ./scripts/ts-loader.mjs scripts/check-task-edit.ts",
     "verify:stt": "node scripts/check-stt.mjs",
     "verify:durability": "node --import ./scripts/ts-loader.mjs scripts/check-durability.ts",
     "backup": "node --import ./scripts/ts-loader.mjs scripts/backup.ts",
@@ -41,7 +42,7 @@
     "debug:key": "node scripts/debug-key.mjs",
     "debug:engine": "node scripts/debug-engine.mjs",
     "inspect": "node --import ./scripts/ts-loader.mjs scripts/inspect.ts",
-    "check": "npm run typecheck && npm run verify:wake && npm run verify:dictation && npm run demo && npm run smoke && npm run verify:orb && npm run verify:providers && npm run check:design && npm run check:palette"
+    "check": "npm run typecheck && npm run verify:wake && npm run verify:dictation && npm run verify:task-edit && npm run demo && npm run smoke && npm run verify:orb && npm run verify:providers && npm run check:design && npm run check:palette"
   },
   "dependencies": {
     "better-sqlite3": "^13.0.3",

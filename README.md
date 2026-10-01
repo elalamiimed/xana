@@ -310,6 +310,23 @@ the three questions a user actually has:
 You can also write a memory by hand, marked as yours so it outranks what she
 infers from conversation.
 
+**The tasks room.** The open list, with a form to add one and inline editing on
+every row: title, date, project and priority. Editing in place rather than in a
+dialog, because the thing being changed is one field on one line.
+
+The date field takes shorthand — `tomorrow`, `friday`, `+3d`, `+1w` — as well as
+a calendar date, because the reason people reschedule is almost never "the 14th",
+it is "not today", and a native date picker makes you go and find that. Each open
+row also carries four buttons that move it forward by a day, three days or a
+week, and one that clears the date.
+
+This was the gap that mattered most: adding and completing were the only two
+things the screen could do, so rescheduling something overdue — the most common
+edit there is, and the one that stops it being noise on tonight's briefing — meant
+deleting the task and retyping it. That throws away the id, the creation date and
+any history hanging off it. A partial edit also only touches the fields you
+mention, so renaming a task cannot quietly drop its deadline.
+
 **What she does with it.** Recalled memories and standing facts are presented to
 the model separately, because they mean different things: a match is relevant to
 the question, a pin is background that may be entirely unrelated. Merging them
