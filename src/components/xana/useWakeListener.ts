@@ -216,13 +216,25 @@ export function useWakeListener({
     const health = await transcriberHealth();
     logMic("wake.local.health", { available: health.available, ready: health.ready, backend: health.backend });
     if (!health.ready) {
+      /**
+       * Not ready — but the loop stays ALIVE rather than dying.
+       *
+       * An earlier version set `failed` and returned, which meant a transcriber
+       * that was restarting, or had not been started yet, killed always-listening
+       * for the rest of the session. The user restarted the service, said her
+       * name, and nothing happened — with the app still holding a note about a
+       * problem that had already been fixed. A dependency that can come back must
+       * be waited for, not given up on.
+       */
       setState("failed");
       setNote(
         health.available
           ? `The local transcriber is running but not ready. ${health.reason}`
-          : "Always-listening needs a transcriber. Start the local one with python/serve.ps1, or switch transcription back to the browser in Settings → Voice.",
+          : "Waiting for the local transcriber. Start it with python/serve.ps1 — this reconnects on its own.",
       );
-      return;
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+      if (localStop.current || !enabled) return;
+      return runLocalLoop();
     }
 
     setNote("");

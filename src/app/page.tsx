@@ -301,8 +301,7 @@ export default function Page() {
             note={wake.note}
             onRetry={wake.retry}
             onDismiss={() => void shell.controller.save({ voice: { wakeEnabled: false } })}
-          />
-          {/* The microphone is one resource. Pressing the mic button while
+          />          {/* The microphone is one resource. Pressing the mic button while
               always-listening holds it open would make the recogniser fail with
               no visible reason, so the button takes it over first — and gives it
               back when it is done. `wake.stop` acts synchronously; going through

@@ -1,5 +1,7 @@
 "use client";
 
+import { initialVad, stepVad } from "./vad";
+
 /**
  * Recording a spoken request without the browser's speech service.
  *
@@ -299,11 +301,8 @@ export async function recordUtterance(options: RecordOptions = {}): Promise<Reco
   const frame = new Float32Array(analyser.fftSize);
 
   const startedAt = Date.now();
-  let speechAt: number | null = null;
-  let quietSince: number | null = null;
-  /** Adapted threshold: rises in a noisy room, falls back in a quiet one. */
-  let threshold = SPEECH_FLOOR;
-  let floor = SPEECH_FLOOR;
+  /** The detector's state, advanced once per frame. See `vad.ts`. */
+  let vad = initialVad();
   let resolved = false;
 
   return await new Promise<RecordResult>((resolve) => {
@@ -323,7 +322,7 @@ export async function recordUtterance(options: RecordOptions = {}): Promise<Reco
         const type = recorder.mimeType || mimeType || "audio/webm";
         resolve({
           blob: chunks.length > 0 ? new Blob(chunks, { type }) : null,
-          heardSpeech: speechAt !== null,
+          heardSpeech: vad.speechAt !== null,
           ended,
           durationMs,
         });
@@ -363,40 +362,30 @@ export async function recordUtterance(options: RecordOptions = {}): Promise<Reco
       for (const sample of frame) peak = Math.max(peak, Math.abs(sample));
       options.onLevel?.(peak);
 
-      const now = Date.now();
+      /**
+       * The decision itself lives in `vad.ts`, as a pure function.
+       *
+       * It is not inline here any more, and that is the point: three separate
+       * bugs came out of this loop — a click taken for a word, a sentence cut
+       * off by its own noise floor, and a sentence whose end was never detected
+       * because the bar for "still talking" sat below the room's own noise. None
+       * of them was visible by reading the code, and none could be tested while
+       * the logic needed an audio device to run. `scripts/check-vad.ts` now
+       * drives the exact waveforms that broke it.
+       */
+      const step = stepVad(
+        vad,
+        peak,
+        Date.now(),
+        { silenceMs, noSpeechMs, maxMs },
+        startedAt,
+      );
+      vad = step.state;
 
-      // Track the noise floor as a slow minimum, so the threshold follows the
-      // room rather than a number chosen at a desk somewhere else.
-      if (peak < floor) floor = floor * 0.9 + peak * 0.1;
-      else floor = floor * 0.999 + peak * 0.001;
-      threshold = Math.max(SPEECH_FLOOR, floor * 3);
-
-      if (peak > threshold) {
-        if (speechAt === null) {
-          speechAt = now;
-          options.onSpeechStart?.();
-        }
-        quietSince = null;
-      } else if (speechAt !== null && quietSince === null) {
-        quietSince = now;
-      }
-
-      if (speechAt === null && now - startedAt > noSpeechMs) {
-        finish("no-speech");
-        return;
-      }
-      // The end of speech only ends the clip once the speech has actually lasted
-      // long enough to be a word. See `MIN_SPEECH_MS`: without this a single
-      // click produces a clip too short to transcribe, which reads to the user
-      // as "it listened for half a second and gave up".
-      const speechLasted = speechAt === null ? 0 : (quietSince ?? now) - speechAt;
-      if (quietSince !== null && now - quietSince > silenceMs && speechLasted >= MIN_SPEECH_MS) {
-        finish("silence");
-        return;
-      }
-      if (now - startedAt > maxMs) {
-        finish("max");
-      }
+      if (step.verdict.kind === "speech-started") options.onSpeechStart?.();
+      else if (step.verdict.kind === "speech-ended") finish("silence");
+      else if (step.verdict.kind === "no-speech") finish("no-speech");
+      else if (step.verdict.kind === "too-long") finish("max");
     }, 16);
   });
 }
