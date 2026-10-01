@@ -584,6 +584,19 @@ didn't follow that."
 
 ## Notes and limitations
 
+- **`npm run verify:browser` has still never run here, and that is now proved
+  rather than assumed.** Launching headless Edge directly exits during startup
+  (`0x80000003`, a breakpoint), and its DevTools port never opens — so no script
+  that drives a browser can work in this sandbox, whatever it does. The script
+  now also refuses to *start* when nothing is answering at the target (with the
+  port `npm run dev` printed, and how to pass a different one), because the other
+  way to get a misleading report is a good machine with no server up. What that
+  command checks — that the client bundle hydrated, that the orb canvas is
+  actually painting and animating, that Settings opens on a real click and
+  recolours the document, and that nothing overflows at 390px — is therefore
+  still unverified, and the parts of it that *can* be checked without a browser
+  are covered by `check:design`, `check:palette`, `check:bundle` and
+  `verify:web`. Run it once on a machine with a browser to close it.
 - **Data lives in `data/`** — `xana.db` and `settings.json`, both gitignored.
   Delete them and she rebuilds from empty. `npm run seed -- --reset` rebuilds
   deliberately.

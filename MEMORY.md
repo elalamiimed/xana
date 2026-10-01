@@ -322,9 +322,18 @@ same constant-time comparison, not a new capability kind.
   denies both process creation (`spawn EPERM`) and named-pipe access
   (`platform_channel.cc ... Access is denied`), so Edge aborts during startup.
   `scripts/verify-browser.mjs` therefore detects the condition and reports a
-  skip with the reason rather than a failure. **It has never been executed
+  skip with the reason rather than a failure. **It has still never been executed
   successfully**, in this environment or any other — its logic is unverified.
   Everything else in `npm run check` and `verify:web` has been run.
+  Three things were fixed in that skip path during the session that proved it:
+  the script now probes the target before launching anything (a browser pointed
+  at a dead port fails every assertion downstream and reads like an app bug);
+  the skip kills the half-spawned browser before returning, because leaving it
+  alive tore Node down with a libuv assertion instead of exiting cleanly; and it
+  sets exit 0 explicitly, since a skip that exits nonzero is indistinguishable
+  from a failure in anything that runs it. The message says **"NOTHING WAS
+  VERIFIED"** in as many words, because a skip that reads like a pass is worse
+  than no check at all.
 - **Some hosts are unreachable from this sandbox, and the code cannot tell you
   which.** `github.com`, `api.coingecko.com`, `stooq.com` and
   `www.googleapis.com:443` do not answer here; `api.open-meteo.com`, `ipwho.is`,

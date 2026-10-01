@@ -185,6 +185,35 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 /* Main                                                               */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Is Xana actually answering at the target?
+ *
+ * Asked before a browser is launched, and the order matters. The script skips
+ * when the *environment* cannot host a browser; this is the other bad start —
+ * a perfectly good environment with no server on the target port. Without this
+ * check the browser opens at a dead address, every assertion downstream fails,
+ * and the report reads like the app is broken when the app is simply not
+ * running. On a machine where `npm run dev` picked a different port, the same
+ * thing happens with a URL that looks right.
+ *
+ * `npm run dev` prints the port it chose; this prints the one it looked for.
+ */
+async function targetAnswers() {
+  try {
+    const response = await fetch(`${base}/api/state`, { signal: AbortSignal.timeout(3000) });
+    if (!response.ok) return { ok: false, detail: `answered ${response.status}` };
+    const body = await response.json();
+    // The same shape `dev.mjs` uses to recognise an Xana already listening:
+    // "something is on this port" is not the same as "Xana is".
+    if (typeof body?.partOfDay !== "string" || typeof body?.energy?.band !== "string") {
+      return { ok: false, detail: "something is answering, but it is not Xana" };
+    }
+    return { ok: true, detail: `${body.partOfDay}, energy ${body.energy.band}` };
+  } catch (err) {
+    return { ok: false, detail: err?.name === "TimeoutError" ? "timed out" : "nothing is listening" };
+  }
+}
+
 async function main() {
   const browserPath = findBrowser();
   if (!browserPath) {
@@ -193,11 +222,23 @@ async function main() {
     return;
   }
 
+  const target = await targetAnswers();
+  if (!target.ok) {
+    console.log(`\n  Cannot verify ${base} — ${target.detail}.`);
+    console.log(`\n  Start Xana first, in another terminal:`);
+    console.log(`      npm run dev`);
+    console.log(`\n  It prints the port it chose. If that is not 4310, pass it here:`);
+    console.log(`      npm run verify:browser -- http://127.0.0.1:<port>`);
+    console.log(`  or set PORT to the same value in both. Nothing was launched,`);
+    console.log(`  so this is a skip rather than a failure — but it is not a pass.\n`);
+    return;
+  }
+
   const userDataDir = join(process.cwd(), "data", "browser-profile");
   mkdirSync(userDataDir, { recursive: true });
 
   console.log(`Browser   ${browserPath}`);
-  console.log(`Target    ${base}`);
+  console.log(`Target    ${base}  (${target.detail})`);
 
   let child;
   try {
@@ -234,7 +275,6 @@ async function main() {
     }
     throw err;
   }
-
   let diagnostics = "";
   child.stderr?.on("data", (chunk) => {
     diagnostics += chunk.toString();
@@ -248,7 +288,7 @@ async function main() {
     child.kill();
 
     if (/platform_channel|mojo|Access is denied|crashpad/i.test(diagnostics)) {
-      skipHostileEnvironment();
+      skipHostileEnvironment(child);
       return;
     }
 
@@ -729,10 +769,25 @@ async function main() {
 /* ------------------------------------------------------------------ */
 
 /**
- * The environment cannot host a browser. Not a failure of the app, so it
- * is not counted as one ?but it is not silently ignored either.
+ * The environment cannot host a browser. Not a failure of the app, so it is a
+ * skip with a reason — and it has to *end* like one.
+ *
+ * Two things went wrong here before, both of which made a clean skip look like a
+ * crash. The skip returned from `main()` while a half-spawned Chromium was still
+ * alive, so Node tore down with a libuv assertion (`!(handle->flags &
+ * UV_HANDLE_CLOSING)`) and a nonzero exit; and because it only exits when
+ * `--yes` is passed, the report was ambiguous about whether the check had run.
+ *
+ * So: kill anything this script started, say plainly that nothing was verified,
+ * and exit 0. A skip that exits nonzero is indistinguishable from a failure in
+ * any CI that runs this, which is the opposite of the intent.
  */
-function skipHostileEnvironment() {
+function skipHostileEnvironment(child) {
+  try {
+    child?.kill();
+  } catch {
+    /* already gone */
+  }
   console.log("\n  Skipped: this environment cannot host a browser.");
   console.log("  Chromium is a multi-process application built on named");
   console.log("  pipes, and both process creation and named pipes are denied");
@@ -740,8 +795,10 @@ function skipHostileEnvironment() {
   console.log("\n  On a normal machine this script launches headless Edge or");
   console.log("  Chrome, checks for console errors, drives the settings panel");
   console.log("  with real clicks, and writes screenshots to data/shots/.\n");
-  console.log("  It has NOT been run in this environment, so treat it as");
-  console.log("  unverified until it passes once on your machine.\n");
+  console.log("  NOTHING WAS VERIFIED. Treat the orb, the hydration and the");
+  console.log("  390px overflow claims as unverified until this passes once on");
+  console.log("  a machine with a browser.\n");
+  process.exitCode = 0;
 }
 
 async function connectWithRetry(attempts = 40) {
