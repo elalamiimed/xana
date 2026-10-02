@@ -115,13 +115,24 @@ export default function WakeIndicator({
   return (
     <div role="status" className="mb-2 flex w-full items-center gap-2 px-4">
       {/* A mark rather than an icon: two states, both a dot, one of them
-          breathing. A spinner would say "busy"; this says "open". */}
+          breathing. A spinner would say "busy"; this says "open".
+
+          `alternate` is what makes it a breath rather than a heartbeat — the
+          first version snapped back from 0.85 to 0.55 every 1.4s. And the
+          inline style is not reached by the reduced-motion block in
+          globals.css, which can only override declarations in the stylesheet,
+          so the guard has to be on the element: a reader who asked for no
+          motion gets a still dot, exactly as the orb's own breath does. */}
       <span
         aria-hidden="true"
-        className={`block h-1.5 w-1.5 shrink-0 rounded-full transition-colors duration-[var(--t-fast)] ${
+        className={`block h-1.5 w-1.5 shrink-0 rounded-full transition-colors duration-[var(--t-fast)] motion-reduce:animate-none ${
           listening ? "bg-accent" : "bg-accent/48"
         }`}
-        style={listening ? { animation: "breath 1.4s var(--ease) infinite" } : undefined}
+        style={
+          listening
+            ? { animation: "breath 1.4s var(--ease-soft) infinite alternate" }
+            : undefined
+        }
       />
 
       <p

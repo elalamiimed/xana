@@ -233,7 +233,7 @@ export default function GoalCard({
             value={progress.progress}
             label={`${goal.title}, ${Math.round(progress.progress * 100)} percent complete`}
           />
-          <p className="mt-1.5 text-[11px] leading-relaxed font-normal text-faint">
+          <p className="mt-1.5 text-[12px] leading-relaxed font-normal text-faint">
             {progress.note}
           </p>
         </div>
@@ -318,7 +318,7 @@ export default function GoalCard({
         <button
           type="button"
           onClick={() => setAddingMilestone(true)}
-          className="rounded-[var(--r-sm)] px-2 py-1 text-[11px] font-normal text-dim hover:bg-surface-2 hover:text-text"
+          className="rounded-[var(--r-sm)] px-2 py-1 text-[12px] font-normal text-dim hover:bg-surface-2 hover:text-text"
         >
           + step
         </button>
@@ -326,7 +326,7 @@ export default function GoalCard({
           type="button"
           onClick={() => void controller.run("goal.touch", { id: goal.id }, goal.id)}
           title="Record that something moved, so a goal with no steps is not marked stalled"
-          className="rounded-[var(--r-sm)] px-2 py-1 text-[11px] font-normal text-dim hover:bg-surface-2 hover:text-text"
+          className="rounded-[var(--r-sm)] px-2 py-1 text-[12px] font-normal text-dim hover:bg-surface-2 hover:text-text"
         >
           moved today
         </button>
@@ -337,7 +337,7 @@ export default function GoalCard({
             void controller.run("goal.update", { id: goal.id, horizon: event.target.value }, goal.id)
           }
           aria-label="Horizon"
-          className="select rounded-[var(--r-sm)] bg-transparent px-2 py-1 text-[11px] font-normal text-dim hover:bg-surface-2 hover:text-text"
+          className="select rounded-[var(--r-sm)] bg-transparent px-2 py-1 text-[12px] font-normal text-dim hover:bg-surface-2 hover:text-text"
         >
           <option value="short">now</option>
           <option value="mid">this year</option>
@@ -355,7 +355,7 @@ export default function GoalCard({
             )
           }
           aria-label="Target date"
-          className="rounded-[var(--r-sm)] bg-transparent px-2 py-1 text-[11px] font-normal text-dim hover:bg-surface-2"
+          className="rounded-[var(--r-sm)] bg-transparent px-2 py-1 text-[12px] font-normal text-dim hover:bg-surface-2"
         />
 
         <span className="flex-1" />
@@ -365,14 +365,14 @@ export default function GoalCard({
             <button
               type="button"
               onClick={() => void controller.run("goal.delete", { id: goal.id }, goal.id)}
-              className="rounded-[var(--r-sm)] px-2 py-1 text-[11px] font-normal text-danger hover:bg-surface-2"
+              className="rounded-[var(--r-sm)] px-2 py-1 text-[12px] font-normal text-danger hover:bg-surface-2"
             >
               delete for good
             </button>
             <button
               type="button"
               onClick={() => setConfirmingDelete(false)}
-              className="rounded-[var(--r-sm)] px-2 py-1 text-[11px] font-normal text-dim hover:bg-surface-2"
+              className="rounded-[var(--r-sm)] px-2 py-1 text-[12px] font-normal text-dim hover:bg-surface-2"
             >
               keep
             </button>
@@ -382,7 +382,7 @@ export default function GoalCard({
             type="button"
             onClick={() => setConfirmingDelete(true)}
             aria-label={`Delete ${goal.title}`}
-            className="rounded-[var(--r-sm)] px-2 py-1 text-[11px] font-normal text-faint hover:bg-surface-2 hover:text-danger"
+            className="rounded-[var(--r-sm)] px-2 py-1 text-[12px] font-normal text-faint hover:bg-surface-2 hover:text-danger"
           >
             delete
           </button>
@@ -397,7 +397,7 @@ export default function GoalCard({
           onClick={() =>
             void controller.run("goal.update", { id: goal.id, status: "active" as GoalStatus }, goal.id)
           }
-          className="mt-2 w-full rounded-[var(--r-sm)] border border-hairline px-2 py-1.5 text-[11px] font-normal text-dim hover:border-accent/40 hover:text-accent"
+          className="mt-2 w-full rounded-[var(--r-sm)] border border-hairline px-2 py-1.5 text-[12px] font-normal text-dim hover:border-accent/40 hover:text-accent"
         >
           put back in play
         </button>

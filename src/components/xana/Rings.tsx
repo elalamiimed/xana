@@ -108,9 +108,16 @@ export function Bar({ value, label }: BarProps) {
       aria-label={label}
       className="h-[3px] w-full overflow-hidden rounded-full bg-accent/14"
     >
+      {/* The fill grows on `scaleX`, not on `width`.
+       *
+       * Both draw the same picture, and only one of them is composited: an
+       * animated `width` re-runs layout on every frame of a 520ms sweep, while
+       * a transform runs on the compositor. The rounding survives because the
+       * bar is 3px tall — a 2px cap squashed horizontally is not a shape
+       * anyone can see. */}
       <div
-        className="h-full rounded-full bg-accent transition-[width] duration-[var(--t-slow)] ease-[var(--ease)]"
-        style={{ width: `${percent(value)}%` }}
+        className="h-full w-full origin-left rounded-full bg-accent transition-transform duration-[var(--t-slow)] ease-[var(--ease)]"
+        style={{ transform: `scaleX(${percent(value) / 100})` }}
       />
     </div>
   );

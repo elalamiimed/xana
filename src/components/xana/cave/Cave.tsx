@@ -358,7 +358,7 @@ export default function Cave({ open, onClose, initialRoom = "goals" }: CaveProps
 
       {/* ---------------- footer ---------------- */}
       <footer className="shrink-0 border-t border-hairline px-6 py-3">
-        <p className="text-[11px] font-normal text-faint">
+        <p className="text-[12px] font-normal text-faint">
           {footerPending ??
             (room === "goals"
               ? `${ordered.length} goal${ordered.length === 1 ? "" : "s"} in the cave. Everything here is stored locally in data/xana.db.`

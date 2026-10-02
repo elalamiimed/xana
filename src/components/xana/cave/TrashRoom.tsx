@@ -87,7 +87,7 @@ export default function TrashRoom({ controller }: TrashRoomProps) {
             key={`${item.kind}:${item.id}`}
             className="card flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3"
           >
-            <span className="shrink-0 rounded-full border border-hairline px-2 py-[2px] text-[11px] font-normal tracking-[0.02em] text-faint uppercase">
+            <span className="shrink-0 rounded-full border border-hairline px-2 py-[2px] text-[12px] font-normal tracking-[0.02em] text-faint uppercase">
               {TRASH_LABELS[item.kind]}
             </span>
 

@@ -66,9 +66,19 @@ it however good the contrast is.
 | 14px and above | `font-light` is fine. |
 
 The project previously used `font-light` on 90% of everything 13px and
-smaller. It is now 43%, and none of it is below 13px. Changing the weight of
-that much text is a visible change to the interface; it was made because the
-alternative was an interface its owner could not read.
+smaller. It was brought down to 43%, and this line used to claim that none of
+it was below 13px. That claim was wrong, and it was wrong in the one place the
+gate could not look: `.timestamp` — the utility behind every date, count and
+piece of working in the app — was declared `11px` at `font-weight: 300` in
+`globals.css`, which is exactly the combination forbidden above. Nothing
+caught it because `check:design` read class lists in `.tsx` and a stylesheet
+is not a class list.
+
+It is caught now, twice over. `.timestamp` is 12px at weight 400, and rule 8
+in `check:design` reads every block in the stylesheet: nothing below 11px, and
+nothing at 12px or below in a 300 weight. A design detector reading the served
+page found the old value before the gate did — which is the honest order of
+events, and the reason the gate exists now.
 
 
 ### The structural rule
@@ -136,12 +146,21 @@ One family: the system UI sans stack. Thin weights only.
 | Briefing line | 15px | 300 | 0.01em | `--text` |
 | Card body | 14px | 300 | 0 | `--text-dim` |
 | Settings body | 13px | 300 | 0 | `--text-dim` |
-| **Label** (small caps) | 10px | 500 | 0.18em, `uppercase` | `--text-faint` |
+| **Label** (small caps) | 11px | 500 | 0.15em, `uppercase` | `--text-faint` |
 | Numeric / metric | 30px | 200 | `-0.02em` | `--text` |
-| Timestamp | 11px | 300 | 0.04em | `--text-faint` |
+| Timestamp, counts, working | 12px | 400 | 0.03em | `--text-faint` |
 
-Labels are always uppercase with `0.18em` tracking — this is the signature of
-the interface. Use `.label`.
+Labels are always uppercase with wide tracking — this is the signature of the
+interface. Use `.label`. The treatment was 10px at 0.18em; it is 11px at
+0.15em, which is the same shape at the same optical width, because 10px is
+below the floor for text a person has to read and the label names the row
+underneath it.
+
+**11px is the floor for functional text anywhere in this interface**, and
+nothing at 12px or below is set in a 300 weight. Both halves are asserted by
+`check:design` (rules 1 and 8) against the components *and* the stylesheet,
+because a rule that lives in one of those two places is a rule with a door in
+it.
 
 The body scale sits at 15px rather than 13–14px. The smaller scale was legible
 on a large display and cramped on a laptop, and this is a product people read
@@ -167,11 +186,23 @@ Everything breathes. Nothing snaps.
 |---|---|---|
 | `--motion` | `1` | Global speed multiplier. Every duration below is `calc(base * var(--motion))`. |
 | `--t-fast` | `180ms` | Hover, focus, colour. |
-| `--t-base` | `320ms` | Card enter/exit, fade. |
+| `--t-state` | `200ms` | A control changing state: a border warming, a knob travelling, a switch filling. |
+| `--t-base` | `320ms` | Something *arriving*: a card, a sheet, a toast. |
 | `--t-slow` | `520ms` | Layout shifts, orb state changes. |
 | `--ease` | `cubic-bezier(0.22, 0.61, 0.36, 1)` | Default. Decelerating. |
 | `--ease-soft` | `cubic-bezier(0.4, 0, 0.2, 1)` | Symmetric, for loops. |
-| `--ease-out-back` | `cubic-bezier(0.34, 1.3, 0.64, 1)` | Things that *arrive*: toasts, switches. |
+| `--ease-arrive` | `cubic-bezier(0.16, 1, 0.3, 1)` | Ease-out-expo. Things that *arrive*: toasts, switches. |
+
+`--t-base` used to carry two jobs, and one of them was wrong. 320ms is right
+for something that travels into place, where the eye is following the
+movement; it reads as lag on a border colour or a 16px knob, where the eye is
+watching for an answer. State changes are 200ms now (the band a product
+transition wants is 150–250ms), entry still takes 320ms.
+
+`--ease-arrive` was `--ease-out-back` — a gentle overshoot — until a design
+detector named the family: bounce and elastic easing read as dated next to an
+exponential curve, which is how real objects decelerate. Nothing about the
+arrival needed the overshoot; it needed the speed.
 
 `--motion` is the settings slider. It is a multiplier on the designed pace, not
 a replacement for it, and it never overrides the OS reduced-motion setting.
@@ -254,7 +285,12 @@ visible one-line caption sits beneath.
 └──────────────────────────────────────────┘
 ```
 
-- Header and input are fixed. The middle region scrolls.
+- Header and input are fixed. The middle region scrolls. The header is a
+  minimum height, not a fixed one: on a narrow screen the name and the status
+  row take a line each rather than overlapping. The wordmark is the only item
+  that cannot shrink and the dots are the only item that must not, so one of
+  them used to be painted over the other — at 390px the status dots covered
+  half the app's name.
 - Cards are **peripheral**: they appear on a reply, and fade back to `opacity
   0.55` after 20s of no interaction. Hover restores full opacity.
 - On an empty session the card area is empty — just the orb. That emptiness is
@@ -331,3 +367,10 @@ scrolling.
 - Charts with axes, grids or legends. Rings and thin bars only.
 - Animating anything the user did not cause, except the breath.
 - A disabled control with no explanation. Say what is missing instead.
+- Text below 11px, or anything at 12px or below set in a 300 weight. The floor
+  is asserted in both places text can be declared — class lists and the
+  stylesheet — because a rule that covers one of them is a rule with a door.
+- Bounce or elastic easing. Things arrive quickly and decelerate; they do not
+  spring.
+- A full pill on a small chip: pills are for the composer and for things a
+  thumb presses.

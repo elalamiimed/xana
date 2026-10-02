@@ -403,7 +403,7 @@ export default function TasksRoom({ controller }: TasksRoomProps) {
                         key={option.label}
                         type="button"
                         onClick={() => nudgeDue(option.days)}
-                        className="rounded-[var(--r-sm)] border border-hairline px-2 py-1 text-[11px] font-normal text-dim transition-colors duration-[var(--t-fast)] hover:bg-surface-2 hover:text-text"
+                        className="rounded-[var(--r-sm)] border border-hairline px-2 py-1 text-[12px] font-normal text-dim transition-colors duration-[var(--t-fast)] hover:bg-surface-2 hover:text-text"
                       >
                         {option.label}
                       </button>
@@ -411,7 +411,7 @@ export default function TasksRoom({ controller }: TasksRoomProps) {
                     <button
                       type="button"
                       onClick={() => nudgeDue(null)}
-                      className="rounded-[var(--r-sm)] border border-hairline px-2 py-1 text-[11px] font-normal text-faint transition-colors duration-[var(--t-fast)] hover:bg-surface-2 hover:text-dim"
+                      className="rounded-[var(--r-sm)] border border-hairline px-2 py-1 text-[12px] font-normal text-faint transition-colors duration-[var(--t-fast)] hover:bg-surface-2 hover:text-dim"
                     >
                       clear date
                     </button>
@@ -482,14 +482,14 @@ export default function TasksRoom({ controller }: TasksRoomProps) {
                       void controller.run("task.delete", { id: task.id }, task.id);
                       setConfirming(null);
                     }}
-                    className="rounded-[var(--r-sm)] px-2 py-1 text-[11px] font-normal text-danger hover:bg-surface-2"
+                    className="rounded-[var(--r-sm)] px-2 py-1 text-[12px] font-normal text-danger hover:bg-surface-2"
                   >
                     delete for good
                   </button>
                   <button
                     type="button"
                     onClick={() => setConfirming(null)}
-                    className="rounded-[var(--r-sm)] px-2 py-1 text-[11px] font-normal text-dim hover:bg-surface-2"
+                    className="rounded-[var(--r-sm)] px-2 py-1 text-[12px] font-normal text-dim hover:bg-surface-2"
                   >
                     keep
                   </button>
@@ -503,7 +503,7 @@ export default function TasksRoom({ controller }: TasksRoomProps) {
                     type="button"
                     onClick={() => openEditor(task)}
                     aria-label={`Edit ${task.title}`}
-                    className="rounded-[var(--r-sm)] px-2 py-1 text-[11px] font-normal text-faint hover:bg-surface-2 hover:text-text"
+                    className="rounded-[var(--r-sm)] px-2 py-1 text-[12px] font-normal text-faint hover:bg-surface-2 hover:text-text"
                   >
                     edit
                   </button>
@@ -511,7 +511,7 @@ export default function TasksRoom({ controller }: TasksRoomProps) {
                     type="button"
                     onClick={() => setConfirming(task.id)}
                     aria-label={`Delete ${task.title}`}
-                    className="rounded-[var(--r-sm)] px-2 py-1 text-[11px] font-normal text-faint hover:bg-surface-2 hover:text-danger"
+                    className="rounded-[var(--r-sm)] px-2 py-1 text-[12px] font-normal text-faint hover:bg-surface-2 hover:text-danger"
                   >
                     delete
                   </button>

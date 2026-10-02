@@ -288,7 +288,7 @@ export default function ModelPanel({ view, controller }: ModelPanelProps) {
             <Pill tone="warn">No key</Pill>
           )}
           {view.effective.active ? (
-            <span className="font-mono text-[11px] text-faint">
+            <span className="font-mono text-[12px] text-faint">
               {view.effective.model}
             </span>
           ) : null}
@@ -348,7 +348,7 @@ export default function ModelPanel({ view, controller }: ModelPanelProps) {
             >
               {preset.label}
               {preset.keyless ? (
-                <span aria-hidden="true" className="ml-1.5 text-[10px] text-faint">
+                <span aria-hidden="true" className="ml-1.5 text-[11px] text-faint">
                   local
                 </span>
               ) : null}

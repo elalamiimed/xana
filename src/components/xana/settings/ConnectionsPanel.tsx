@@ -480,7 +480,7 @@ function PluginCard({
                   <Pill tone={capability.granted ? "ok" : "idle"}>
                     {capability.granted ? "allowed" : "not allowed"}
                   </Pill>
-                  <span className="text-[11px] font-normal text-faint">
+                  <span className="text-[12px] font-normal text-faint">
                     {capability.optional ? "optional" : "required"}
                   </span>
                 </div>
@@ -490,7 +490,7 @@ function PluginCard({
                 {capability.hosts && capability.hosts.length > 0 ? (
                   <p className="mt-1 text-[12px] leading-relaxed font-normal text-faint">
                     Reaches{" "}
-                    <span className="font-mono text-[11px] font-normal">
+                    <span className="font-mono text-[12px] font-normal">
                       {capability.hosts.join(", ")}
                     </span>
                   </p>
@@ -928,7 +928,7 @@ function HealthBridge({ plugin }: { plugin: PluginStatus }) {
           <span className="text-text">iPhone.</span> In Shortcuts, add Get
           Health Sample, then Get Contents of URL. Set the method to POST, the
           request body to JSON, paste the body above, and add a header named{" "}
-          <span className="font-mono text-[11px]">{HEALTH_TOKEN_HEADER}</span>{" "}
+          <span className="font-mono text-[12px]">{HEALTH_TOKEN_HEADER}</span>{" "}
           with the token.
         </li>
         <li>
@@ -948,7 +948,7 @@ function HealthBridge({ plugin }: { plugin: PluginStatus }) {
       <p className="mt-3 text-[12px] leading-relaxed font-normal text-dim">
         Xana has to be reachable on your network for a phone to post to her.
         Start her with{" "}
-        <code className="font-mono text-[11px]">HOSTNAME=0.0.0.0 npm run dev</code>{" "}
+        <code className="font-mono text-[12px]">HOSTNAME=0.0.0.0 npm run dev</code>{" "}
         to listen beyond this machine, and use this machine&rsquo;s address on
         your network rather than the one above. The same switch exposes this
         interface to the local network, so turn it on for a network you trust.

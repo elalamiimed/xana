@@ -912,6 +912,30 @@ from every angle except the user's.
 
 ## Traps that have already bitten
 
+- **The shell is not a text editor.** A mechanical replacement across sixteen
+  components — `text-[11px]` for `text-[12px]`, one line of PowerShell — wrecked
+  every curly quote, em dash, ellipsis and middot in those files and added a BOM,
+  because `Get-Content`/`Set-Content` round-trips text through the machine's ANSI
+  codepage. The app stopped compiling with `Expected '</', got 'ident'` on a string
+  whose `…` had become three CJK characters and a question mark. `check:encoding`
+  was the thing that named both the cause and the repair ("a tool that reads and
+  writes UTF-8, not the shell"), and `git checkout -- src/components` plus a Node
+  script using `readFileSync(p, "utf8")` / `writeFileSync(p, s, "utf8")` fixed it.
+  **Any scripted edit to source goes through a UTF-8 tool, and the encoding gate
+  runs before the commit** — the damage is invisible in a diff that only shows the
+  line you meant to change.
+- **A gate that reads `className` cannot see the stylesheet.** `check:design`'s
+  type-floor rule read class lists in `.tsx`, so it never looked at
+  `globals.css` — where `.timestamp`, the utility behind every date, count and
+  piece of working in the app, was declared `11px` at `font-weight: 300`: the
+  exact pair DESIGN.md §1 forbids, in the same document, green in CI the whole
+  time. A design detector running against the *served page* is what found it —
+  nine `tiny-text` findings and a 10px label under the 11px floor for functional
+  text. Rule 8 now reads every block in the stylesheet (nothing below 11px,
+  nothing at 12px or below in a 300 weight) and files the same rule where the
+  text actually lives. **When a rule can be broken in two places, it has to be
+  asserted in both**, and a value that only ever reaches the page through a
+  custom property is not covered by a check that reads markup.
 - **A `-wal` is replayed, not discarded — so "copy the backup back" is not a
   restore.** The instructions said to stop the app, copy `xana.db` and
   `settings.json` into `data/`, start her, and that "the `-wal` and `-shm` files

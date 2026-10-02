@@ -230,14 +230,14 @@ export default function ScheduleRoom({ controller }: ScheduleRoomProps) {
                             void controller.run("event.delete", { id: event.id }, event.id);
                             setConfirming(null);
                           }}
-                          className="rounded-[var(--r-sm)] px-2 py-1 text-[11px] font-normal text-danger hover:bg-surface-2"
+                          className="rounded-[var(--r-sm)] px-2 py-1 text-[12px] font-normal text-danger hover:bg-surface-2"
                         >
                           remove
                         </button>
                         <button
                           type="button"
                           onClick={() => setConfirming(null)}
-                          className="rounded-[var(--r-sm)] px-2 py-1 text-[11px] font-normal text-dim hover:bg-surface-2"
+                          className="rounded-[var(--r-sm)] px-2 py-1 text-[12px] font-normal text-dim hover:bg-surface-2"
                         >
                           keep
                         </button>
@@ -247,7 +247,7 @@ export default function ScheduleRoom({ controller }: ScheduleRoomProps) {
                         type="button"
                         onClick={() => setConfirming(event.id)}
                         aria-label={`Remove ${event.title}`}
-                        className="shrink-0 rounded-[var(--r-sm)] px-2 py-1 text-[11px] font-normal text-faint hover:bg-surface-2 hover:text-danger"
+                        className="shrink-0 rounded-[var(--r-sm)] px-2 py-1 text-[12px] font-normal text-faint hover:bg-surface-2 hover:text-danger"
                       >
                         remove
                       </button>

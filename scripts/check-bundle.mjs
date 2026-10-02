@@ -152,7 +152,12 @@ if (!cssHref) {
     // a change to that exclusion silently reintroduces an accent box drawn
     // inside the composer's pill.
     ["composer excluded from the focus ring", ":focus-visible:not(#xana-composer)"],
-    ["composer pill still shows focus", "focus-within\\:border-accent\\/24"],
+    // 64%, not 24%. The pill's border *is* the composer's focus indicator, and
+    // at 24% it composited to rgb(39 67 72) on `--surface` — 1.79:1, which is
+    // a focus state nobody can see. `--a-64` measures 5.6:1. Pinned here
+    // because the value is invisible in review and load-bearing in use.
+    ["composer pill still shows focus", "focus-within\\:border-accent\\/64"],
+    ["the global focus ring is visible", "outline: 2px solid var(--a-64)"],
   ]) {
     console.log(`  ${css.includes(declaration) ? "ok   " : "MISS "} ${label}`);
   }

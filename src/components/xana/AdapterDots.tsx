@@ -71,28 +71,43 @@ function summarise(sources: readonly AdapterStatus[]): string {
 
 function AdapterDot({ source }: { source: AdapterStatus }) {
   const detail = source.detail?.trim();
+  /**
+   * Everything the dot knows, on the dot.
+   *
+   * The tooltip is a sighted affordance and it is always in the DOM at
+   * `opacity-0`, which made it a second, unreadable copy of the same sentence
+   * in the accessibility tree — and, to a design detector reading the page, a
+   * large block of text that never becomes visible. It is `aria-hidden` for
+   * that reason, and the facts it draws (the mode, the reason) are folded into
+   * the label instead, so hiding the duplicate takes nothing away from a
+   * screen reader.
+   */
+  const label = [source.label, STATE_WORDS[source.state], source.mode, detail]
+    .filter(Boolean)
+    .join(", ");
 
   return (
     <span className="group relative inline-flex">
       <span
         tabIndex={0}
         role="img"
-        aria-label={`${source.label}, ${STATE_WORDS[source.state]}`}
+        aria-label={label}
         className={`${DOT_BASE} ${STATE_DOT[source.state]}`}
       />
       {/* Hover only, per the design. Focus reveals the same thing. */}
       <span
         role="tooltip"
+        aria-hidden="true"
         className="pointer-events-none absolute top-[14px] right-0 z-20 w-max max-w-[260px] rounded-[var(--r-md)] border border-hairline bg-surface px-3 py-2 opacity-0 transition-opacity duration-[var(--t-fast)] group-hover:opacity-100 group-focus-within:opacity-100"
       >
         <span className="block text-[12px] font-normal text-text">
           {source.label}
         </span>
-        <span className="mt-0.5 block text-[11px] font-normal text-dim">
+        <span className="mt-0.5 block text-[12px] font-normal text-dim">
           {`${source.state} · ${source.mode}`}
         </span>
         {detail ? (
-          <span className="mt-0.5 block text-[11px] leading-relaxed font-normal text-faint">
+          <span className="mt-0.5 block text-[12px] leading-relaxed font-normal text-faint">
             {detail}
           </span>
         ) : null}
@@ -158,7 +173,17 @@ export function Header({ lifeState, presence, onOpenSettings, onOpenCave }: Head
   const waiting = sources.filter((source) => source.state === "blocked").length;
 
   return (
-    <header className="flex h-[var(--header-h)] shrink-0 items-center justify-between gap-4 px-6">
+    /* The header wraps rather than overlapping.
+     *
+     * At 390px with a handful of connections the row does not fit: the
+     * wordmark is the only item that cannot shrink, and the dot row is
+     * `shrink-0` on purpose — a squashed dot reads as a different state — so
+     * the dots were painted straight over it. A design detector measured it:
+     * "Xana" was 50% covered by an opaque amber dot. `min-h` instead of `h`
+     * lets the two groups take a line each when they must, which is the honest
+     * answer on a phone. Nothing is hidden and the header is 60px again the
+     * moment there is room for it. */
+    <header className="flex min-h-[var(--header-h)] shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-2 px-6 py-2">
       <div className="flex min-w-0 items-baseline gap-3">
         <span className="text-[13px] font-normal tracking-[0.32em] text-text uppercase">
           Xana

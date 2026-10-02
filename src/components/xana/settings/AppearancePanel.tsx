@@ -208,7 +208,7 @@ function Swatch({
       </span>
       <span className="min-w-0">
         <span className="block text-[13px] font-light text-text">{label}</span>
-        <span className="mt-0.5 block text-[11px] leading-snug font-normal text-faint">
+        <span className="mt-0.5 block text-[12px] leading-snug font-normal text-faint">
           {mood}
         </span>
       </span>

@@ -390,9 +390,13 @@ export default function MicPage() {
         </p>
 
         <div className="mt-4 h-3 w-full overflow-hidden rounded-full border border-hairline bg-surface">
+          {/* Scaled rather than widened: this bar is redrawn many times a
+              second, and an animated `width` makes each redraw a layout pass.
+              The 75ms is a meter's own time constant, not a designed
+              duration. */}
           <div
-            className="h-full rounded-full bg-accent transition-[width] duration-75"
-            style={{ width: `${Math.min(100, Math.round(level * 320))}%` }}
+            className="h-full w-full origin-left rounded-full bg-accent transition-transform duration-75 ease-linear"
+            style={{ transform: `scaleX(${Math.min(1, level * 3.2)})` }}
           />
         </div>
         {/* A fixed threshold marker, so "the bar moves" is a comparison rather

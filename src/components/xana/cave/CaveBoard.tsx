@@ -155,7 +155,7 @@ export default function CaveBoard({ controller, query, onlyAtRisk }: CaveBoardPr
             <header className="mb-3 flex items-baseline justify-between gap-2 px-1">
               <div>
                 <h4 className="label">{column.label}</h4>
-                <p className="mt-0.5 text-[11px] font-normal text-faint">
+                <p className="mt-0.5 text-[12px] font-normal text-faint">
                   {entries.length} · dropping here {column.onto}
                 </p>
               </div>

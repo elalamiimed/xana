@@ -200,14 +200,14 @@ export default function HealthRoom({ controller }: HealthRoomProps) {
                   active ? "border-accent/60 bg-surface-2 text-text" : "border-hairline text-dim hover:bg-surface-2"
                 }`}
               >
-                <span className="text-[11px] font-normal tracking-[0.02em] text-faint">
+                <span className="text-[12px] font-normal tracking-[0.02em] text-faint">
                   {daySlotLabel(date, health.today)}
                 </span>
                 <span className="text-[13px] font-light text-text">{dayOfMonth(date)}</span>
                 {/* The one number worth a mark: sleep is what the forecast leans
                     on, and a week of it is the reason to look at a strip rather
                     than at a single day. */}
-                <span className="text-[11px] font-normal text-faint">
+                <span className="text-[12px] font-normal text-faint">
                   {row?.sleepHours !== undefined
                     ? `${Number.isInteger(row.sleepHours) ? row.sleepHours : row.sleepHours.toFixed(1)}h`
                     : dayHasReading(row)
@@ -449,7 +449,7 @@ function RatingRow({
             disabled={busy}
             aria-pressed={value === level}
             aria-label={`${label} ${level} of 5`}
-            className={`h-6 w-6 rounded-full border text-[11px] font-normal transition-colors duration-[var(--t-fast)] ${
+            className={`h-6 w-6 rounded-full border text-[12px] font-normal transition-colors duration-[var(--t-fast)] ${
               value !== undefined && level <= value
                 ? "border-accent/60 bg-accent/20 text-text"
                 : "border-hairline text-faint hover:bg-surface-2"

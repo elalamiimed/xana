@@ -263,7 +263,12 @@ export function Slider({
         <span className="timestamp tabular-nums">{format(value)}</span>
       </div>
       {hint ? (
-        <p className="mt-1 text-[12px] leading-relaxed font-normal text-faint">{hint}</p>
+        /* The id is what makes `aria-describedby` below resolve. It pointed at
+           `${id}-hint` with nothing carrying that id, so every slider in
+           Settings described itself to a screen reader as nothing at all. */
+        <p id={`${id}-hint`} className="mt-1 text-[12px] leading-relaxed font-normal text-faint">
+          {hint}
+        </p>
       ) : null}
       <input
         id={id}
@@ -360,7 +365,7 @@ export function Pill({
         : "border-hairline text-faint";
   return (
     <span
-      className={`inline-flex items-center rounded-full border px-2 py-[2px] text-[10px] font-medium tracking-[0.12em] uppercase ${ring}`}
+      className={`inline-flex items-center rounded-full border px-2 py-[2px] text-[11px] font-medium tracking-[0.12em] uppercase ${ring}`}
     >
       {children}
     </span>

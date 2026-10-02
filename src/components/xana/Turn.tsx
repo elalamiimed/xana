@@ -38,7 +38,7 @@ export interface TurnProps {
 function MetaLine({ meta, failed }: { meta: string; failed: boolean }) {
   if (failed) {
     return (
-      <p className="text-[11px] leading-relaxed font-normal tracking-[0.04em] text-warn">
+      <p className="text-[12px] leading-relaxed font-normal tracking-[0.04em] text-warn">
         {meta}
       </p>
     );

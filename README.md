@@ -934,9 +934,12 @@ node scripts/probe-status-rows.mjs 40         # is the one-row-per-connection ru
   heading level skipping a step inside one component, every scrolling `<code>`
   block able to wrap a URL that has no spaces, long values wrapped rather than
   widening a 390px sheet, cards using the project's own `card` class, and the
-  caret and native controls resolving from the accent channels. Every rule in it
-  earned its place by catching something real — the two `<code>` blocks it
-  flagged in `ModelPanel` and `Settings.tsx` were genuine 390px overflow bugs
+  caret and native controls resolving from the accent channels. Its type rules
+  read the stylesheet as well as the markup — nothing below 11px, nothing at 12px
+  or below in a 300 weight — because the worst instance of that drift lived in
+  `globals.css`, where a rule that read only `className` could not see it. Every
+  rule in it earned its place by catching something real — the two `<code>` blocks
+  it flagged in `ModelPanel` and `Settings.tsx` were genuine 390px overflow bugs
   nobody had noticed, and the first version of its heading rule was itself a
   false-positive generator, which is why it now checks only what one file can be
   wrong about. Run it with the server up and it reads the *served* stylesheet

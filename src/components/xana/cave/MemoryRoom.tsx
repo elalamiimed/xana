@@ -180,7 +180,7 @@ export default function MemoryRoom({ controller }: MemoryRoomProps) {
             type="button"
             onClick={() => setKind("")}
             aria-pressed={kind === ""}
-            className={`rounded-full border px-2.5 py-1 text-[11px] font-normal ${
+            className={`rounded-full border px-2.5 py-1 text-[12px] font-normal ${
               kind === "" ? "border-accent/40 bg-accent/10 text-text" : "border-hairline text-dim hover:text-text"
             }`}
           >
@@ -192,7 +192,7 @@ export default function MemoryRoom({ controller }: MemoryRoomProps) {
               type="button"
               onClick={() => setKind(entry.kind === kind ? "" : entry.kind)}
               aria-pressed={kind === entry.kind}
-              className={`rounded-full border px-2.5 py-1 text-[11px] font-normal ${
+              className={`rounded-full border px-2.5 py-1 text-[12px] font-normal ${
                 kind === entry.kind
                   ? "border-accent/40 bg-accent/10 text-text"
                   : "border-hairline text-dim hover:text-text"
@@ -229,7 +229,7 @@ export default function MemoryRoom({ controller }: MemoryRoomProps) {
                   <button type="button" onClick={() => setEditingId(null)} className="btn btn-ghost">
                     Cancel
                   </button>
-                  <span className="text-[11px] font-normal text-faint">
+                  <span className="text-[12px] font-normal text-faint">
                     The embedding is rebuilt, so the old wording stops matching.
                   </span>
                 </div>
@@ -240,19 +240,19 @@ export default function MemoryRoom({ controller }: MemoryRoomProps) {
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
                       <span
-                        className={`rounded-full border px-2 py-[1px] text-[10px] font-medium tracking-[0.12em] uppercase ${
+                        className={`rounded-full border px-2 py-[1px] text-[11px] font-medium tracking-[0.12em] uppercase ${
                           KIND_TONE[record.kind] ?? "border-hairline text-faint"
                         }`}
                       >
                         {record.kind}
                       </span>
                       {record.pinned ? (
-                        <span className="rounded-full border border-accent/40 px-2 py-[1px] text-[10px] font-medium tracking-[0.12em] text-accent uppercase">
+                        <span className="rounded-full border border-accent/40 px-2 py-[1px] text-[11px] font-medium tracking-[0.12em] text-accent uppercase">
                           pinned
                         </span>
                       ) : null}
                       {record.source === "user" ? (
-                        <span className="text-[10px] tracking-[0.12em] text-faint uppercase">
+                        <span className="text-[11px] tracking-[0.12em] text-faint uppercase">
                           yours
                         </span>
                       ) : null}
@@ -263,7 +263,7 @@ export default function MemoryRoom({ controller }: MemoryRoomProps) {
                     <p className="mt-1 max-w-[76ch] text-[13px] leading-relaxed font-light text-dim">
                       {record.content}
                     </p>
-                    <p className="mt-1.5 text-[11px] font-normal text-faint">
+                    <p className="mt-1.5 text-[12px] font-normal text-faint">
                       {new Date(record.createdAt).toLocaleDateString(undefined, {
                         year: "numeric",
                         month: "short",
@@ -286,7 +286,7 @@ export default function MemoryRoom({ controller }: MemoryRoomProps) {
                           record.id,
                         )
                       }
-                      className={`rounded-[var(--r-sm)] px-2 py-1 text-[11px] font-normal hover:bg-surface-2 ${
+                      className={`rounded-[var(--r-sm)] px-2 py-1 text-[12px] font-normal hover:bg-surface-2 ${
                         record.pinned ? "text-accent" : "text-dim hover:text-text"
                       }`}
                     >
@@ -295,7 +295,7 @@ export default function MemoryRoom({ controller }: MemoryRoomProps) {
                     <button
                       type="button"
                       onClick={() => startEdit(record)}
-                      className="rounded-[var(--r-sm)] px-2 py-1 text-[11px] font-normal text-dim hover:bg-surface-2 hover:text-text"
+                      className="rounded-[var(--r-sm)] px-2 py-1 text-[12px] font-normal text-dim hover:bg-surface-2 hover:text-text"
                     >
                       edit
                     </button>
@@ -307,14 +307,14 @@ export default function MemoryRoom({ controller }: MemoryRoomProps) {
                             void controller.run("memory.forget", { id: record.id }, record.id);
                             setForgettingId(null);
                           }}
-                          className="rounded-[var(--r-sm)] px-2 py-1 text-[11px] font-normal text-danger hover:bg-surface-2"
+                          className="rounded-[var(--r-sm)] px-2 py-1 text-[12px] font-normal text-danger hover:bg-surface-2"
                         >
                           forget
                         </button>
                         <button
                           type="button"
                           onClick={() => setForgettingId(null)}
-                          className="rounded-[var(--r-sm)] px-2 py-1 text-[11px] font-normal text-dim hover:bg-surface-2"
+                          className="rounded-[var(--r-sm)] px-2 py-1 text-[12px] font-normal text-dim hover:bg-surface-2"
                         >
                           keep
                         </button>
@@ -323,7 +323,7 @@ export default function MemoryRoom({ controller }: MemoryRoomProps) {
                       <button
                         type="button"
                         onClick={() => setForgettingId(record.id)}
-                        className="rounded-[var(--r-sm)] px-2 py-1 text-[11px] font-normal text-faint hover:bg-surface-2 hover:text-danger"
+                        className="rounded-[var(--r-sm)] px-2 py-1 text-[12px] font-normal text-faint hover:bg-surface-2 hover:text-danger"
                       >
                         forget
                       </button>

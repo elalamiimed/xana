@@ -81,8 +81,10 @@ const UI_FILES = sourceFiles(SRC).filter((file) => file.endsWith(".tsx"));
  * weight of a large fraction of its text; the measurement is worthless if a new
  * component can reintroduce the same combination.
  *
- * Only a literal 11px or 12px in the same class list is flagged, so a size that
- * comes from a token or a media query is not guessed at.
+ * Any literal size of 12px or less in the same class list is flagged, so the
+ * 10px micro-label is caught by the same rule as the 11px one. A size that
+ * comes from a token or a media query is still not guessed at — that is what
+ * rule 8 reads instead.
  */
 function ruleTypeFloor() {
   const rule = "type floor — no font-light at 12px or below";
@@ -91,7 +93,9 @@ function ruleTypeFloor() {
     lines.forEach((line, index) => {
       if (!/className=/.test(line)) return;
       if (!/font-light/.test(line)) return;
-      if (!/text-\[(11|12)px\]/.test(line)) return;
+      const size = line.match(/text-\[(\d+(?:\.\d+)?)px\]/);
+      if (!size) return;
+      if (Number(size[1]) > 12) return;
       checked++;
       fail(
         rule,
@@ -366,6 +370,74 @@ function ruleNoLiteralColour() {
 }
 
 /* ------------------------------------------------------------------ */
+/* Rule 8 — the stylesheet obeys the same floor as the components     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The utility classes are text too, and they were the hole in rule 1.
+ *
+ * Rule 1 reads `className` lists in `.tsx`. Every text treatment the app
+ * actually reads in — `.label`, `.timestamp`, `.btn`, `.field` — is declared
+ * in `globals.css` instead, and there the floor was not enforced at all. The
+ * result was exactly the drift the rule exists to prevent: `.timestamp` set
+ * 11px at `font-weight: 300`, which is the pair DESIGN.md §1 forbids in the
+ * same document that documents the token, while CI stayed green because no
+ * class list ever contained the combination.
+ *
+ * A design detector measured it before this rule existed: 11px body text, nine
+ * times on one screen, plus the 10px label below the 11px floor for functional
+ * text. Both values are fixed; this is the gate that keeps them fixed.
+ *
+ * Two decidable rules, on every block that sets a size:
+ *   - no text below 11px anywhere in the stylesheet;
+ *   - nothing at 12px or below may be weight 300 or lighter.
+ * Weights above the floor are read as written, so `.metric`'s 200 stays legal
+ * at 30px, which is the point: the floor is about small text, not about taste.
+ */
+function ruleCssTypeFloor() {
+  const rule = "type floor — stylesheet utilities obey the floor too";
+  const css = readFileSync(CSS_FILES[0], "utf8");
+  for (const match of css.matchAll(/([^{}\n][^{}]*)\{([^{}]*)\}/g)) {
+    const [, rawSelector, body] = match;
+    const size = body.match(/font-size:\s*(\d+(?:\.\d+)?)px/);
+    if (!size) continue;
+    checked++;
+    const selector = rawSelector
+      .split("*/")
+      .pop()
+      .trim()
+      .replace(/\s+/g, " ")
+      .slice(0, 60) || "(unnamed block)";
+    const line =
+      css.slice(0, match.index).split(/\r?\n/).length +
+      body.slice(0, size.index).split(/\r?\n/).length -
+      1;
+    const px = Number(size[1]);
+    if (px < 11) {
+      fail(
+        rule,
+        CSS_FILES[0],
+        line,
+        `${selector} sets font-size: ${px}px`,
+        "11px is the floor for functional text (DESIGN.md §2). Raise it, or say in a comment why this one is not text.",
+      );
+      continue;
+    }
+    const weight = body.match(/font-weight:\s*(\d+)/);
+    const light = weight ? Number(weight[1]) <= 300 : /font-light/.test(body);
+    if (px <= 12 && light) {
+      fail(
+        rule,
+        CSS_FILES[0],
+        line,
+        `${selector} sets ${px}px at weight ${weight ? weight[1] : "300"}`,
+        "Weight is part of legibility at this size: use 400, as `.timestamp` now does.",
+      );
+    }
+  }
+}
+
+/* ------------------------------------------------------------------ */
 
 console.log("Design system — the craft floor, checked against the source");
 
@@ -375,6 +447,7 @@ ruleHeadingOrder();
 ruleLongValueWrap();
 ruleCardSurface();
 ruleNoLiteralColour();
+ruleCssTypeFloor();
 await ruleBrowserSurfaces();
 
 console.log(

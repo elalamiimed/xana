@@ -963,9 +963,15 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
           className="absolute inset-x-4 bottom-full mb-0 h-[2px] overflow-hidden rounded-full bg-surface-2"
           style={{ transform: heard ? "translateY(-1.6rem)" : undefined }}
         >
+          {/* Scaled, not widened. `transition-[width]` on a reading that
+              arrives twice a second makes the browser re-lay-out the bar on
+              every frame; `scaleX` is a composited transform and the meter
+              keeps up with the voice instead of trailing it. 75ms is
+              deliberately shorter than `--t-fast`: this is a live meter, and
+              a designed duration would read as lag. */}
           <div
-            className="h-full rounded-full bg-accent transition-[width] duration-75"
-            style={{ width: `${Math.min(100, Math.round(level * 400))}%` }}
+            className="h-full w-full origin-left rounded-full bg-accent transition-transform duration-75 ease-linear"
+            style={{ transform: `scaleX(${Math.min(1, Math.max(0, level * 4))})` }}
           />
         </div>
       ) : null}
@@ -975,7 +981,7 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
           event.preventDefault();
           submit("text");
         }}
-        className="relative flex w-full items-end gap-2 rounded-full border border-hairline bg-surface px-5 py-3 transition-colors duration-[var(--t-fast)] focus-within:border-accent/24"
+        className="relative flex w-full items-end gap-2 rounded-full border border-hairline bg-surface px-5 py-3 transition-colors duration-[var(--t-fast)] focus-within:border-accent/64"
       >
       <label htmlFor="xana-composer" className="sr-only">
         Ask Xana
@@ -1012,7 +1018,7 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
         <kbd
           aria-hidden="true"
           title="Press / to jump here"
-          className="grid h-5 w-5 shrink-0 self-center place-items-center rounded-[6px] border border-hairline bg-surface-2 font-sans text-[11px] leading-none font-normal text-dim shadow-[0_1px_0_rgb(0_0_0/0.35)] transition-[transform,box-shadow] duration-[var(--t-fast)] select-none"
+          className="grid h-5 w-5 shrink-0 self-center place-items-center rounded-[6px] border border-hairline bg-surface-2 font-sans text-[12px] leading-none font-normal text-dim shadow-[0_1px_0_rgb(0_0_0/0.35)] transition-[transform,box-shadow] duration-[var(--t-fast)] select-none"
         >
           /
         </kbd>
@@ -1029,7 +1035,15 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
               ? "Stop listening"
               : "Ask by voice — with an empty box she answers what you say; with text in it, she adds to it"
           }
-          className={`mb-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full transition-colors duration-[var(--t-fast)] hover:bg-surface-2 ${
+          /* The glyph is 14px inside a 28px button, which is the right
+             drawing and the wrong target: this is the one control in the app
+             a thumb has to find without looking. Below the tablet breakpoint
+             an invisible pseudo-element grows the target to 44x44 — the floor
+             the audit playbook names — while the drawing stays the size it
+             was. Desktop keeps the tight box: there the pointer is precise,
+             and a target that reached into the 8px gutter beside it would eat
+             clicks meant for the end of a line of text. */
+          className={`relative mb-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full transition-colors duration-[var(--t-fast)] before:absolute before:content-[''] max-md:before:-inset-2 hover:bg-surface-2 ${
             dictating ? "text-accent" : "text-faint hover:text-dim"
           }`}
         >
