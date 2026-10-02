@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 
 import type { Task } from "@/lib/cave/types";
 
+import { emptyNote } from "./empty-note";
 import type { CaveController } from "./useCave";
 
 /**
@@ -523,7 +524,10 @@ export default function TasksRoom({ controller }: TasksRoomProps) {
         {tasks.length === 0 ? (
           <li className="px-6 py-10 text-center">
             <p className="text-[13px] font-light text-dim">
-              Nothing open. Add one above, or tell her about it in the chat.
+              {emptyNote(
+                controller.loading,
+                "Nothing open. Add one above, or tell her about it in the chat.",
+              )}
             </p>
           </li>
         ) : null}

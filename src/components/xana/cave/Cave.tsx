@@ -6,6 +6,7 @@ import { Tabs } from "@/components/xana/settings/controls";
 import { compareGoals, toneFor } from "@/lib/cave/types";
 
 import CaveBoard from "./CaveBoard";
+import { READING } from "./empty-note";
 import MemoryRoom from "./MemoryRoom";
 import ScheduleRoom from "./ScheduleRoom";
 import TasksRoom from "./TasksRoom";
@@ -131,6 +132,11 @@ export default function Cave({ open, onClose, initialRoom = "goals" }: CaveProps
 
   /** A one-line summary of the room, so it says something on arrival. */
   const summary = useMemo(() => {
+    // Before the first read lands there is nothing true to say about any
+    // room, and every branch below would say "nothing" — which read as a
+    // fact about the board rather than as "I have not looked yet".
+    if (controller.loading) return READING;
+
     if (room === "trash") {
       const count = controller.trash.length;
       if (count === 0) return "Nothing in the bin.";
@@ -172,7 +178,7 @@ export default function Cave({ open, onClose, initialRoom = "goals" }: CaveProps
       parts.push(`nearest deadline ${soonest.progress.daysRemaining} days out`);
     }
     return `${parts.join(", ")}.`;
-  }, [controller.goals, controller.tasks, controller.events, controller.trash, room]);
+  }, [controller.goals, controller.tasks, controller.events, controller.trash, controller.loading, room]);
 
   const addGoal = useCallback(async () => {
     const raw = quickAdd.trim();
@@ -190,9 +196,21 @@ export default function Cave({ open, onClose, initialRoom = "goals" }: CaveProps
   if (!open) return null;
 
   const ordered = [...controller.goals].sort(compareGoals);
+  // The footer makes the same claim about counts as the summary, so it waits
+  // for the same read.
+  const footerPending = controller.loading ? READING : null;
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-void">
+    /* A labelled dialog, but not `aria-modal`: the cave does not trap Tab, so
+       claiming modality would tell a screen reader that the page behind is
+       inert while it is still reachable. That gap is worth closing one day —
+       by moving focus in and cycling it, exactly as Settings does — but it is
+       not closed by an attribute. */
+    <div
+      role="dialog"
+      aria-labelledby="cave-title"
+      className="fixed inset-0 z-50 flex flex-col bg-void"
+    >
       {/* ---------------- header ---------------- */}
       <header className="flex shrink-0 flex-wrap items-center justify-between gap-4 border-b border-hairline px-6 py-4">
         <div className="min-w-0">
@@ -316,15 +334,16 @@ export default function Cave({ open, onClose, initialRoom = "goals" }: CaveProps
       {/* ---------------- footer ---------------- */}
       <footer className="shrink-0 border-t border-hairline px-6 py-3">
         <p className="text-[11px] font-normal text-faint">
-          {room === "goals"
-            ? `${ordered.length} goal${ordered.length === 1 ? "" : "s"} in the cave. Everything here is stored locally in data/xana.db.`
-            : room === "tasks"
-              ? "Open tasks only — completing one removes it from this list. Everything here is stored locally in data/xana.db."
-              : room === "schedule"
-                ? "Today and tomorrow. What Next, Focus and Open read from."
-                : room === "trash"
-                  ? `Removed things wait here for ${TRASH_DAYS} days. Restoring puts one back exactly as it was; nothing is gone until the deadline, or until you say so.`
-                  : "Removed memories are not recalled again — and they are in the trash for a week if you change your mind."}
+          {footerPending ??
+            (room === "goals"
+              ? `${ordered.length} goal${ordered.length === 1 ? "" : "s"} in the cave. Everything here is stored locally in data/xana.db.`
+              : room === "tasks"
+                ? "Open tasks only — completing one removes it from this list. Everything here is stored locally in data/xana.db."
+                : room === "schedule"
+                  ? "Today and tomorrow. What Next, Focus and Open read from."
+                  : room === "trash"
+                    ? `Removed things wait here for ${TRASH_DAYS} days. Restoring puts one back exactly as it was; nothing is gone until the deadline, or until you say so.`
+                    : "Removed memories are not recalled again — and they are in the trash for a week if you change your mind.")}
         </p>
       </footer>
     </div>

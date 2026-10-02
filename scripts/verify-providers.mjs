@@ -437,7 +437,15 @@ async function keyRoundTrip() {
   const failing = await put({
     model: { enabled: true, apiKey: "sk-deliberately-invalid-for-the-failure-test" },
   });
-  check("a broken key still leaves the model switched on", failing?.model?.enabled === true);
+  // The detail matters: this asserts a field of a response, and when it fails
+  // the question is always "what came back instead" — a bare FAIL here sent
+  // one run looking for a bug in the model switch that was really a response
+  // the script had not printed.
+  check(
+    "a broken key still leaves the model switched on",
+    failing?.model?.enabled === true,
+    JSON.stringify(failing)?.slice(0, 240),
+  );
 
   const chat = await fetch(`${base}/api/chat`, {
     method: "POST",

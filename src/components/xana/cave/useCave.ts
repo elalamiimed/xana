@@ -15,7 +15,7 @@
  * can show that it is saving without blocking the rest of the board.
  */
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { CaveGoal, CaveSnapshot, MemoryPage, TrashItem } from "@/lib/cave/types";
 import type { CalendarEvent, Task } from "@/lib/core/types";
@@ -144,6 +144,25 @@ export function useCave(open: boolean): CaveController {
     },
     [adopt],
   );
+
+  /**
+   * Read the cave when it opens, and again every time it is re-opened.
+   *
+   * This is the whole reason the hook takes `open`, and it was missing: the
+   * rooms rendered from state that nothing had ever filled, so a live board
+   * with three goals and an open task showed "Nothing on the board yet" —
+   * an empty state that was not a report but a default.
+   *
+   * Re-reading on each open rather than once per mount is deliberate. The
+   * cave is not the only writer: she adds, completes and removes things from
+   * the chat, and a board that loaded once at page load would be wrong by the
+   * time it is opened. Loading while closed would be the opposite mistake —
+   * a fetch on every page load for a screen nobody asked for.
+   */
+  useEffect(() => {
+    if (!open) return;
+    void reload();
+  }, [open, reload]);
 
   return {
     goals,

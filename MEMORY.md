@@ -759,6 +759,64 @@ survive them. That group is the one to extend first when this handler grows.
 The general shape: **when a feature becomes destructive, the tests move from what
 it does to what it refuses to do.**
 
+**AND A GOAL'S STEPS ARE NOT SEPARATE ROWS**
+
+Deleting a goal puts its milestones in the bin first, because the cascade would
+take them before the goal row could be copied. Listing each of them as its own row
+looked honest and was not: "Restore" on a step put back a milestone whose goal was
+still in the bin, and "Delete for good" on the goal left the steps behind — rows
+that could still be restored, into a board that could never show them.
+
+So the bin shows one row per deleted goal, says how many steps came with it,
+restores them with it and deletes them for good with it. A step removed on its own
+— the ✕ on a card, with its goal still on the board — is still listed and still
+restorable, because that one has a life of its own.
+
+It was found by running `verify:cave` against the live app and *looking in the
+bin*: that script's own cleanup assertion passed, because it only knew the ids it
+had remembered, and two orphan milestones were sitting beside it. `verify:trash`
+now purges a goal and asserts its steps cannot be restored — asserted through
+`restoreFromTrash`, because the listing hides them and a test that only read the
+listing would pass while the rows piled up.
+
+### 27. A screen that never asks looks exactly like an empty life
+
+The report: *"Goals and tasks show empty but we have some goals and tasks in the
+front page which is contradictory."*
+
+Both halves were true, and nothing in the app was lying. The cave's five rooms
+rendered from state that nothing had ever filled: `useCave` published a `reload()`,
+took an `open` flag it never read, and had no effect that called it. Opening My cave
+showed "Nothing on the board yet" over a database holding three goals and an open
+task, while the front page beside it listed them. Two screens contradicting each
+other, one database, and no error anywhere — the route was right, the types were
+right, and every component rendered exactly what it was handed.
+
+The shape is worth naming, because it is not a cave bug:
+
+  - **An empty state is a claim.** "Nothing open" is a statement about the
+    database, and an array nobody has filled cannot support it. Every room printed
+    its sentence unconditionally, so "I have not looked yet" and "there is nothing
+    there" were the same pixels.
+  - **Every check that talks HTTP passes.** `verify:cave` asserted the route's
+    payload and went on passing the whole time the screen was empty. So did `tsc`.
+    The only test that could have caught it presses the button.
+  - **No browser launches here.** Chromium is multi-process and its IPC is built on
+    named pipes, which the sandbox denies: it dies with a Mojo `platform_channel`
+    error before DevTools answers. `verify:browser` reports that as a skip rather
+    than a failure, which is correct and is also not a pass — so `verify:cave-load`
+    holds the two invariants a browser would have observed, against the source, and
+    `verify:browser` grew the real version: click **My cave**, compare every room
+    against `/api/cave`, change the database behind it, re-open.
+
+The fix is a three-line effect. The half worth keeping is the second change: every
+room's empty sentence now goes through one function, `emptyNote`, which says
+"Reading…" until an answer has landed — so a request that never returns stays
+visibly unfinished instead of quietly reassuring.
+
+The general shape: **when a screen can be empty, "empty" and "not read yet" are
+different states, and the interface has to be able to tell them apart.**
+
 ---
 
 ## Traps that have already bitten

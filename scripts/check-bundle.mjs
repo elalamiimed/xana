@@ -45,6 +45,12 @@ const MARKERS = [
   ["ambient: session is last not current", "last session"],
   ["cave: task form", "What needs doing?"],
   ["cave: tasks room", "Add a task"],
+  // The cave's rooms used to render the empty state their state started in —
+  // nobody ever sent the read. Both of these live in the module that decides
+  // between "still reading" and "nothing here", so a served bundle that
+  // carries the new sentence is a bundle that carries the fix.
+  ["cave: reading state", "Reading…"],
+  ["cave: memory room empty state", "No memories yet."],
 ];
 
 const html = await (await fetch(base)).text();

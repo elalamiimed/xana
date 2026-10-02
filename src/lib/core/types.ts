@@ -645,6 +645,14 @@ export interface TrashItem {
   deletedAt: string;
   /** Whole days before it is removed for good. Never negative. */
   daysLeft: number;
+  /**
+   * For a goal: the steps that went into the bin with it.
+   *
+   * They are not listed as rows of their own — restoring the goal brings them
+   * back and deleting it for good takes them with it — so the row carries the
+   * count rather than the bin quietly holding more than it says.
+   */
+  steps?: number;
 }
 
 /* ------------------------------------------------------------------ */

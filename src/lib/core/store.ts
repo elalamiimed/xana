@@ -73,6 +73,23 @@ function rehydrate(value: unknown): unknown {
   return value;
 }
 
+/**
+ * Which goal a binned milestone belongs to, read from the row that was stored.
+ *
+ * Parsed rather than pattern-matched: a `LIKE '%"goal_id":"…"%'` also matches a
+ * milestone whose *title* happens to contain that text, and stepping through
+ * the rows means no index and no escaped pattern to get wrong. The bin is
+ * bounded by a week, so the scan is nothing.
+ */
+function payloadGoalId(payload: string): string | undefined {
+  try {
+    const parsed = JSON.parse(payload) as { goal_id?: unknown };
+    return typeof parsed.goal_id === "string" ? parsed.goal_id : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /* ------------------------------------------------------------------ */
 /* Vector <-> BLOB                                                     */
 /* ------------------------------------------------------------------ */
@@ -489,20 +506,49 @@ export class XanaStore {
     this.purgeTrash();
     const now = Date.now();
     const rows = this.db
-      .prepare(`SELECT kind, ref_id, title, deleted_at FROM trash ORDER BY deleted_at DESC`)
-      .all() as Array<{ kind: string; ref_id: string; title: string; deleted_at: string }>;
+      .prepare(`SELECT kind, ref_id, title, payload, deleted_at FROM trash ORDER BY deleted_at DESC`)
+      .all() as Array<{ kind: string; ref_id: string; title: string; payload: string; deleted_at: string }>;
 
-    return rows.map((row) => {
-      const deletedAt = new Date(row.deleted_at);
-      const expiresAt = new Date(deletedAt.getTime() + TRASH_DAYS * 86_400_000);
-      return {
-        kind: row.kind as TrashKind,
-        id: row.ref_id,
-        title: row.title,
-        deletedAt: row.deleted_at,
-        daysLeft: Math.max(0, Math.ceil((expiresAt.getTime() - now) / 86_400_000)),
-      };
-    });
+    /**
+     * A goal's steps went into the bin with it and have no separate life
+     * there: restoring the goal brings them back and "delete for good" takes
+     * them with it. Listing them was the opposite claim — one deleted goal
+     * filled the bin with a row per step — and it offered two actions that
+     * could only produce a milestone whose goal was still in the bin. So the
+     * goal is the row, and the row says how many steps came with it, which
+     * keeps the count honest instead of quietly dropping them.
+     *
+     * A step deleted on its own — the ✕ on a goal card — is a different
+     * thing: its goal is still on the board, it is restorable on its own, and
+     * it is listed like anything else.
+     */
+    const binnedGoals = new Set(rows.filter((row) => row.kind === "goal").map((row) => row.ref_id));
+    const stepsByGoal = new Map<string, number>();
+    const hidden = new Set<string>();
+
+    for (const row of rows) {
+      if (row.kind !== "milestone") continue;
+      const goalId = payloadGoalId(row.payload);
+      if (!goalId || !binnedGoals.has(goalId)) continue;
+      hidden.add(`${row.kind}:${row.ref_id}`);
+      stepsByGoal.set(goalId, (stepsByGoal.get(goalId) ?? 0) + 1);
+    }
+
+    return rows
+      .filter((row) => !hidden.has(`${row.kind}:${row.ref_id}`))
+      .map((row) => {
+        const deletedAt = new Date(row.deleted_at);
+        const expiresAt = new Date(deletedAt.getTime() + TRASH_DAYS * 86_400_000);
+        const steps = stepsByGoal.get(row.ref_id);
+        return {
+          kind: row.kind as TrashKind,
+          id: row.ref_id,
+          title: row.title,
+          deletedAt: row.deleted_at,
+          daysLeft: Math.max(0, Math.ceil((expiresAt.getTime() - now) / 86_400_000)),
+          ...(steps ? { steps } : {}),
+        };
+      });
   }
 
   /**
@@ -549,10 +595,9 @@ export class XanaStore {
     // Without this a restored goal would open empty, which reads as data loss
     // even though nothing was lost.
     if (kind === "goal") {
-      const children = this.db
-        .prepare(`SELECT ref_id FROM trash WHERE kind = 'milestone' AND payload LIKE ?`)
-        .all(`%"goal_id":"${refId}"%`) as Array<{ ref_id: string }>;
-      for (const child of children) this.restoreFromTrash("milestone", child.ref_id);
+      for (const child of this.binnedMilestonesOf(refId)) {
+        this.restoreFromTrash("milestone", child);
+      }
     }
     return true;
   }
@@ -580,9 +625,27 @@ export class XanaStore {
    * The interface offers it as "delete for good", which is the only irreversible
    * verb in the app, so it is its own call rather than a flag on `restore` —
    * nothing should be able to remove something permanently by accident.
+   *
+   * A goal takes its steps with it, because they are only in the bin as part
+   * of it. They were left behind once, and the bin then held milestones for a
+   * goal that no longer existed: rows that could still be restored, into a
+   * board that could never show them.
    */
   purgeOne(kind: TrashKind, refId: string): boolean {
+    if (kind === "goal") {
+      for (const child of this.binnedMilestonesOf(refId)) {
+        this.purgeOne("milestone", child);
+      }
+    }
     return this.db.prepare(`DELETE FROM trash WHERE kind = ? AND ref_id = ?`).run(kind, refId).changes > 0;
+  }
+
+  /** The ids of the milestones that went into the bin with this goal. */
+  private binnedMilestonesOf(goalId: string): string[] {
+    const rows = this.db
+      .prepare(`SELECT ref_id, payload FROM trash WHERE kind = 'milestone'`)
+      .all() as Array<{ ref_id: string; payload: string }>;
+    return rows.filter((row) => payloadGoalId(row.payload) === goalId).map((row) => row.ref_id);
   }
 
   /* ---------------- memories ---------------- */

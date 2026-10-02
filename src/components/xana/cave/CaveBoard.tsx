@@ -11,6 +11,7 @@ import {
   type CaveGoal,
 } from "@/lib/cave/types";
 
+import { emptyNote } from "./empty-note";
 import GoalCard from "./GoalCard";
 import type { CaveController } from "./useCave";
 
@@ -189,7 +190,7 @@ export default function CaveBoard({ controller, query, onlyAtRisk }: CaveBoardPr
 
               {entries.length === 0 ? (
                 <p className="px-1 py-6 text-center text-[12px] font-normal text-faint">
-                  {controller.loading ? "Reading…" : "Nothing here yet."}
+                  {emptyNote(controller.loading, "Nothing here yet.")}
                 </p>
               ) : null}
             </div>

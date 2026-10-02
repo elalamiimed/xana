@@ -487,7 +487,10 @@ async function main() {
   // Every task whose title carries this run's marker goes, including the two
   // edge-case probes above. The first version of this script only deleted the
   // one it had kept the id for, and this assertion is what caught the rest.
+  // The ids are kept for the bin cleanup at the end: a deleted probe is not
+  // gone, it has moved.
   let strayTasks = finalBoard.tasks.filter((t) => t.title?.startsWith(marker));
+  const strayTaskIds = strayTasks.map((t) => t.id);
   for (const task of strayTasks) {
     await op("task.delete", { id: task.id });
   }
@@ -501,6 +504,7 @@ async function main() {
 
   // Same for the schedule: the "defaulted" probe has no id kept for it.
   let strayEvents = afterTaskCleanup.events.filter((e) => e.title?.startsWith(marker));
+  const strayEventIds = strayEvents.map((e) => e.id);
   for (const event of strayEvents) {
     await op("event.delete", { id: event.id });
   }
@@ -510,6 +514,41 @@ async function main() {
     "and no probe event is left in the schedule",
     strayEvents.length === 0,
     strayEvents.map((e) => e.title).join(", "),
+  );
+
+  /* ---------------- the bin ----------------
+   *
+   * Deleting is not the end of it: everything this script removed moved into
+   * the trash, where it would sit in the user's own bin for a week. The
+   * cleanup above reads as thorough and leaves a board that looks clean, so
+   * this is the kind of residue nobody notices until they open Trash and find
+   * eight records they never made.
+   *
+   * Purged by id, and only by id. `trash.empty` would be the one-line version
+   * of this and would take the user's own items with it — a test that empties
+   * a real bin to tidy up after itself is a worse bug than the mess.
+   */
+  const probes = [
+    ...created.map((id) => ["goal", id]),
+    ["task", taskId],
+    ...strayTaskIds.map((id) => ["task", id]),
+    ["event", eventId],
+    ...strayEventIds.map((id) => ["event", id]),
+    ["memory", memoryId],
+    ["memory", unrelatedId],
+  ].filter(([, id]) => Boolean(id));
+
+  for (const [kind, id] of probes) {
+    await op("trash.purge", { kind, id });
+  }
+
+  const afterBinCleanup = await board();
+  const probeIds = new Set(probes.map(([, id]) => id));
+  const leftInBin = afterBinCleanup.trash.filter((item) => probeIds.has(item.id));
+  check(
+    "and nothing this script removed is left in the bin",
+    leftInBin.length === 0,
+    leftInBin.map((item) => `${item.kind}:${item.title}`).join(", "),
   );
 
   return report();

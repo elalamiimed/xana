@@ -29,6 +29,7 @@ import { useState } from "react";
 
 import { TRASH_DAYS, TRASH_LABELS, type TrashItem } from "@/lib/core/types";
 
+import { emptyNote } from "./empty-note";
 import type { CaveController } from "./useCave";
 
 export interface TrashRoomProps {
@@ -61,9 +62,10 @@ export default function TrashRoom({ controller }: TrashRoomProps) {
       <section className="mx-auto mt-10 w-full max-w-[var(--content-max)] px-6">
         <h3 className="text-[13px] font-normal tracking-[0.02em] text-accent uppercase">Trash</h3>
         <p className="mt-3 max-w-[62ch] text-[13px] leading-relaxed font-light text-dim">
-          Empty. Anything you remove — a task, an event, a goal, a note, a memory — lands here
-          first and stays for {TRASH_DAYS} days, so asking her to remove something is never
-          final. Restoring is always the loud control; deleting for good is the quiet one.
+          {emptyNote(
+            controller.loading,
+            `Empty. Anything you remove — a task, an event, a goal, a note, a memory — lands here first and stays for ${TRASH_DAYS} days, so asking her to remove something is never final. Restoring is always the loud control; deleting for good is the quiet one.`,
+          )}
         </p>
       </section>
     );
@@ -93,6 +95,9 @@ export default function TrashRoom({ controller }: TrashRoomProps) {
               <p className="truncate text-[13px] leading-relaxed font-light text-text">{item.title}</p>
               <p className="text-[12px] font-normal text-faint">
                 removed {deletedLabel(item)} · {expiryLabel(item)}
+                {item.steps
+                  ? ` · ${item.steps} step${item.steps === 1 ? "" : "s"} with it`
+                  : ""}
               </p>
             </div>
 

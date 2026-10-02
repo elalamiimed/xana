@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 
 import type { CalendarEvent } from "@/lib/cave/types";
 
+import { emptyNote } from "./empty-note";
 import type { CaveController } from "./useCave";
 
 /**
@@ -265,8 +266,10 @@ export default function ScheduleRoom({ controller }: ScheduleRoomProps) {
         {byDay.length === 0 ? (
           <div className="px-6 py-10 text-center">
             <p className="text-[13px] font-light text-dim">
-              Nothing scheduled today or tomorrow. Add something above, or tell her — “book
-              a study block at 7”.
+              {emptyNote(
+                controller.loading,
+                "Nothing scheduled today or tomorrow. Add something above, or tell her — “book a study block at 7”.",
+              )}
             </p>
           </div>
         ) : null}

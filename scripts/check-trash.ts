@@ -147,13 +147,90 @@ group("Events, notes, goals and memories all take the same route", () => {
   store.deleteGoal(goal.id);
   check("a deleted goal leaves the board", !store.listGoals(["active"]).some((g) => g.id === goal.id));
   check("and leaves allGoals too", !store.allGoals().some((g) => g.id === goal.id));
-  check("its milestones are in the bin with it", store.listTrash().filter((i) => i.kind === "milestone").length === 2, JSON.stringify(store.listTrash().map((i) => i.kind)));
+  check(
+    "the bin shows the goal as one row, not one row per step",
+    store.listTrash().filter((i) => i.kind === "goal").length === 1 &&
+      store.listTrash().filter((i) => i.kind === "milestone").length === 0,
+    JSON.stringify(store.listTrash().map((i) => i.kind)),
+  );
+  check(
+    "and the row says how many steps came with it",
+    store.listTrash().find((i) => i.kind === "goal")?.steps === 2,
+    String(store.listTrash().find((i) => i.kind === "goal")?.steps),
+  );
 
   check("restoring the goal works", store.restoreFromTrash("goal", goal.id));
   const restored = store.goalById(goal.id);
   check("and it is on the board again", store.listGoals(["active"]).some((g) => g.id === goal.id));
   check("with its milestones back", restored?.milestones.length === 2, String(restored?.milestones.length));
   check("and an empty bin behind it", store.listTrash().length === 0, JSON.stringify(store.listTrash()));
+});
+
+/**
+ * A goal removed for good takes its steps with it.
+ *
+ * The first version of the bin left them behind: milestones whose goal no
+ * longer existed, still restorable, into a board that could never show them.
+ * The rows are asserted through `restoreFromTrash` rather than through the
+ * listing, because the listing hides them once their goal is in the bin — a
+ * test that only read the listing would pass while the rows piled up.
+ */
+group("Deleting a goal for good takes its steps with it", () => {
+  const doomed = store.createGoal({
+    title: "Abandoned plan",
+    horizon: "short",
+    milestones: [{ title: "Draft the outline" }, { title: "Ask for feedback" }],
+  });
+  const stepIds = (store.goalById(doomed.id)?.milestones ?? []).map((m) => m.id);
+  check("the doomed goal has two steps", stepIds.length === 2);
+
+  store.deleteGoal(doomed.id);
+  check("it is in the bin", store.listTrash().some((i) => i.kind === "goal" && i.id === doomed.id));
+
+  check("purging it for good takes", store.purgeOne("goal", doomed.id));
+  check("the goal is out of the bin", !store.listTrash().some((i) => i.id === doomed.id));
+  check(
+    "its steps are gone with it, not merely hidden",
+    stepIds.every((id) => store.restoreFromTrash("milestone", id) === false),
+    JSON.stringify(store.listTrash()),
+  );
+  check("and the bin is empty", store.listTrash().length === 0, JSON.stringify(store.listTrash()));
+});
+
+/**
+ * A single step removed on its own is a different thing.
+ *
+ * Its goal is still on the board, so it is listed, it can be put back, and it
+ * must be — the rule that hides steps is about steps whose goal is in the bin
+ * with them, not about steps.
+ */
+group("A step removed on its own can be put back", () => {
+  const kitchen = store.createGoal({
+    title: "Redo the kitchen",
+    horizon: "mid",
+    milestones: [{ title: "Measure the wall" }, { title: "Order the tiles" }],
+  });
+  const step = store.goalById(kitchen.id)?.milestones[0];
+  check("the goal has a first step", Boolean(step));
+
+  store.deleteMilestone(step!.id);
+  check(
+    "the step leaves the goal",
+    store.goalById(kitchen.id)?.milestones.length === 1,
+    String(store.goalById(kitchen.id)?.milestones.length),
+  );
+  check(
+    "and it IS listed in the bin, because its goal is not",
+    store.listTrash().some((i) => i.kind === "milestone" && i.id === step!.id),
+    JSON.stringify(store.listTrash().map((i) => `${i.kind}:${i.title}`)),
+  );
+  check("restoring it works", store.restoreFromTrash("milestone", step!.id));
+  check(
+    "and the goal has both steps again",
+    store.goalById(kitchen.id)?.milestones.length === 2,
+    String(store.goalById(kitchen.id)?.milestones.length),
+  );
+  check("leaving an empty bin", store.listTrash().length === 0, JSON.stringify(store.listTrash()));
 });
 
 /**

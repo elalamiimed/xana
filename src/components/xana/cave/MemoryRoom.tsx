@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 
 import { MEMORY_KINDS, type MemoryRecord } from "@/lib/cave/types";
 
+import { emptyNote } from "./empty-note";
 import type { CaveController } from "./useCave";
 
 /**
@@ -108,7 +109,7 @@ export default function MemoryRoom({ controller }: MemoryRoomProps) {
           <p className="mt-1 max-w-[60ch] text-[13px] leading-relaxed font-light text-dim">
             {stats
               ? `${stats.total} memories${stats.pinned > 0 ? `, ${stats.pinned} pinned` : ""}. Pinned entries never fade and always rank highest in recall.`
-              : "Reading…"}
+              : emptyNote(controller.loading, "No memories yet.")}
           </p>
         </div>
         <button
@@ -337,9 +338,15 @@ export default function MemoryRoom({ controller }: MemoryRoomProps) {
         {visible.length === 0 ? (
           <li className="px-6 py-10 text-center">
             <p className="text-[13px] font-light text-dim">
-              {items.length === 0
-                ? "Nothing remembered yet. Tell her something in the chat, or write one above."
-                : "Nothing matches that."}
+              {/* A filter that matched nothing is a fact about the filter, so
+                  it is said at once; an empty list is a fact about memory,
+                  and waits until memory has actually been read. */}
+              {items.length > 0 || query.trim()
+                ? "Nothing matches that."
+                : emptyNote(
+                    controller.loading,
+                    "Nothing remembered yet. Tell her something in the chat, or write one above.",
+                  )}
             </p>
           </li>
         ) : null}

@@ -315,6 +315,14 @@ each row and a **days left** countdown. Restoring puts the record back exactly a
 it was: a task with its due date, a memory with its embedding still intact, a goal
 with its milestones.
 
+A deleted goal is **one row**, not one row per step, and the row says how many
+steps came with it. The steps have no separate life in the bin — restoring the goal
+brings them back, and deleting it for good takes them with it — so listing them
+individually only offered two actions that ended with a milestone whose goal was
+still in the bin. A step removed on its own, with the ✕ on its card, is a different
+thing: its goal is still on the board, and it is listed and restorable like
+anything else.
+
 The bin is what makes asking her to remove things safe. She is told "remove
 everything" and does it, in one move, and the reply says where it went — because a
 deletion you cannot take back is one people stop using, and a list nobody prunes
@@ -822,6 +830,18 @@ node scripts/probe-status-rows.mjs 40         # is the one-row-per-connection ru
   embedding survives its JSON round trip. The seven-day window is driven with an
   injected clock, and six conversational sentences ("forget it", "drop it",
   "cancel that") are asserted NOT to empty the list.
+- `npm run verify:cave-load` — that My cave asks for its data when it opens. The
+  failure it guards is not a wrong answer but a question nobody asked: the hook
+  published a `reload()`, took an `open` flag it never read, and the rooms
+  rendered the empty state their state started in, so a board with three goals on
+  it said "Nothing on the board yet" while the front page listed them. No HTTP
+  check or type can see that, and no browser can launch under the sandbox this was
+  written in, so the two invariants a browser would have observed are asserted
+  against the source: the read is triggered by an effect that depends on `open`,
+  and every room routes its empty sentence through `emptyNote`, which says
+  "Reading…" until an answer lands. `npm run verify:browser` does the real thing —
+  it clicks **My cave**, compares every room against `/api/cave`, and re-opens the
+  cave after changing the database behind it.
 - `npm run verify:transcriber` — that the app starts the Python service rather  than asking you to. The decision is a pure function of five facts and is driven
   across all 32 combinations, because every way it can be wrong is invisible from
   outside: starting a second copy of a service that is still loading its model,

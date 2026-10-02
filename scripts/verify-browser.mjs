@@ -17,7 +17,8 @@
  *   3. proves the orb canvas is actually painting, by reading its pixels;
  *   4. opens Settings through a real click and screenshots it;
  *   5. drives the theme picker and proves the document recolours;
- *   6. repeats at a phone viewport.
+ *   6. opens My cave and proves every room shows what the database holds;
+ *   7. repeats at a phone viewport.
  *
  * Screenshots land in `data/shots/` so they are visible to a human
  * afterwards, which is the only way to judge whether it looks right.
@@ -318,9 +319,15 @@ async function main() {
       );
     }
     if (message.method === "Log.entryAdded") {
-      const { level, text } = message.params.entry;
-      if (level === "error" && !/favicon/i.test(text)) {
-        problems.push(`log: ${text}`.slice(0, 300));
+      const { level, text, url } = message.params.entry;
+      // The URL is a separate field, and the failure text — "Failed to load
+      // resource: the server responded with a status of 404" — never contains
+      // it. Filtering on the text alone let the favicon through and reported a
+      // console error on every run, which is the shape of a check nobody
+      // believes any more.
+      const favicon = /favicon/i.test(text) || /favicon/i.test(url ?? "");
+      if (level === "error" && !favicon) {
+        problems.push(`log: ${text}${url ? ` (${url})` : ""}`.slice(0, 300));
       }
     }
   });
@@ -329,10 +336,15 @@ async function main() {
     /* ---------------- desktop ---------------- */
     section("Desktop · 1440×900");
 
+    /* No width/height here. Passing them asks the browser for a *popup*
+       window, and a current Edge answers "Target position can only be set for
+       new windows" and refuses to open a target at all — which is what this
+       script did the first time it ever ran on a machine that could launch a
+       browser, having been written where none could. The window size comes
+       from `--window-size` on the launch, and the phone section overrides the
+       metrics explicitly. */
     const { targetId } = await devtools.send("Target.createTarget", {
       url: "about:blank",
-      width: 1440,
-      height: 900,
     });
     const { sessionId } = await devtools.send("Target.attachToTarget", {
       targetId,
@@ -513,7 +525,13 @@ async function main() {
           open: true,
           labelled: Boolean(d.getAttribute('aria-labelledby')),
           modal: d.getAttribute('aria-modal') === 'true',
-          tabs: [...d.querySelectorAll('[role="tab"]')].map((t) => t.textContent.trim()),
+          tabs: [...d.querySelectorAll('[role="tab"]')]
+            // The sheet renders both its desktop rail and its phone strip, and
+            // only one of them is visible: counting the DOM gave ten sections
+            // for the five the panel has, and this assertion failed the first
+            // time the script ever ran somewhere a browser could start.
+            .filter((t) => t.getBoundingClientRect().width > 0)
+            .map((t) => t.textContent.trim()),
           focusInside: d.contains(document.activeElement),
           swatches: d.querySelectorAll('[role="radiogroup"] button').length,
         };
@@ -529,20 +547,30 @@ async function main() {
     const shot2 = await screenshot(devtools, sessionId, "02-desktop-settings");
     console.log(`  info  ${shot2}`);
 
-    // Pick a different theme and prove the document recoloured, and that
-    // the canvas picked the new accent up out of computed style.
+    // Pick a theme that is not the one already in force, and prove the
+    // document recoloured and that the canvas picked the new accent up out of
+    // computed style.
+    //
+    // It used to click the "ember" preset by name, which proves nothing on a
+    // machine that is already on ember — the accent is the same before and
+    // after, and the check reads as "the picker is broken" when the picker was
+    // never asked to change anything. Which preset is current is the machine's
+    // business, so the script asks for a different one instead of naming one.
     const recoloured = await evaluate(
       devtools,
       sessionId,
       `(async () => {
         const before = getComputedStyle(document.documentElement).getPropertyValue('--accent-rgb').trim();
-        const swatches = [...document.querySelectorAll('[role="radiogroup"] button')];
-        const ember = swatches.find((b) => /ember/i.test(b.textContent || ''));
-        if (!ember) return { error: 'no ember preset' };
-        ember.click();
+        const swatches = [...document.querySelectorAll('[role="radiogroup"] button')].filter(
+          (b) => b.getBoundingClientRect().width > 0,
+        );
+        const other = swatches.find((b) => b.getAttribute('aria-pressed') !== 'true');
+        if (!other) return { error: 'every preset is already selected' };
+        const label = (other.textContent || '').trim().split('\\n')[0];
+        other.click();
         await new Promise((r) => setTimeout(r, 500));
         const after = getComputedStyle(document.documentElement).getPropertyValue('--accent-rgb').trim();
-        return { before, after, press: ember.getAttribute('aria-pressed'), changed: before !== after };
+        return { before, after, label, changed: before !== after, press: other.getAttribute('aria-pressed') };
       })()`,
       true,
     );
@@ -552,11 +580,11 @@ async function main() {
     } else {
       check("the theme picker recolours the document", recoloured.changed === true, `${recoloured.before} -> ${recoloured.after}`);
       check("the preset reads as selected", recoloured.press === "true");
-      console.log(`  info  accent ${recoloured.before} -> ${recoloured.after}`);
+      console.log(`  info  ${recoloured.label}: accent ${recoloured.before} -> ${recoloured.after}`);
     }
 
     await sleep(1600);
-    const shot3 = await screenshot(devtools, sessionId, "03-desktop-ember");
+    const shot3 = await screenshot(devtools, sessionId, "03-desktop-theme");
     console.log(`  info  ${shot3}`);
 
     // Walk the other tabs, which is where an unrendered card or a bad prop
@@ -670,6 +698,330 @@ async function main() {
     console.log(`  info  ${turn?.cards ?? 0} card(s) in the transcript`);
     const shot4 = await screenshot(devtools, sessionId, "05-desktop-turn");
     console.log(`  info  ${shot4}`);
+
+    /* ---------------- My cave ---------------- */
+    section("My cave, opened by a real click");
+
+    // What the cave is supposed to hold, read from Node rather than from the
+    // page. A client that renders the same wrong answer twice still agrees
+    // with itself, so the comparison has to come from outside it.
+    const caveExpected = await fetch(`${base}/api/cave`, { cache: "no-store" }).then((r) => r.json());
+
+    /** Open the cave through the header button. */
+    const openCave = () =>
+      evaluate(
+        devtools,
+        sessionId,
+        `(async () => {
+          const button = [...document.querySelectorAll('button')].find((b) => /my cave/i.test(b.textContent || ''));
+          if (!button) return { found: false };
+          button.click();
+          await new Promise((r) => setTimeout(r, 250));
+          const panel = document.querySelector('[role="dialog"]');
+          return {
+            found: true,
+            open: Boolean(panel),
+            rooms: panel
+              ? [...panel.querySelectorAll('[role="tab"]')]
+                  .filter((t) => t.getBoundingClientRect().width > 0)
+                  .map((t) => t.textContent.trim())
+              : [],
+          };
+        })()`,
+        true,
+      );
+
+    /** The cave's own text, never the page behind it. */
+    const caveText = () =>
+      evaluate(devtools, sessionId, `document.querySelector('[role="dialog"]')?.innerText ?? ''`);
+
+    /** Click a room and return what it says. */
+    const enterRoom = (label) =>
+      evaluate(
+        devtools,
+        sessionId,
+        `(async () => {
+          const panel = document.querySelector('[role="dialog"]');
+          if (!panel) return '';
+          const tab = [...panel.querySelectorAll('[role="tab"]')].find(
+            (t) => t.textContent.trim() === ${JSON.stringify(label)} && t.getBoundingClientRect().width > 0,
+          );
+          if (!tab) return '';
+          tab.click();
+          await new Promise((r) => setTimeout(r, 400));
+          return panel.innerText;
+        })()`,
+        true,
+      );
+
+    const caveOpened = await openCave();
+    check("the header button opens My cave", caveOpened?.open === true, JSON.stringify(caveOpened));
+    check(
+      "every room is in the strip",
+      ["Goals", "Tasks", "Schedule", "Memory", "Trash"].every((room) =>
+        (caveOpened?.rooms ?? []).includes(room),
+      ),
+      JSON.stringify(caveOpened?.rooms),
+    );
+
+    // Wait for the cave's own read to land rather than sleeping a fixed
+    // time. "Reading…" is the state the rooms are in until the fetch
+    // answers, and asserting on a timer would be a race with the network.
+    let goalsRoom = "";
+    for (let i = 0; i < 25; i += 1) {
+      goalsRoom = await caveText();
+      if (goalsRoom && !goalsRoom.includes("Reading…")) break;
+      await sleep(300);
+    }
+
+    check(
+      "the cave stops saying it is reading",
+      goalsRoom.length > 0 && !goalsRoom.includes("Reading…"),
+      goalsRoom.slice(0, 120),
+    );
+
+    /**
+     * The check this section exists for.
+     *
+     * The cave used to render the empty state its state started in and never
+     * send the request at all: a database with three goals and an open task
+     * showed "Nothing on the board yet" in the rooms while the front page
+     * listed them. Nothing in this repo could see it — the API was right, the
+     * types were right, and the component rendered exactly what it was given.
+     */
+    const activeGoals = caveExpected.goals.filter((entry) => entry.goal.status === "active");
+    if (activeGoals.length > 0) {
+      const missing = activeGoals.filter((entry) => !goalsRoom.includes(entry.goal.title));
+      check(
+        `the board shows the ${activeGoals.length} goal${activeGoals.length === 1 ? "" : "s"} in the database`,
+        missing.length === 0,
+        missing.length
+          ? `not rendered: ${missing.map((entry) => entry.goal.title).join(", ")}`
+          : "the room was empty",
+      );
+      check("and does not claim the board is empty", !goalsRoom.includes("Nothing on the board yet"));
+      check(
+        "the summary counts them",
+        goalsRoom.includes(`${activeGoals.length} in play`),
+        goalsRoom.split("\n").slice(0, 3).join(" / "),
+      );
+    } else {
+      console.log("  info  no active goals in this database; the empty state is asserted instead");
+      check("an empty board says so", goalsRoom.includes("Nothing on the board yet"));
+    }
+
+    const shotCaveGoals = await screenshot(devtools, sessionId, "07-cave-goals");
+    console.log(`  info  ${shotCaveGoals}`);
+
+    const tasksRoom = await enterRoom("Tasks");
+    const openTasks = caveExpected.tasks.filter((task) => task.status === "open");
+    if (openTasks.length > 0) {
+      const missing = openTasks.filter((task) => !tasksRoom.includes(task.title));
+      check(
+        `the task room shows the ${openTasks.length} open task${openTasks.length === 1 ? "" : "s"} in the database`,
+        missing.length === 0,
+        missing.length ? `not rendered: ${missing.map((task) => task.title).join(", ")}` : "the room was empty",
+      );
+      check("and does not claim nothing is open", !tasksRoom.includes("Nothing open."));
+    } else {
+      check("an empty list says so", tasksRoom.includes("Nothing open."));
+    }
+    const shotCaveTasks = await screenshot(devtools, sessionId, "08-cave-tasks");
+    console.log(`  info  ${shotCaveTasks}`);
+
+    const memories = caveExpected.memories?.items ?? [];
+    const memoryRoom = await enterRoom("Memory");
+    if (memories.length > 0) {
+      check(
+        `the memory room shows the ${memories.length} memories in the database`,
+        memoryRoom.includes(memories[0].title),
+        memoryRoom.slice(0, 160),
+      );
+      check("and does not claim nothing is remembered", !memoryRoom.includes("Nothing remembered yet"));
+    } else {
+      check("an empty memory room says so", memoryRoom.includes("Nothing remembered yet"));
+    }
+
+    const trashRoom = await enterRoom("Trash");
+    if (caveExpected.trash.length > 0) {
+      const missing = caveExpected.trash.filter((item) => !trashRoom.includes(item.title));
+      check(
+        `the bin lists the ${caveExpected.trash.length} item${caveExpected.trash.length === 1 ? "" : "s"} in the database`,
+        missing.length === 0,
+        missing.length ? `not rendered: ${missing.map((item) => item.title).join(", ")}` : "the bin was empty",
+      );
+    } else {
+      check("an empty bin says so", trashRoom.includes("Empty."));
+    }
+
+    /* ---- a change made behind the cave's back must appear on re-open ---- */
+    const probeTitle = `browser-probe-${Date.now().toString(36)}`;
+    const probe = await fetch(`${base}/api/cave`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ op: "task.create", title: probeTitle }),
+    }).then((r) => r.json());
+    const probeId = probe.task?.id;
+    check("a task can be added behind the cave's back", Boolean(probeId));
+
+    // Close, re-open, and the list has to have moved on. This is the other
+    // half of the contract: reading once per mount would leave the board
+    // wrong for the rest of the session, which is the same bug wearing a
+    // different hat.
+    const caveClosed = await evaluate(
+      devtools,
+      sessionId,
+      `(async () => {
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        await new Promise((r) => setTimeout(r, 400));
+        return Boolean(document.querySelector('[role="dialog"]'));
+      })()`,
+      true,
+    );
+    check("Escape closes the cave", caveClosed === false);
+
+    await openCave();
+    // The cave opens on the goal board, and the probe is a task, so the room
+    // has to be entered before the assertion means anything. Asking the goals
+    // room whether it can see a task fails whatever the app does.
+    await enterRoom("Tasks");
+    let reopened = "";
+    for (let i = 0; i < 25; i += 1) {
+      reopened = await caveText();
+      if (reopened.includes(probeTitle)) break;
+      await sleep(300);
+    }
+    check("re-opening re-reads the board", reopened.includes(probeTitle), reopened.slice(0, 160));
+
+    // Leave the database as it was found: the probe is deleted (which puts
+    // it in the bin) and then purged from the bin, so it does not sit in the
+    // user's trash for a week.
+    await fetch(`${base}/api/cave`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ op: "task.delete", id: probeId }),
+    });
+    await fetch(`${base}/api/cave`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ op: "trash.purge", kind: "task", id: probeId }),
+    });
+    const after = await fetch(`${base}/api/cave`, { cache: "no-store" }).then((r) => r.json());
+    check(
+      "the probe is gone from the list and from the bin",
+      !after.tasks.some((task) => task.id === probeId) && !after.trash.some((item) => item.id === probeId),
+    );
+
+    /* ---- a deleted goal is one row, and deleting it takes its steps ---- */
+    //
+    // The bin used to list a goal's milestones as rows of their own. That
+    // looked honest and produced two actions that could only end badly:
+    // restoring a step put back a milestone whose goal was still in the bin,
+    // and deleting the goal for good left its steps behind. The row is now the
+    // goal, it says how many steps came with it, and purging it purges them —
+    // through the room's own button, because that is the path a person takes.
+    const goalTitle = `browser-goal-${Date.now().toString(36)}`;
+    await fetch(`${base}/api/cave`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        op: "goal.create",
+        title: goalTitle,
+        horizon: "short",
+        milestones: ["first step", "second step"],
+      }),
+    });
+    const createdBoard = await fetch(`${base}/api/cave`, { cache: "no-store" }).then((r) => r.json());
+    const probeGoal = createdBoard.goals.find((entry) => entry.goal.title === goalTitle);
+    const probeStepIds = (probeGoal?.goal.milestones ?? []).map((step) => step.id);
+    check("a goal with two steps can be created behind the cave's back", probeStepIds.length === 2);
+
+    await fetch(`${base}/api/cave`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ op: "goal.delete", id: probeGoal?.goal.id }),
+    });
+
+    // Close and re-open: the cave reads on open, which is also how the bin it
+    // is about to show gets its data.
+    await evaluate(
+      devtools,
+      sessionId,
+      `(async () => {
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        await new Promise((r) => setTimeout(r, 400));
+      })()`,
+      true,
+    );
+    await openCave();
+    const binRoom = await enterRoom("Trash");
+    check(
+      "the bin shows the deleted goal under its own name",
+      binRoom.includes(goalTitle),
+      binRoom.slice(0, 200),
+    );
+    check(
+      "and says how many steps came with it",
+      /2 steps with it/.test(binRoom),
+      binRoom.split("\n").find((line) => line.includes("removed")) ?? binRoom.slice(0, 200),
+    );
+    check(
+      "the steps are not listed as rows of their own",
+      !binRoom.includes("first step") && !binRoom.includes("second step"),
+    );
+    const shotCaveBin = await screenshot(devtools, sessionId, "09-cave-bin");
+    console.log(`  info  ${shotCaveBin}`);
+
+    const purgedFromRoom = await evaluate(
+      devtools,
+      sessionId,
+      `(async () => {
+        const panel = document.querySelector('[role="dialog"]');
+        const row = [...panel.querySelectorAll('li')].find((li) => li.innerText.includes(${JSON.stringify(goalTitle)}));
+        if (!row) return { found: false };
+        const button = [...row.querySelectorAll('button')].find((b) => /delete for good/i.test(b.textContent || ''));
+        if (!button) return { found: true, button: false };
+        button.click();
+        await new Promise((r) => setTimeout(r, 900));
+        return { found: true, button: true, text: panel.innerText };
+      })()`,
+      true,
+    );
+    check("the row offers Delete for good", purgedFromRoom?.button === true, JSON.stringify(purgedFromRoom?.found));
+    check(
+      "clicking it takes the goal out of the bin",
+      !purgedFromRoom?.text?.includes(goalTitle) && /Empty\./.test(purgedFromRoom?.text ?? ""),
+      (purgedFromRoom?.text ?? "").slice(0, 160),
+    );
+
+    const stepRestore = await fetch(`${base}/api/cave`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ op: "trash.restore", kind: "milestone", id: probeStepIds[0] }),
+    });
+    check(
+      "and its steps are gone for good, not merely hidden",
+      stepRestore.status === 404,
+      `trash.restore answered ${stepRestore.status}`,
+    );
+
+    const finalBoard = await fetch(`${base}/api/cave`, { cache: "no-store" }).then((r) => r.json());
+    check(
+      "the database is left as it was found",
+      !finalBoard.goals.some((entry) => entry.goal.title === goalTitle) &&
+        !finalBoard.trash.some((item) => item.title === goalTitle),
+      JSON.stringify(finalBoard.trash.map((item) => `${item.kind}:${item.title}`)),
+    );
+
+    await evaluate(
+      devtools,
+      sessionId,
+      `(async () => {
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        await new Promise((r) => setTimeout(r, 300));
+      })()`,
+      true,
+    );
 
     /* ---------------- phone ---------------- */
     section("Phone · 390×844");
