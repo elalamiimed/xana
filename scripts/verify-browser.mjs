@@ -668,6 +668,11 @@ async function main() {
         await new Promise((r) => setTimeout(r, 250));
         save();
         await new Promise((r) => setTimeout(r, 900));
+        // Left in view for the screenshot that follows, and the tab the walk
+        // above finished on is restored by the caller, so the About shot is
+        // still a picture of About.
+        input.scrollIntoView({ block: 'center' });
+        await new Promise((r) => setTimeout(r, 300));
         return { found: true, shown, clicked, written, restored: await stored() };
       })()`,
       true,
@@ -680,6 +685,23 @@ async function main() {
       pauseRound?.restored === pauseBefore,
       `${pauseRound?.restored} vs ${pauseBefore}`,
     );
+
+    const shotVoice = await screenshot(devtools, sessionId, "14-voice-room-to-breathe");
+    console.log(`  info  ${shotVoice}`);
+
+    // Back to the tab the walk ended on, so `04-desktop-about` stays a picture
+    // of the About panel rather than of whatever this section last touched.
+    await evaluate(
+      devtools,
+      sessionId,
+      `(() => {
+        const tab = [...document.querySelectorAll('[role="tab"]')].find((t) => t.textContent.trim() === 'About');
+        tab?.click();
+        return true;
+      })()`,
+      true,
+    );
+    await sleep(400);
 
     const shotAbout = await screenshot(devtools, sessionId, "04-desktop-about");
     console.log(`  info  ${shotAbout}`);
