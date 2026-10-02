@@ -274,15 +274,16 @@ have.
 | `PUT` | `/api/plugins/settings` | Pre-rename alias of `/api/connections/settings` |
 | `GET` | `/api/plugins/google/callback` | Pre-rename alias of the callback, kept for a redirect URI already registered |
 | `GET` | `/xana/plugins` | Pre-rename alias of `/xana/connections`; `POST` answers there too |
-| `GET` | `/xana/cave` | My cave: the goal board with computed pace, and a page of memories |
-| `POST` | `/xana/cave` | `{ op, ...args }` — one of the fixed goal, step, task, event, memory, note and bin operations |
+| `GET` | `/xana/cave` | My cave: the goal board with computed pace, a page of memories, and the last seven days of health |
+| `POST` | `/xana/cave` | `{ op, ...args }` — one of the fixed goal, step, task, event, memory, note, log and bin operations |
 
 ---
 
 ## My cave
 
-A room for the two things worth editing directly rather than talking about: your
-goals, and what she remembers. Reachable from **My cave** in the header.
+A room for the things worth editing directly rather than talking about: your
+goals, your tasks, your schedule, what you did today, and what she remembers.
+Reachable from **My cave** in the header.
 
 **The goal board.** Three columns — working on, set aside, done — and you drag
 cards between them. Each card holds its own editing: title, the reason it
@@ -365,6 +366,51 @@ the model separately, because they mean different things: a match is relevant to
 the question, a pin is background that may be entirely unrelated. Merging them
 into one list invites an answer about your budget that mentions where the spare
 key is.
+
+**The log room.** A week of days, and the six readings the briefing reasons from:
+sleep, energy, mood, meals, steps and exercise. Reachable as **Log** beside the
+other rooms, and writing on the tap rather than behind a save button.
+
+It exists because health was the one part of the app with **no door of its own**.
+Every field arrived from somewhere else — a phone posting to
+[`/api/health/ingest`](#phone-health), or an Apple Health export in a watched
+folder — so the briefing could read *sleep unrecorded*, *0 of 3 meals*, *mood
+unrecorded* over a database that held all four columns perfectly well, and a
+person with neither a shortcut nor an export could look at that panel for a year
+without ever filling one of its numbers. Meals and energy could at least be
+spoken. Sleep could not be entered anywhere at all.
+
+- **One row a day, and yesterday is editable.** The strip is the last seven days,
+  each slot a button. A reading written at 00:10 belongs to the day it is now,
+  which is what the export path does too: the sample dated today carries the hours
+  that ended this morning, and the forecast reads it as last night.
+- **The numbers are committed when the field is done with**, on blur or Enter —
+  not on every keystroke, because `7.` is a keystroke on the way to `7.5` and a
+  field that saved what it saw would write a reading nobody typed.
+- **Everything can be taken back.** Each row has a quiet ✕ that removes that one
+  reading. A day with nothing left in it stops existing, rather than staying as an
+  empty row that the briefing counts as logged and the memory ingest treats as a
+  day of data.
+- **Meals are named, not just counted.** Breakfast, lunch, dinner and snacks are
+  chips, so *1 of 3* can say which one is missing. The count in the database
+  follows the names once a name exists: saying "just ate" twice is a guess at two
+  meals, and ticking lunch afterwards replaces the guess with a fact.
+- **A snack is noted and is not one of the three.** It is in the row and out of
+  the count, which is the distinction the briefing has always made.
+
+The same readings can be said out loud, which is how they were meant to arrive:
+**"I slept 7 hours"**, **"record sleep 6.5"**, **"went to bed at 11pm and woke at
+7"** (eight hours, derived), **"mood: bright"**, **"not in a great mood"**,
+**"8,000 steps"**, **"45 minutes of yoga"**. "log sleep" with no number answers
+*"How many hours?"* instead of shrugging, which was the single most frustrating
+reply in the app: the person was asking for a field the database has, and the
+answer implied the feature did not exist.
+
+One thing this deliberately did **not** change: a feeling-word with no noun —
+"I'm feeling low", "feeling sharp" — is still an **energy** reading of 1–5, as it
+has been since the energy work, and `verify:energy` asserts it. What was broken is
+that "my mood is good today" wrote *energy 4* and left the mood column empty
+forever. Naming mood is what routes a sentence to the mood column.
 
 ### Removing things, by asking
 
@@ -753,6 +799,7 @@ npm run verify:web           # with the server running: the real HTTP surface
 npm run verify:browser       # with the server running: a real browser
 npm run verify:crypto        # the keyless quote path, on a stubbed CoinGecko
 npm run verify:health-bridge # the phone door: token, statuses, day upserts
+npm run verify:health-log    # the log: the sentences, the guards, clearing a reading
 npm run verify:durability    # local saving: folding, reopening, backup, a kill
 npm run verify:stt           # the optional Python transcriber: routes, honesty, wake port
 ```
@@ -851,8 +898,17 @@ node scripts/probe-status-rows.mjs 40         # is the one-row-per-connection ru
   against the source: the read is triggered by an effect that depends on `open`,
   and every room routes its empty sentence through `emptyNote`, which says
   "Reading…" until an answer lands. `npm run verify:browser` does the real thing —
-  it clicks **My cave**, compares every room against `/api/cave`, and re-opens the
-  cave after changing the database behind it.
+  it clicks **My cave**, compares every room against `/api/cave`, types a sleep
+  reading into the **Log** room and taps a mood and a meal chip to prove they
+  reach the database, clears them again, and re-opens the cave after changing the
+  database behind it.
+- `npm run verify:health-log` — the log: the sentences that write a day and the
+  ones that must not (`add a task to walk for 30 minutes` is a task, not
+  exercise; `how did I sleep?` is a question, not a report), the range and
+  column guards on the operations, a phone's partial day merging rather than
+  replacing, a reading taken back leaving no row behind, and — the assertion the
+  whole feature is for — that the number written in the room moves the energy
+  forecast the briefing shows.
 - `npm run verify:transcriber` — that the app starts the Python service rather  than asking you to. The decision is a pure function of five facts and is driven
   across all 32 combinations, because every way it can be wrong is invisible from
   outside: starting a second copy of a service that is still loading its model,
@@ -989,9 +1045,19 @@ didn't follow that."
   A snapshot is three things: `xana.db` (copied through SQLite's Online Backup
   API, so it is consistent even while she is running), `settings.json` (your keys
   and grants, the half people forget), and a `BACKUP.json` recording the row
-  counts and how to restore. Restoring is copying both files back into `data/`
-  with her stopped. Do **not** back up by copying `xana.db` by hand while she is
-  running — that is the mistake the section above is about.
+  counts and how to restore. Do **not** back up by copying `xana.db` by hand
+  while she is running — that is the mistake the section above is about.
+
+  **Restoring: stop her, delete `data/xana.db-wal` and `data/xana.db-shm`, then
+  copy `xana.db` and `settings.json` back into `data/`.** The deletion is the
+  step that matters and the one that used to be missing. `-wal` is not scratch
+  that the next open throws away — it is a *log that SQLite replays over the file
+  it finds*, so a leftover log from the database you are replacing is applied on
+  top of the backup you just restored. The result opens cleanly, passes an
+  integrity check, and is a mixture of two moments: rows the backup never had,
+  and rows the backup deliberately does not contain, because the log still holds
+  the writes that came after it. Nothing warns you. A snapshot whose step 3 is
+  skipped is not a restore, it is a merge.
 - **The memory embedder is local and dependency-free** — a feature-hashing
   model over unigrams, bigrams and character trigrams, blended with lexical
   overlap, salience and recency. It is not a transformer, but for a single

@@ -854,7 +854,82 @@ different states, and the interface has to be able to tell them apart.**
 
 ---
 
+### 28. A field with no door is a field that does not exist
+
+The report, after being told the storage was there: *"Still cant log meals, record
+sleep... so much things lack inside the project."*
+
+It was right, and the code review that preceded it had been wrong in a specific
+way. `health_samples` has nine columns. Two of them — meals and energy — had a
+spoken intent. The other seven had an adapter, a device-token POST endpoint, a
+documented body shape, and a row in the connections panel. Any reading of the
+source said *sleep is supported*: the column exists, the parser maps five
+spellings of it, the forecast reads it first, the memory ingest averages it. What
+did not exist was **a way for a person to put a number in it**, and the briefing
+duly said "sleep unrecorded" forever over a database that could hold 7.4
+perfectly well. The check suite was green throughout — it tests the door for a
+phone, and there was no door for a human.
+
+What made the report the accurate one was measurement rather than reading. Driving
+the real intent engine over the sentences a person would actually say:
+
+  - `log lunch`, `I had breakfast`, `just ate` → written. Three phrasings, no
+    button, and the count was all that survived: `logMeal` threw the meal's name
+    away, because "a food diary would be a different product".
+  - `add a meal, dinner`, `ate 2 meals today`, `remove the lunch I logged` → "I
+    didn't follow that."
+  - **every** sleep sentence (`I slept 7 hours`, `record sleep 6.5`, `log sleep`,
+    `went to bed at 11pm and woke at 7`, `slept badly`) → "I didn't follow that.",
+    because there was no `log_sleep` intent at all.
+  - `my mood is good today` → written to **energy 4**, because the energy word
+    list owns "good". So the mood column stayed empty and the stored quantity was
+    not the one reported.
+
+Three lessons, in order of how much they cost:
+
+  - **An input the interface displays is a promise the interface can keep.** The
+    briefing's own row showed `sleep unrecorded · 0 of 3 meals · mood unrecorded ·
+    fitness unrecorded` as four pieces of text with no control anywhere on the
+    page. If a screen prints the state of a field, either it can be edited there
+    or the sentence is a complaint about the app.
+  - **"Supported" means reachable by the person, not representable in the
+    schema.** The test to run is not "is there a column" but "what does someone
+    do at 11pm to fill it", and the honest answer for sleep was: buy an iPhone,
+    write a Shortcut, expose the app to the LAN.
+  - **Adding a second meaning to a shared word needs an owner for the sentence.**
+    "low", "flat", "good" and "great" are simultaneously energy levels and mood
+    labels. Renaming what they mean would have rewritten behaviour that already
+    worked and was asserted by `verify:energy`, so the split is: a sentence that
+    *names* mood ("my mood is good", "mood: bright", "I'm anxious") writes mood,
+    and a bare feeling-word stays the energy reading it has always been. The
+    regression is the thing to protect, not the new feature.
+
+The general shape: **storage is not access.** A capability is a column, a parser,
+a route, a control and a sentence — and a missing one of those five is invisible
+from every angle except the user's.
+
+---
+
 ## Traps that have already bitten
+
+- **A `-wal` is replayed, not discarded — so "copy the backup back" is not a
+  restore.** The instructions said to stop the app, copy `xana.db` and
+  `settings.json` into `data/`, start her, and that "the `-wal` and `-shm` files
+  are rebuilt on open". They are not rebuilt: SQLite *replays* a leftover log over
+  whatever database it finds. Put a backup beside the log of the database being
+  replaced and the result is a database that opens cleanly, passes
+  `integrity_check`, and contains **both generations** — rows the backup never
+  had, plus rows it deliberately does not. Verified on a copy: restoring with the
+  stale `-wal` present showed the union; deleting `-wal` and `-shm` first showed
+  the backup alone. The fix is a deletion step in the instructions, in
+  `BACKUP.json`, and in the script's closing line, because a restore that is
+  ninety per cent right is the worst possible outcome: it looks finished.
+- **The durable file is not the truth while the app runs.** The same property has
+  a second edge: `xana.db` alone can be *behind* the log by hundreds of rows, so
+  any file-level copy of `data/` (Explorer, a versioned folder, a sync client)
+  captures a state that is both missing recent writes and resurrecting deleted
+  rows. `npm run backup` exists precisely because SQLite's Online Backup API takes
+  a consistent instant; nothing else in the folder does.
 
 - **`Get-Content | Set-Content` destroys the file's UTF-8.** One `-replace`
   round-trip through the shell turned every em dash in a new file into `\xe2\x80?`
