@@ -114,6 +114,28 @@ export interface Note {
 
 export type MoodLabel = "low" | "flat" | "good" | "bright";
 
+/** The three meals the briefing counts, plus the one it deliberately does not. */
+export type MealName = "breakfast" | "lunch" | "dinner" | "snack";
+
+/**
+ * One reading inside a day, nameable from outside the store.
+ *
+ * Clearing is a verb of its own — `upsertHealth` reads a missing field as "leave
+ * this alone", which is right for a phone sending one number and useless for a
+ * person who tapped the wrong one — so the set of things that *can* be cleared
+ * has to be a closed list rather than a string a caller makes up.
+ */
+export type HealthField =
+  | "sleepHours"
+  | "sleepQuality"
+  | "steps"
+  | "activeMinutes"
+  | "restingHeartRate"
+  | "mood"
+  | "energy"
+  | "meals"
+  | "mealsLogged";
+
 export interface HealthSample {
   date: string;
   sleepHours?: number;
@@ -128,6 +150,18 @@ export interface HealthSample {
   energyAt?: string;
   /** Meals logged today, 0-3. Counted, because the briefing asks about them. */
   meals?: number;
+  /**
+   * Which meals, by name.
+   *
+   * `meals` was the whole record until the Log room existed: a count, on purpose,
+   * because the only question the briefing asks is whether they have eaten. The
+   * day a person can also tap "lunch" in a room, a count is no longer enough —
+   * "2 of 3" cannot tell you whether breakfast is the one still missing. The
+   * count stays the number the briefing and the patterns read; this is the detail
+   * behind it, and an empty array is a deliberate "nothing logged", which is not
+   * the same as `undefined`, meaning "this door did not touch meals".
+   */
+  mealsLogged?: MealName[];
   source: string;
 }
 
@@ -679,7 +713,31 @@ export type ActionIntent =
    * A meal eaten. Counted, not described — the briefing asks whether they have
    * eaten today, and "2 of 3" answers that without a food diary.
    */
-  | { type: "log_meal"; meal?: "breakfast" | "lunch" | "dinner" | "snack" }
+  | { type: "log_meal"; meal?: MealName }
+  /**
+   * The rest of a day's health, said out loud.
+   *
+   * This is the intent that did not exist. Meals and energy had one each, and
+   * sleep — the single input the energy forecast is built on — had no way in at
+   * all except a phone posting to `/api/health/ingest` or an Apple Health export
+   * sitting in a folder. So a person with neither could read "sleep unrecorded"
+   * on the briefing forever, and every sentence they tried ("I slept 7 hours",
+   * "record sleep 6.5") came back as "I didn't follow that."
+   *
+   * One intent rather than five, because they are one act — reporting part of a
+   * day — and the executor's reply is built from whichever fields arrived. Every
+   * field is optional and a body with none of them is refused rather than
+   * silently writing an empty day, which would erase a real reading by being
+   * misunderstood.
+   */
+  | {
+      type: "log_health";
+      sleepHours?: number;
+      sleepQuality?: number;
+      mood?: MoodLabel;
+      steps?: number;
+      activeMinutes?: number;
+    }
   | { type: "remember"; kind: MemoryKind; title: string; content: string; entities?: string[]; tags?: string[] }
   | { type: "start_focus"; label: string; minutes: number }
   | { type: "protect_block"; title: string; start: string; end: string; reason?: string }

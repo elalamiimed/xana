@@ -22,6 +22,7 @@ import type {
   Card,
   LifeState,
   Message,
+  MoodLabel,
 } from "../core/types";
 import { executeAction } from "../actions/executor";
 import { parseDuration, parseWhen, stripWhen } from "../core/nlp";
@@ -65,6 +66,8 @@ const CAPABILITY_GROUPS = [
     label: "track",
     items: [
       "log meditation",
+      "I slept 7 hours",
+      "mood: bright",
       "set a goal to run a half marathon by June",
       "how are my goals doing",
       "reflect on this week",
@@ -568,6 +571,222 @@ const handleDayQuestion: Handler = ({ text, lifeState }) => {
   return { text: localBriefingReply(lifeState), cards: [briefingCard(lifeState)] };
 };
 
+/* ------------------------------------------------------------------ */
+/* Health, said out loud                                              */
+/* ------------------------------------------------------------------ */
+
+/**
+ * A sentence that is asking for something to be captured, not reporting a fact.
+ *
+ * This handler sees the whole sentence, and it runs before `handleTask`, so
+ * "add a task to walk for 30 minutes" would otherwise log half an hour of
+ * exercise and create no task — the words are all there and the intent is the
+ * opposite. A leading request verb, or the noun of a thing to capture, means
+ * this is not a health report.
+ */
+const CAPTURE_REQUEST = /^\s*(?:please\s+|can you\s+|could you\s+|xana,?\s+)*(?:remind me|add|create|schedule|set up|new|put)\b|\b(?:a|an|the|new)\s+(?:task|to-?do|reminder|event|meeting|note)\b/i;
+
+/** A question rather than a report: "how did I sleep?", "did I sleep well?" */
+const QUESTION = /^\s*(?:how|what|when|why|did|do|does|is|are|was|were|am)\b[^.!?]*\?\s*$/i;
+
+const MOOD_NAMED = /\bmood\b/i;
+
+/**
+ * Mood words, in the order they are checked.
+ *
+ * Only consulted when the sentence names mood, or when the word could not be a
+ * level of energy. That limitation is deliberate: "I'm feeling low" has always
+ * been an energy reading of 2 in this app — a level, which is what the energy
+ * curve is about — and "feeling sharp" is asserted as 4 by `check-energy.ts`.
+ * Changing what those words mean would rewrite a behaviour people rely on to
+ * fix a sentence that already worked. What was broken is "my mood is good",
+ * which wrote energy 4 and left the mood column empty forever; naming mood is
+ * what routes it here.
+ */
+const MOOD_WORDS: Array<[RegExp, MoodLabel]> = [
+  [/\b(?:low|down|blue|rough|awful|terrible|miserable|anxious|anxiety|stressed|overwhelmed|irritable|sad)\b/i, "low"],
+  [/\b(?:flat|meh|blah|so-so|okay|ok|neutral|middling)\b/i, "flat"],
+  [/\b(?:good|decent|solid|positive|content|pleased|satisfied|fine)\b/i, "good"],
+  [/\b(?:bright|great|excellent|wonderful|amazing|fantastic|happy|cheerful|joyful|excited)\b/i, "bright"],
+];
+
+/**
+ * Words that are a mood and cannot be an energy level.
+ *
+ * The two vocabularies overlap almost everywhere ("good", "low", "flat"), which
+ * is why the split above needs the word "mood" to decide. These are the few that
+ * only ever describe a mood, so "I'm anxious" and "feeling really happy" land
+ * without needing the noun.
+ */
+const MOOD_ONLY: Array<[RegExp, MoodLabel]> = [
+  [/\b(?:anxious|anxiety|stressed|overwhelmed|miserable|irritable|sad)\b/i, "low"],
+  [/\b(?:happy|cheerful|joyful|excited|wonderful|fantastic|amazing)\b/i, "bright"],
+  [/\b(?:content|pleased|satisfied)\b/i, "good"],
+];
+
+const SLEPT_BADLY = /\bslept\s+(?:badly|poorly|terribly|awfully|restlessly)\b|\bbad night\b|\brough night\b|\bbarely slept\b|\bnot much sleep\b/i;
+const SLEPT_WELL = /\bslept\s+(?:well|great|deeply|soundly|like a log)\b|\bgood night'?s sleep\b|\bslept through\b/i;
+
+/** Any movement worth minutes, named the way people name it. */
+const ACTIVITY = /\b(?:workout|work out|worked out|exercise[ds]?|training|trained|gym|ran|run|jogged|jog|walked|walk|cycled|cycling|swam|swim|yoga|pilates|cardio|weights|lifted)\b/i;
+
+/**
+ * Hours of sleep, from the three ways people say it.
+ *
+ *   1. the number first — "7 hours of sleep", "6.5h sleep"
+ *   2. the verb first — "I slept 7", "slept 6.5 hours last night"
+ *   3. a request — "record sleep 7", "log 8 hours sleep"
+ *
+ * And before any of those, a range: "went to bed at 11pm and woke at 7" is how
+ * a person usually answers this question, and it is the one form where the
+ * number is not stated anywhere. It is derived and then bounded hard, because a
+ * misread clock is a fourteen-hour night: anything outside two to sixteen hours
+ * is treated as a parse that went wrong rather than sleep.
+ */
+function sleepHoursIn(text: string): number | undefined {
+  const range = /\b(?:went to bed|got to bed|to bed|in bed|bedtime|asleep|fell asleep)\b[^.!?]{0,12}?\b(?:at\s*)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b[^.!?]{0,26}?\b(?:woke|wake|woken|got up|up|rose)\b[^.!?]{0,10}?\b(?:at\s*)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/i.exec(
+    text,
+  );
+  if (range) {
+    const bedHour = clockHour(range[1], range[3], "evening");
+    const wakeHour = clockHour(range[4], range[6], "morning");
+    if (bedHour !== undefined && wakeHour !== undefined) {
+      const bed = bedHour + Number(range[2] ?? 0) / 60;
+      const wake = wakeHour + Number(range[5] ?? 0) / 60;
+      const hours = (wake - bed + 24) % 24;
+      if (hours >= 2 && hours <= 16) return Math.round(hours * 10) / 10;
+    }
+  }
+
+  const direct =
+    /\b(\d{1,2}(?:[.,]\d)?)\s*(?:h\b|hrs?\b|hours?\b)[^.!?]{0,24}\b(?:sleep|slept|asleep|shut[- ]?eye)\b/i.exec(text) ??
+    /\b(?:slept|sleep|asleep)\b[^0-9]{0,16}?(\d{1,2}(?:[.,]\d)?)/i.exec(text) ??
+    /\b(?:log|logged|record|recorded|track|tracked|note)\b[^0-9]{0,16}?\b(?:sleep|slept)\b[^0-9]{0,8}?(\d{1,2}(?:[.,]\d)?)/i.exec(text);
+  if (!direct) return undefined;
+
+  const hours = Number(direct[1].replace(",", "."));
+  return Number.isFinite(hours) && hours >= 0 && hours <= 24 ? hours : undefined;
+}
+
+/**
+ * A clock time from a sentence, as a 24-hour number.
+ *
+ * `fallback` decides the half of the day when no am/pm was said, and it is not a
+ * guess: a bedtime before noon is the previous evening ("in bed at 11"), and a
+ * waking time after noon is the morning ("up at 7"). Both are the reading that
+ * makes the sentence mean what it means.
+ */
+function clockHour(hour: string, meridiem: string | undefined, fallback: "evening" | "morning"): number | undefined {
+  const n = Number(hour);
+  if (!Number.isFinite(n) || n < 0 || n > 24) return undefined;
+  const pm = meridiem?.toLowerCase() === "pm";
+  const am = meridiem?.toLowerCase() === "am";
+  if (n === 12) return am ? 0 : 12;
+  if (pm) return n + 12;
+  if (am) return n;
+  if (fallback === "evening") return n < 12 ? n + 12 : n;
+  return n;
+}
+
+function moodIn(text: string): MoodLabel | undefined {
+  // "not in a great mood" is its own reading, and every word list below would
+  // call it a good one. The filler is allowed for because that is how the
+  // sentence is actually built: nobody says "not great mood".
+  if (
+    /\b(?:not|isn'?t|aren'?t|wasn'?t|never|don'?t feel)\b(?:\s+\w+){0,3}\s+(?:great|good|well|okay|ok|fine|happy|amazing|bright)\b/i.test(
+      text,
+    )
+  ) {
+    return "low";
+  }
+  if (MOOD_NAMED.test(text)) {
+    for (const [pattern, label] of MOOD_WORDS) {
+      if (pattern.test(text)) return label;
+    }
+    // "how's my mood" is a question, and a question has no reading in it.
+    return undefined;
+  }
+  for (const [pattern, label] of MOOD_ONLY) {
+    if (pattern.test(text)) return label;
+  }
+  return undefined;
+}
+
+function stepsIn(text: string): number | undefined {
+  const match =
+    /\b(\d[\d,]{2,6})\s*(?:steps|footsteps)\b/i.exec(text) ??
+    /\bsteps\b[^0-9]{0,10}(\d[\d,]{2,6})\b/i.exec(text);
+  if (!match) return undefined;
+  const steps = Number(match[1].replace(/,/g, ""));
+  return Number.isFinite(steps) ? steps : undefined;
+}
+
+function activeMinutesIn(text: string): number | undefined {
+  if (!ACTIVITY.test(text)) return undefined;
+  const minutes = /\b(\d{1,3})\s*(?:min\b|mins\b|minutes?\b)/i.exec(text);
+  if (minutes) {
+    const value = Number(minutes[1]);
+    return Number.isFinite(value) && value > 0 && value <= 1_440 ? value : undefined;
+  }
+  const hours = /\b(\d{1,2}(?:[.,]\d)?)\s*(?:h\b|hrs?\b|hours?\b)/i.exec(text);
+  if (!hours) return undefined;
+  const value = Number(hours[1].replace(",", ".")) * 60;
+  return Number.isFinite(value) && value > 0 && value <= 1_440 ? Math.round(value) : undefined;
+}
+
+/**
+ * "I slept 7 hours", "mood: bright", "8,000 steps", "45 minutes of yoga".
+ *
+ * WHY THIS EXISTS AT ALL
+ *
+ * Every other health field in this app arrives from somewhere else — a phone
+ * posting to `/api/health/ingest`, an Apple Health export in a folder — and
+ * sleep, mood, steps and active minutes had no way in from the app at all. The
+ * briefing showed "sleep unrecorded" over a database that could hold the number
+ * perfectly well, and the only answer to "record sleep 7" was "I didn't follow
+ * that." A personal assistant that cannot be told what happened last night is
+ * missing the input its own energy forecast is built on.
+ */
+const handleLogHealth: Handler = ({ text, sessionId }) => {
+  if (CAPTURE_REQUEST.test(text)) return undefined;
+  if (QUESTION.test(text)) return undefined;
+
+  const sleepHours = sleepHoursIn(text);
+  const sleepQuality = SLEPT_BADLY.test(text) ? 2 : SLEPT_WELL.test(text) ? 4 : undefined;
+  const mood = moodIn(text);
+  const steps = stepsIn(text);
+  const activeMinutes = activeMinutesIn(text);
+
+  if (
+    sleepHours === undefined &&
+    sleepQuality === undefined &&
+    mood === undefined &&
+    steps === undefined &&
+    activeMinutes === undefined
+  ) {
+    /**
+     * "log sleep" with no number gets an answer that says what a number looks
+     * like, rather than "I didn't follow that."
+     *
+     * This was the most frustrating failure in the app, because the person was
+     * doing the right thing — asking for a field the database has — and the
+     * reply implied the feature did not exist. It does; it needed the hours.
+     */
+    if (/\b(?:log|logged|record|recorded|track|note|add)\b[^.!?]{0,14}\b(?:sleep|slept|nap)\b/i.test(text)) {
+      return {
+        text: "How many hours? Say “I slept 7 hours” — or give me a mood, steps, or minutes of exercise.",
+      };
+    }
+    return undefined;
+  }
+
+  const outcome = executeAction(
+    { type: "log_health", sleepHours, sleepQuality, mood, steps, activeMinutes },
+    { sessionId },
+  );
+  return { text: "", outcome };
+};
+
 /**
  * Is the user *reporting* their energy, or *asking* about it?
  *
@@ -704,9 +923,9 @@ const handleHelp: Handler = ({ text }) => {
  * Order matters, and it is the only place in this file where it does.
  *
  * `handleComplete` matches "finished X" and resolves X against the task list,
- * so it has to run *after* the two handlers that read a fixed vocabulary —
- * energy and meals. "finished dinner" is a meal, and "finished" on its own
- * looks exactly like completing a task. Everything else here keys off nouns
+ * so it has to run *after* the handlers that read a fixed vocabulary —
+ * health, energy and meals. "finished dinner" is a meal, and "finished" on its
+ * own looks exactly like completing a task. Everything else here keys off nouns
  * that do not collide, so the rest of the order is free.
  */
 const HANDLERS: Handler[] = [
@@ -722,6 +941,7 @@ const HANDLERS: Handler[] = [
   handleGoal,
   handleHabit,
   handleReflect,
+  handleLogHealth,
   handleLogEnergy,
   handleLogMeal,
   handleComplete,

@@ -10,7 +10,7 @@
  * and never "I have successfully created…".
  */
 
-import type { ActionIntent, ActionOutcome, Task } from "../core/types";
+import type { ActionIntent, ActionOutcome, MealName, Task } from "../core/types";
 import { TRASH_DAYS } from "../core/types";
 import { getStore, type XanaStore } from "../core/store";
 import { invalidateContext } from "../context/gateway";
@@ -75,6 +75,9 @@ export function executeAction(intent: ActionIntent, opts: ExecuteOptions = {}): 
 
       case "log_meal":
         return finish(logMeal(intent.meal, store));
+
+      case "log_health":
+        return finish(logHealth(intent, store));
 
       case "remember":
         return finish(remember(intent, store, opts.sessionId));
@@ -428,29 +431,131 @@ const MEAL_ORDER = ["breakfast", "lunch", "dinner"] as const;
  * telling you things.
  */
 function logMeal(
-  meal: "breakfast" | "lunch" | "dinner" | "snack" | undefined,
+  meal: MealName | undefined,
   store: XanaStore,
 ): ActionOutcome {
   const today = toDateKey();
   const existing = store.healthSamples(1)[0];
-  const current = existing?.date === today ? (existing.meals ?? 0) : 0;
+  const onToday = existing?.date === today ? existing : undefined;
+  const current = onToday?.meals ?? 0;
+  const logged = onToday?.mealsLogged ?? [];
+
+  const named = meal && meal !== "snack" ? meal : undefined;
+  /**
+   * Said twice is not eaten twice.
+   *
+   * The count was the whole record before the Log room, so "log lunch" twice
+   * silently read "2 of 3" — a day that claimed two meals on the strength of one
+   * sentence repeated. Now that the names are kept, a second mention of a meal
+   * already logged is answered rather than counted. The bare forms ("just ate")
+   * still count, because they name nothing to compare against, and refusing them
+   * would mean a person who says "I ate" twice gets told they did not.
+   */
+  if (named && logged.includes(named)) {
+    return {
+      ok: true,
+      effect: "meal.logged",
+      message: `${named[0].toUpperCase()}${named.slice(1)} is already logged today.`,
+      refresh: ["context"],
+    };
+  }
 
   // A snack is worth noting and is not one of the three.
   const counted = meal === "snack" ? current : Math.min(MEAL_ORDER.length, current + 1);
-  store.upsertHealth({ date: today, meals: counted, source: "user" });
+  const names = meal ? [...logged, meal] : logged;
+  store.upsertHealth({ date: today, meals: counted, mealsLogged: names, source: "user" });
 
   const remaining = MEAL_ORDER.length - counted;
-  const named = meal ? `${meal[0].toUpperCase()}${meal.slice(1)}` : "Logged";
+  const label = meal ? `${meal[0].toUpperCase()}${meal.slice(1)}` : "Logged";
 
   return {
     ok: true,
     effect: "meal.logged",
     message:
       remaining <= 0
-        ? `${named}. That is all three today.`
-        : `${named} — ${counted} of ${MEAL_ORDER.length}.`,
+        ? `${label}. That is all three today.`
+        : `${label} — ${counted} of ${MEAL_ORDER.length}.`,
     refresh: ["context"],
   };
+}
+
+/**
+ * A day's health, reported in words.
+ *
+ * The whole point of this intent is that it is the only way into the health
+ * table for someone without a phone shortcut and an Apple Health export. It
+ * writes to today, like the export does: "I slept 7 hours" said at nine in the
+ * morning is last night's sleep, and the energy forecast reads it as exactly
+ * that — the sample dated today, carrying the hours that ended this morning.
+ *
+ * The reply repeats the numbers back rather than saying "logged", because this
+ * is a number the user cannot see anywhere else at the moment they say it: the
+ * briefing that shows sleep only exists while there is no conversation, so a
+ * sentence that answered "Logged." would be voicing a value nobody can check.
+ */
+function logHealth(
+  intent: Extract<ActionIntent, { type: "log_health" }>,
+  store: XanaStore,
+): ActionOutcome {
+  const today = toDateKey();
+  const sample = {
+    date: today,
+    sleepHours: cleanReading(intent.sleepHours, 0, 24),
+    sleepQuality: cleanReading(intent.sleepQuality, 0, 5),
+    mood: intent.mood,
+    steps: cleanReading(intent.steps, 0, 200_000),
+    activeMinutes: cleanReading(intent.activeMinutes, 0, 1_440),
+    source: "user" as const,
+  };
+
+  const said: string[] = [];
+  if (sample.sleepHours !== undefined) said.push(`${round1(sample.sleepHours)}h of sleep`);
+  if (sample.sleepQuality !== undefined) said.push(`sleep quality ${round1(sample.sleepQuality)}/5`);
+  if (sample.mood) said.push(`mood ${sample.mood}`);
+  if (sample.steps !== undefined) said.push(`${Math.round(sample.steps).toLocaleString()} steps`);
+  if (sample.activeMinutes !== undefined) said.push(`${Math.round(sample.activeMinutes)} active minutes`);
+
+  // Nothing usable: refuse rather than write an empty day over a real one. The
+  // upsert cannot blank a field, so the danger is not erasure — it is a day
+  // appearing in the record, and in the averages, with nothing in it.
+  if (said.length === 0) {
+    return {
+      ok: false,
+      effect: "health.missing",
+      message: "I heard a health note but no reading in it. Hours of sleep, a mood, steps, or minutes of exercise.",
+      refresh: [],
+    };
+  }
+
+  store.upsertHealth(sample);
+  return {
+    ok: true,
+    effect: "health.logged",
+    message: `${said.join(", ")} — noted for today.`,
+    // No "health" member in the refresh list: the health tables feed the
+    // assembled life state, which `invalidateContext()` has already dropped by
+    // the time this returns — the list exists for the *remote* mirrors.
+    refresh: ["context"],
+  };
+}
+
+/**
+ * A reading from speech, kept inside what a body can actually do.
+ *
+ * `Number.isFinite` rejects NaN and Infinity; the range check rejects the
+ * plausible-sounding nonsense a misheard sentence produces ("I slept 11 hours"
+ * is fine, "I slept 711" is a parse that went wrong), and anything outside the
+ * range is dropped rather than clamped. Clamping would write a number nobody
+ * said and then show it back to them as their own reading.
+ */
+function cleanReading(value: number | undefined, min: number, max: number): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  if (value < min || value > max) return undefined;
+  return value;
+}
+
+function round1(value: number): string {
+  return Number.isInteger(value) ? String(value) : value.toFixed(1);
 }
 
 /**

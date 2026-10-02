@@ -17,6 +17,7 @@ import {
   isCaveOperation,
   listCaveEvents,
   listCaveGoals,
+  listCaveHealth,
   listCaveTasks,
   listMemories,
   listTrash,
@@ -37,6 +38,9 @@ export async function GET(request: Request) {
       tasks: listCaveTasks(),
       events: listCaveEvents(),
       memories,
+      // A week of readings, and small by construction: one row per day, and the
+      // room cannot show more than seven of them.
+      health: listCaveHealth(),
       // The bin is small, bounded by a week and purged as it is read, so it
       // travels with the snapshot rather than needing a second request the
       // first time someone opens the room.
@@ -88,6 +92,9 @@ export async function POST(request: Request) {
           "memory.pin",
           "memory.forget",
           "note.delete",
+          "health.log",
+          "health.clear",
+          "health.meal",
           "trash.list",
           "trash.restore",
           "trash.purge",

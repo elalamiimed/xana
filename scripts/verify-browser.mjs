@@ -758,7 +758,7 @@ async function main() {
     check("the header button opens My cave", caveOpened?.open === true, JSON.stringify(caveOpened));
     check(
       "every room is in the strip",
-      ["Goals", "Tasks", "Schedule", "Memory", "Trash"].every((room) =>
+      ["Goals", "Tasks", "Schedule", "Log", "Memory", "Trash"].every((room) =>
         (caveOpened?.rooms ?? []).includes(room),
       ),
       JSON.stringify(caveOpened?.rooms),
@@ -988,10 +988,20 @@ async function main() {
       true,
     );
     check("the row offers Delete for good", purgedFromRoom?.button === true, JSON.stringify(purgedFromRoom?.found));
+    /**
+     * The goal is gone from the bin — and that is the whole assertion.
+     *
+     * It used to also require the room to say "Empty.", which is a fact about
+     * *this database*, not about the button: on a machine whose bin holds
+     * ninety-odd rows from an earlier clearing, a working delete was reported as
+     * a failure because the room was not empty afterwards. A check that only
+     * passes on a fresh install is a check that will one day be deleted for
+     * being wrong, and this one was wrong first.
+     */
     check(
       "clicking it takes the goal out of the bin",
-      !purgedFromRoom?.text?.includes(goalTitle) && /Empty\./.test(purgedFromRoom?.text ?? ""),
-      (purgedFromRoom?.text ?? "").slice(0, 160),
+      purgedFromRoom?.text?.includes("TRASH") === true && !purgedFromRoom.text.includes(goalTitle),
+      purgedFromRoom?.text?.includes(goalTitle) ? "the row is still listed" : "the room stopped rendering",
     );
 
     const stepRestore = await fetch(`${base}/api/cave`, {
@@ -1011,6 +1021,182 @@ async function main() {
       !finalBoard.goals.some((entry) => entry.goal.title === goalTitle) &&
         !finalBoard.trash.some((item) => item.title === goalTitle),
       JSON.stringify(finalBoard.trash.map((item) => `${item.kind}:${item.title}`)),
+    );
+
+    await evaluate(
+      devtools,
+      sessionId,
+      `(async () => {
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        await new Promise((r) => setTimeout(r, 300));
+      })()`,
+      true,
+    );
+
+    /* ---- the log: writing a day through the room's own controls ---- */
+    //
+    // The room exists because health had no door: sleep, mood, meals and the
+    // rest could only arrive from a phone or an export folder, so the briefing
+    // read "sleep unrecorded" over a database that could hold the number. This
+    // drives the controls the way a person does — type into the field, tap the
+    // chip — and then reads the database back to see whether anything moved.
+    //
+    // It is careful about the live database it runs against: whatever today's
+    // row held before is read first and put back at the end, whether that means
+    // restoring a value or clearing one this check created.
+    const healthBefore =
+      caveExpected.health?.days?.find((day) => day.date === caveExpected.health.today) ?? null;
+
+    await openCave();
+    const logRoom = await enterRoom("Log");
+    check("the Log room opens", /Log/.test(logRoom) && logRoom.length > 0, logRoom.slice(0, 80));
+    check(
+      "it shows a week of slots",
+      (logRoom.match(/\b(?:mon|tue|wed|thu|fri|sat|sun|today)\b/gi) ?? []).length >= 7,
+      logRoom.slice(0, 200),
+    );
+    check(
+      "and the five readings the briefing complains about",
+      // Case-insensitively: the row labels are uppercased by CSS, and
+      // `innerText` reports what is rendered, not what is written.
+      ["sleep", "energy", "mood", "meals", "steps", "exercise"].every((label) =>
+        new RegExp(label, "i").test(logRoom),
+      ),
+      logRoom.slice(0, 200),
+    );
+
+    /** Type a number into a row and blur it, which is what commits it. */
+    const typeInto = (ariaLabel, value) =>
+      evaluate(
+        devtools,
+        sessionId,
+        `(async () => {
+          const panel = document.querySelector('[role="dialog"]');
+          const input = panel?.querySelector('input[aria-label=${JSON.stringify(ariaLabel)}]');
+          if (!input) return { found: false };
+          // Focus first: the commit is on blur, and blur() on an element that
+          // was never focused fires nothing at all — which is exactly how this
+          // check reported a working field as broken the first time it ran.
+          input.focus();
+          const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+          setter.call(input, ${JSON.stringify(String(value))});
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          await new Promise((r) => setTimeout(r, 150));
+          input.blur();
+          await new Promise((r) => setTimeout(r, 1500));
+          return { found: true, text: panel.innerText };
+        })()`,
+        true,
+      );
+
+    /** Tap a chip inside one of the room's labelled groups. */
+    const tapChip = (group, label) =>
+      evaluate(
+        devtools,
+        sessionId,
+        `(async () => {
+          const panel = document.querySelector('[role="dialog"]');
+          const box = panel?.querySelector('[role="group"][aria-label=${JSON.stringify(group)}]');
+          const button = box && [...box.querySelectorAll('button')].find((b) => (b.textContent || '').trim() === ${JSON.stringify(label)});
+          if (!button) return { found: false };
+          button.click();
+          await new Promise((r) => setTimeout(r, 1200));
+          return { found: true, pressed: button.getAttribute('aria-pressed'), text: panel.innerText };
+        })()`,
+        true,
+      );
+
+    const readHealth = () =>
+      fetch(`${base}/api/cave`, { cache: "no-store" })
+        .then((r) => r.json())
+        .then((payload) => payload.health?.days?.find((day) => day.date === payload.health.today) ?? null);
+
+    const typed = await typeInto("Sleep in hours", 7.25);
+    check("the sleep field is in the room", typed?.found === true);
+    const afterSleep = await readHealth();
+    check("typing 7.25 hours writes the day", afterSleep?.sleepHours === 7.3, `stored ${afterSleep?.sleepHours}`);
+    check("and the week strip shows it", /7\.3h/.test(typed?.text ?? ""), (typed?.text ?? "").slice(0, 200));
+
+    const moodTap = await tapChip("Mood", "good");
+    check("the mood chips are in the room", moodTap?.found === true);
+    check("tapping good marks it pressed", moodTap?.pressed === "true", String(moodTap?.pressed));
+    check("and writes the mood", (await readHealth())?.mood === "good");
+
+    const mealTap = await tapChip("Meals", "lunch");
+    check("the meal chips are in the room", mealTap?.found === true);
+    const afterMeal = await readHealth();
+    check(
+      "tapping lunch logs one meal, by name",
+      afterMeal?.meals === 1 && afterMeal?.mealsLogged?.join() === "lunch",
+      JSON.stringify(afterMeal),
+    );
+    check("and the room says which one", /1 of 3/.test(mealTap?.text ?? ""), (mealTap?.text ?? "").slice(0, 200));
+
+    const shotLog = await screenshot(devtools, sessionId, "13-cave-log");
+    console.log(`  info  ${shotLog}`);
+
+    /** Click the "×" beside a reading. */
+    const clearField = (what) =>
+      evaluate(
+        devtools,
+        sessionId,
+        `(async () => {
+          const panel = document.querySelector('[role="dialog"]');
+          const button = panel?.querySelector('button[aria-label=${JSON.stringify(`Clear ${what}`)}]');
+          if (!button) return { found: false };
+          button.click();
+          await new Promise((r) => setTimeout(r, 1200));
+          return { found: true, text: panel.innerText };
+        })()`,
+        true,
+      );
+
+    check("the sleep row offers a way to take it back", (await clearField("sleep for this day"))?.found === true);
+    check("clearing removes just that reading", (await readHealth())?.sleepHours === undefined);
+    check("the mood survives it", (await readHealth())?.mood === "good");
+
+    // Put the day back exactly as it was found. Clearing everything this check
+    // wrote is the difference between a check and an incident.
+    await fetch(`${base}/api/cave`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ op: "health.clear", field: "mood" }),
+    });
+    await fetch(`${base}/api/cave`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ op: "health.clear", field: "meals" }),
+    });
+    if (healthBefore) {
+      for (const [field, value] of [
+        ["sleepHours", healthBefore.sleepHours],
+        ["mood", healthBefore.mood],
+        ["steps", healthBefore.steps],
+        ["activeMinutes", healthBefore.activeMinutes],
+        ["energy", healthBefore.energy],
+      ]) {
+        if (value === undefined) continue;
+        await fetch(`${base}/api/cave`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ op: "health.log", field, value }),
+        });
+      }
+      if (healthBefore.mealsLogged?.length) {
+        for (const meal of healthBefore.mealsLogged) {
+          await fetch(`${base}/api/cave`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ op: "health.meal", meal, on: true }),
+          });
+        }
+      }
+    }
+    const healthAfter = await readHealth();
+    check(
+      "today's row is left as it was found",
+      JSON.stringify(healthAfter) === JSON.stringify(healthBefore),
+      `before ${JSON.stringify(healthBefore)} after ${JSON.stringify(healthAfter)}`,
     );
 
     await evaluate(

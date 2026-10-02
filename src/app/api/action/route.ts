@@ -26,6 +26,7 @@ const VALID_TYPES = new Set<ActionIntent["type"]>([
   "log_habit",
   "log_energy",
   "log_meal",
+  "log_health",
   "remember",
   "start_focus",
   "protect_block",

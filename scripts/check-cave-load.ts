@@ -80,6 +80,7 @@ const ROOMS = [
   "CaveBoard.tsx",
   "TasksRoom.tsx",
   "ScheduleRoom.tsx",
+  "HealthRoom.tsx",
   "MemoryRoom.tsx",
   "TrashRoom.tsx",
 ] as const;

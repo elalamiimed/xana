@@ -19,6 +19,17 @@
    with an unchanged asset hash, so a size that refuses to move is evidence
    of a cache rather than of a directive that had no effect.
 
+   The second face of that cache is the one that matters day to day: **a
+   source file that did not exist when the stylesheet was last built is not
+   scanned until the stylesheet itself changes.** Adding a new component
+   with new arbitrary values — `h-[58px]`, `max-w-[104px]` — produced a room
+   that rendered with the utilities it happened to share with older
+   components and silently without the rest, while `npm run check:bundle`
+   and every other check stayed green because the *markup* was correct. The
+   probe that finds it is one line: fetch the served CSS and look for the
+   value you just wrote. Touching this file rebuilds it; a restart also
+   does.
+
    `scripts/verify-web.mjs` asserts that no stock-palette utility from the
    clone reaches the served CSS, so this cannot regress silently. */
 @import "tailwindcss" source(none);

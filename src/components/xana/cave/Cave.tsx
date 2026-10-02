@@ -7,6 +7,7 @@ import { compareGoals, toneFor } from "@/lib/cave/types";
 
 import CaveBoard from "./CaveBoard";
 import { READING } from "./empty-note";
+import HealthRoom from "./HealthRoom";
 import MemoryRoom from "./MemoryRoom";
 import ScheduleRoom from "./ScheduleRoom";
 import TasksRoom from "./TasksRoom";
@@ -30,7 +31,7 @@ import { useCave } from "./useCave";
  * actually type: a trailing date, and a leading horizon word.
  */
 
-export type CaveRoom = "goals" | "tasks" | "schedule" | "memory" | "trash";
+export type CaveRoom = "goals" | "tasks" | "schedule" | "log" | "memory" | "trash";
 
 export interface CaveProps {
   open: boolean;
@@ -43,6 +44,7 @@ const ROOMS: readonly { id: CaveRoom; label: string }[] = [
   { id: "goals", label: "Goals" },
   { id: "tasks", label: "Tasks" },
   { id: "schedule", label: "Schedule" },
+  { id: "log", label: "Log" },
   { id: "memory", label: "Memory" },
   { id: "trash", label: "Trash" },
 ] as const;
@@ -153,6 +155,27 @@ export default function Cave({ open, onClose, initialRoom = "goals" }: CaveProps
         : `${today} thing${today === 1 ? "" : "s"} today.`;
     }
 
+    if (room === "log") {
+      const log = controller.health;
+      if (!log) return "Nothing logged yet.";
+      const day = log.days.find((sample) => sample.date === log.today);
+      if (!day) return "Nothing logged today.";
+      /**
+       * The day in one line, in the order the briefing reads it: sleep, mood,
+       * meals. Only what is there — a missing reading is not reported as a zero,
+       * which is the mistake this whole room exists to undo.
+       */
+      const parts: string[] = [];
+      if (day.sleepHours !== undefined) {
+        parts.push(`${Number.isInteger(day.sleepHours) ? day.sleepHours : day.sleepHours.toFixed(1)}h sleep`);
+      }
+      if (day.mood) parts.push(`${day.mood} mood`);
+      if (day.energy !== undefined) parts.push(`energy ${day.energy}/5`);
+      if (day.meals !== undefined) parts.push(`${day.meals} of 3 meals`);
+      if (day.steps !== undefined) parts.push(`${day.steps.toLocaleString()} steps`);
+      return parts.length > 0 ? `${parts.join(" · ")}.` : "Today is empty so far.";
+    }
+
     const active = controller.goals.filter((g) => g.goal.status === "active");
     const openTasks = controller.tasks.length;
 
@@ -178,7 +201,7 @@ export default function Cave({ open, onClose, initialRoom = "goals" }: CaveProps
       parts.push(`nearest deadline ${soonest.progress.daysRemaining} days out`);
     }
     return `${parts.join(", ")}.`;
-  }, [controller.goals, controller.tasks, controller.events, controller.trash, controller.loading, room]);
+  }, [controller.goals, controller.tasks, controller.events, controller.trash, controller.health, controller.loading, room]);
 
   const addGoal = useCallback(async () => {
     const raw = quickAdd.trim();
@@ -324,6 +347,8 @@ export default function Cave({ open, onClose, initialRoom = "goals" }: CaveProps
           <TasksRoom controller={controller} />
         ) : room === "schedule" ? (
           <ScheduleRoom controller={controller} />
+        ) : room === "log" ? (
+          <HealthRoom controller={controller} />
         ) : room === "trash" ? (
           <TrashRoom controller={controller} />
         ) : (
@@ -341,7 +366,9 @@ export default function Cave({ open, onClose, initialRoom = "goals" }: CaveProps
                 ? "Open tasks only — completing one removes it from this list. Everything here is stored locally in data/xana.db."
                 : room === "schedule"
                   ? "Today and tomorrow. What Next, Focus and Open read from."
-                  : room === "trash"
+                  : room === "log"
+                    ? "The last seven days, one row per day. Sleep, mood, meals and the rest are what the energy forecast, the sleep debt and the patterns reason from — and a reading taken back leaves nothing behind."
+                    : room === "trash"
                     ? `Removed things wait here for ${TRASH_DAYS} days. Restoring puts one back exactly as it was; nothing is gone until the deadline, or until you say so.`
                     : "Removed memories are not recalled again — and they are in the trash for a week if you change your mind.")}
         </p>

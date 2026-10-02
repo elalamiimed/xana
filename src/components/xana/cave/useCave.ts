@@ -17,7 +17,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import type { CaveGoal, CaveSnapshot, MemoryPage, TrashItem } from "@/lib/cave/types";
+import type { CaveGoal, CaveHealth, CaveSnapshot, MemoryPage, TrashItem } from "@/lib/cave/types";
 import type { CalendarEvent, Task } from "@/lib/core/types";
 
 export class CaveRequestError extends Error {
@@ -58,6 +58,15 @@ export interface CaveController {
   memories: MemoryPage | null;
   /** What is in the bin, as the server last reported it. */
   trash: TrashItem[];
+  /**
+   * The log, or null before the first read lands.
+   *
+   * Null is not "nothing recorded" — the room has to draw a week of empty slots
+   * for a person who has never logged anything, and it must not do that while
+   * the first read is still in flight, or an empty log and an unread one look
+   * identical.
+   */
+  health: CaveHealth | null;
   /** False until the first read settles. */
   loading: boolean;
   /** Ids with an operation in flight, so a card can show its own spinner. */
@@ -82,6 +91,7 @@ export function useCave(open: boolean): CaveController {
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [memories, setMemories] = useState<MemoryPage | null>(null);
   const [trash, setTrash] = useState<TrashItem[]>([]);
+  const [health, setHealth] = useState<CaveHealth | null>(null);
   const [loading, setLoading] = useState(false);
   const [pending, setPending] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
@@ -92,6 +102,7 @@ export function useCave(open: boolean): CaveController {
     if (Array.isArray(payload.tasks)) setTasks(payload.tasks);
     if (Array.isArray(payload.events)) setEvents(payload.events);
     if (Array.isArray(payload.trash)) setTrash(payload.trash);
+    if (payload.health) setHealth(payload.health);
     const page = payload.memories as MemoryPage | undefined;
     if (page && Array.isArray(page.items)) {
       // An operation returns only the records it touched, so the fuller
@@ -170,6 +181,7 @@ export function useCave(open: boolean): CaveController {
     events,
     memories,
     trash,
+    health,
     loading: loading && !loaded.current,
     pending,
     error,

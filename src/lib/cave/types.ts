@@ -12,13 +12,28 @@ import type {
   Goal,
   GoalProgress,
   GoalStatus,
+  HealthSample,
+  MealName,
   MemoryKind,
   MemoryRecord,
+  MoodLabel,
   Task,
   TrashItem,
 } from "@/lib/core/types";
 
-export type { CalendarEvent, Goal, GoalProgress, GoalStatus, MemoryKind, MemoryRecord, Task, TrashItem };
+export type {
+  CalendarEvent,
+  Goal,
+  GoalProgress,
+  GoalStatus,
+  HealthSample,
+  MealName,
+  MemoryKind,
+  MemoryRecord,
+  MoodLabel,
+  Task,
+  TrashItem,
+};
 
 /** A goal with its pace already computed by the server. */
 export interface CaveGoal {
@@ -45,6 +60,8 @@ export interface CaveSnapshot {
   /** Today and tomorrow, which is the window the briefing asks about. */
   events: CalendarEvent[];
   memories: MemoryPage;
+  /** The log: a week of health readings, oldest first. */
+  health: CaveHealth;
   /**
    * The bin.
    *
@@ -53,6 +70,74 @@ export interface CaveSnapshot {
    * showed a stale list would be showing something that no longer exists.
    */
   trash: TrashItem[];
+}
+
+/**
+ * The log, as the room draws it.
+ *
+ * `days` holds only the days that have a row; the room lays out its own week and
+ * leaves the gaps empty, the same way the briefing drops a row with nothing to
+ * say rather than printing a line about the absence of one.
+ */
+export interface CaveHealth {
+  today: string;
+  days: HealthSample[];
+  windowDays: number;
+}
+
+/**
+ * The days the log shows, oldest first.
+ *
+ * Built from the date key rather than by subtracting milliseconds, because a
+ * "week" that crosses a daylight-saving change is 167 or 169 hours long and a
+ * strip built by arithmetic would show the same day twice or skip one. The
+ * constructor at local midnight is the only thing that cannot get that wrong.
+ */
+export function healthDays(today: string, windowDays: number): string[] {
+  const [year, month, day] = today.split("-").map(Number);
+  const out: string[] = [];
+  for (let back = windowDays - 1; back >= 0; back -= 1) {
+    const date = new Date(year, month - 1, day - back);
+    out.push(
+      `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`,
+    );
+  }
+  return out;
+}
+
+/** "Mon" for a past day, "today" for the one the room opens on. */
+export function daySlotLabel(date: string, today: string): string {
+  if (date === today) return "today";
+  return new Date(`${date}T12:00:00`).toLocaleDateString(undefined, { weekday: "short" }).toLowerCase();
+}
+
+/** "3" — the day of the month, so a week is readable at a glance. */
+export function dayOfMonth(date: string): string {
+  return String(Number(date.slice(8, 10)));
+}
+
+/** The whole of a day, in one word, for the strip's title attribute. */
+export function dayFullLabel(date: string): string {
+  return new Date(`${date}T12:00:00`).toLocaleDateString(undefined, {
+    weekday: "long",
+    month: "short",
+    day: "numeric",
+  });
+}
+
+/** True when a day has anything recorded at all. */
+export function dayHasReading(day: HealthSample | undefined): boolean {
+  if (!day) return false;
+  return (
+    day.sleepHours !== undefined ||
+    day.sleepQuality !== undefined ||
+    day.mood !== undefined ||
+    day.energy !== undefined ||
+    day.steps !== undefined ||
+    day.activeMinutes !== undefined ||
+    day.restingHeartRate !== undefined ||
+    (day.meals ?? 0) > 0
+  );
 }
 
 /** The columns of the board, in order. */

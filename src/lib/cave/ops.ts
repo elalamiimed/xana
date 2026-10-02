@@ -20,10 +20,23 @@
  */
 
 import { getStore } from "@/lib/core/store";
-import { nowIso, toDateKey } from "@/lib/core/time";
+import { addDays, nowIso, toDateKey } from "@/lib/core/time";
 import { computeGoalProgress, goalsWithProgress } from "@/lib/derived/goals";
 import { invalidateContext } from "@/lib/context/gateway";
-import type { CalendarEvent, Goal, GoalStatus, Milestone, Task, TaskStatus, TrashItem, TrashKind } from "@/lib/core/types";
+import type {
+  CalendarEvent,
+  Goal,
+  GoalStatus,
+  HealthField,
+  HealthSample,
+  MealName,
+  Milestone,
+  MoodLabel,
+  Task,
+  TaskStatus,
+  TrashItem,
+  TrashKind,
+} from "@/lib/core/types";
 import { TRASH_KINDS } from "@/lib/core/types";
 
 /* ------------------------------------------------------------------ */
@@ -58,6 +71,10 @@ export interface CavePayload {
   removed?: string;
   /** The bin, whenever an operation touched it. */
   trash?: TrashItem[];
+  /** The log, whenever an operation touched health. */
+  health?: CaveHealth;
+  /** The single day an operation wrote, as it now stands. */
+  day?: HealthSample;
 }
 
 export class CaveError extends Error {
@@ -785,6 +802,200 @@ export function deleteEvent(input: Record<string, unknown>): CavePayload {
 }
 
 /* ------------------------------------------------------------------ */
+/* The log                                                            */
+/* ------------------------------------------------------------------ */
+
+/**
+ * How many days the Log room shows, today included.
+ *
+ * A week because that is the unit the rest of the app already reasons in —
+ * `sleepAvgHours` is a seven-day average, `sleepDebtHours` a seven-day debt, and
+ * the pattern detectors pair last night with today. A room with a different
+ * window would give the user a way to see a number the forecast does not use.
+ */
+export const HEALTH_WINDOW_DAYS = 7;
+
+/**
+ * The log, as the room needs it.
+ *
+ * Only the days that exist. The seven slots are the room's business: an empty
+ * day is a day with no row, and inventing a row to fill the gap — with a
+ * `source` that says "none" — would put a fabricated reading into the same
+ * payload the briefing reads, on the day someone later writes a query against
+ * it. The client knows today and the window length, which is everything it
+ * needs to draw a week with holes in it.
+ */
+export interface CaveHealth {
+  /** Today, in the key the table uses. The newest day that can be written. */
+  today: string;
+  /** Days with something in them, oldest first. */
+  days: HealthSample[];
+  windowDays: number;
+}
+
+export function listCaveHealth(now: Date = new Date()): CaveHealth {
+  const today = toDateKey(now);
+  const oldest = toDateKey(addDays(now, -(HEALTH_WINDOW_DAYS - 1)));
+  // Sixty days read and then filtered, rather than a query with a range: the
+  // table is keyed by day and every health read in the app is "the newest N",
+  // so a range scan would be a second query shape for one screen.
+  const days = getStore()
+    .healthSamples(60)
+    .filter((sample) => sample.date >= oldest && sample.date <= today);
+  return { today, days, windowDays: HEALTH_WINDOW_DAYS };
+}
+
+/** What a person can write by hand, and what counts as a real value. */
+const WRITABLE: Record<string, { min: number; max: number; integer?: boolean }> = {
+  sleepHours: { min: 0, max: 24 },
+  sleepQuality: { min: 1, max: 5 },
+  energy: { min: 1, max: 5, integer: true },
+  steps: { min: 0, max: 200_000, integer: true },
+  activeMinutes: { min: 0, max: 1_440, integer: true },
+  restingHeartRate: { min: 20, max: 250, integer: true },
+};
+
+const MOODS: readonly MoodLabel[] = ["low", "flat", "good", "bright"] as const;
+const MEALS: readonly MealName[] = ["breakfast", "lunch", "dinner", "snack"] as const;
+
+/**
+ * Which day an operation writes.
+ *
+ * Absent means today, which is what every tap in the room does. A `YYYY-MM-DD`
+ * is accepted so a day already gone can be corrected — the room shows a week and
+ * a week includes yesterday, and a log you can only write to for the next eight
+ * hours is not a log. The future is refused: a reading for a day that has not
+ * happened is not a correction, it is a typo, and it would sit in the strip
+ * looking like a fact about tomorrow.
+ */
+function cleanDay(value: unknown): string {
+  const today = toDateKey();
+  if (value === undefined || value === null || value === "") return today;
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value.trim())) {
+    throw new CaveError("That is not a date I can write to.");
+  }
+  const day = value.trim();
+  if (day > today) throw new CaveError("That day has not happened yet.");
+  return day;
+}
+
+function healthPayload(date: string): CavePayload {
+  return { health: listCaveHealth(), day: getStore().healthSamples(60).find((s) => s.date === date) };
+}
+
+/**
+ * One reading, written by hand.
+ *
+ * The first door into the health table that a person can open without a phone, a
+ * shortcut, or an export folder. Everything above it in this file writes a
+ * record somebody asked for; this writes the numbers the rest of the app reasons
+ * from — sleep above all, which the energy forecast is built on and which,
+ * before this, could only arrive from another device.
+ */
+export function logHealthOp(input: Record<string, unknown>): CavePayload {
+  const date = cleanDay(input.date);
+  const field = typeof input.field === "string" ? input.field : "";
+
+  if (field === "mood") {
+    const mood = input.value;
+    if (typeof mood !== "string" || !MOODS.includes(mood as MoodLabel)) {
+      throw new CaveError("Mood is one of: low, flat, good, bright.");
+    }
+    getStore().upsertHealth({ date, mood: mood as MoodLabel, source: "user" });
+    invalidateContext();
+    return healthPayload(date);
+  }
+
+  const bounds = WRITABLE[field];
+  if (!bounds) {
+    // `meals` is here on purpose: it is a count derived from which meals were
+    // logged, and a caller setting it directly would write a number with no
+    // record behind it — the exact shape this room exists to replace.
+    throw new CaveError("That is not a reading I can record here.");
+  }
+
+  const raw = typeof input.value === "number" ? input.value : Number(input.value);
+  if (!Number.isFinite(raw) || raw < bounds.min || raw > bounds.max) {
+    throw new CaveError(`That reading is outside what a day can hold (${bounds.min}–${bounds.max}).`);
+  }
+  const value = bounds.integer ? Math.round(raw) : Math.round(raw * 10) / 10;
+
+  getStore().upsertHealth({ date, [field]: value, source: "user" } as HealthSample);
+  invalidateContext();
+  return healthPayload(date);
+}
+
+/**
+ * Take one reading back out.
+ *
+ * The verb the health table never had. Every other kind in the app can be
+ * removed and recovered; a health number could only be overwritten, so a tap on
+ * the wrong day was permanent — and `upsertHealth` cannot express "nothing",
+ * because a missing field there means "leave this alone".
+ */
+export function clearHealthOp(input: Record<string, unknown>): CavePayload {
+  const date = cleanDay(input.date);
+  const field = typeof input.field === "string" ? input.field : "";
+  const store = getStore();
+
+  if (field === "meals") {
+    // Both halves, because they are one fact: the count and the names behind
+    // it. Clearing one would leave the other claiming something.
+    store.clearHealthField(date, "meals");
+    store.clearHealthField(date, "mealsLogged");
+  } else if (field === "mealsLogged") {
+    store.clearHealthField(date, "mealsLogged");
+  } else if (!(field in WRITABLE) && field !== "mood") {
+    throw new CaveError("That is not a reading I can clear.");
+  } else {
+    store.clearHealthField(date, field as HealthField);
+  }
+
+  invalidateContext();
+  return healthPayload(date);
+}
+
+/**
+ * A meal, ticked or unticked.
+ *
+ * The room's four chips are the record here, and the count follows them: once a
+ * name is written, the names are what happened that day and `meals` is their
+ * length. An unnamed count from the chat ("just ate" twice) is a guess, and a
+ * guess is exactly what a room with three chips replaces — so ticking lunch on
+ * such a day says one meal is logged, not three.
+ *
+ * Unticking the last one returns the day to unrecorded rather than leaving a row
+ * that says "0 of 3 meals": nothing eaten all day and nothing logged look the
+ * same on the briefing, and only one of them is a fact.
+ */
+export function logMealOp(input: Record<string, unknown>): CavePayload {
+  const date = cleanDay(input.date);
+  const meal = input.meal;
+  if (typeof meal !== "string" || !MEALS.includes(meal as MealName)) {
+    throw new CaveError("A meal is one of: breakfast, lunch, dinner, snack.");
+  }
+  const name = meal as MealName;
+  const store = getStore();
+
+  const existing = store.healthSamples(60).find((sample) => sample.date === date);
+  const logged = existing?.mealsLogged ?? [];
+  const wanted = input.on === false ? false : !logged.includes(name);
+  const names = wanted ? [...logged, name] : logged.filter((entry) => entry !== name);
+
+  if (names.length === 0) {
+    store.clearHealthField(date, "meals");
+    store.clearHealthField(date, "mealsLogged");
+  } else {
+    // A snack is noted and is not one of the three, exactly as in the executor.
+    const counted = Math.min(3, names.filter((entry) => entry !== "snack").length);
+    store.upsertHealth({ date, meals: counted, mealsLogged: names, source: "user" });
+  }
+
+  invalidateContext();
+  return healthPayload(date);
+}
+
+/* ------------------------------------------------------------------ */
 /* The trash                                                           */
 /* ------------------------------------------------------------------ */
 
@@ -882,6 +1093,9 @@ const OPERATIONS = {
   "memory.pin": pinMemory,
   "memory.forget": forgetMemory,
   "note.delete": deleteNote,
+  "health.log": logHealthOp,
+  "health.clear": clearHealthOp,
+  "health.meal": logMealOp,
   "trash.list": trashPayload,
   "trash.restore": restoreFromTrash,
   "trash.purge": purgeFromTrash,

@@ -20,7 +20,9 @@ import type {
   Goal,
   GoalProgress,
   Habit,
+  HealthField,
   HealthSample,
+  MealName,
   MemoryHit,
   MemoryKind,
   MemoryRecord,
@@ -291,6 +293,13 @@ export class XanaStore {
       // Meals logged today, 0-3. A count rather than a list: the briefing
       // asks whether they have eaten, not what.
       { table: "health_samples", column: "meals", definition: "INTEGER" },
+      // Which meals, by name. Added when the Log room arrived: a count could
+      // not say *which* of the three was still missing, and "log lunch" twice
+      // was indistinguishable from breakfast and lunch. The count stays the
+      // number the briefing and the patterns read; this is the detail under it,
+      // as a JSON array, where NULL means "this door did not touch meals" and
+      // "[]" means "nothing logged today" — a distinction the upsert needs.
+      { table: "health_samples", column: "meal_names", definition: "TEXT" },
     ];
 
     for (const { table, column, definition } of additions) {
@@ -1695,8 +1704,8 @@ export class XanaStore {
     const s: HealthSample = { ...sample, source: sample.source || "local" };
     this.db
       .prepare(
-        `INSERT INTO health_samples (day, sleep_hours, sleep_quality, steps, active_minutes, resting_heart_rate, mood, energy, energy_at, meals, source)
-         VALUES (@day, @sleepHours, @sleepQuality, @steps, @activeMinutes, @restingHeartRate, @mood, @energy, @energyAt, @meals, @source)
+        `INSERT INTO health_samples (day, sleep_hours, sleep_quality, steps, active_minutes, resting_heart_rate, mood, energy, energy_at, meals, meal_names, source)
+         VALUES (@day, @sleepHours, @sleepQuality, @steps, @activeMinutes, @restingHeartRate, @mood, @energy, @energyAt, @meals, @mealNames, @source)
          ON CONFLICT(day) DO UPDATE SET
            sleep_hours = COALESCE(excluded.sleep_hours, health_samples.sleep_hours),
            sleep_quality = COALESCE(excluded.sleep_quality, health_samples.sleep_quality),
@@ -1713,6 +1722,10 @@ export class XanaStore {
              ELSE excluded.energy_at
            END,
            meals = COALESCE(excluded.meals, health_samples.meals),
+           -- NULL means "did not mention meals", and an empty array is a real
+           -- answer — the same COALESCE, which is why the caller passes an empty
+           -- JSON array to clear rather than leaving the field out.
+           meal_names = COALESCE(excluded.meal_names, health_samples.meal_names),
            source = excluded.source`,
       )
       .run({
@@ -1726,9 +1739,44 @@ export class XanaStore {
         energy: s.energy ?? null,
         energyAt: s.energyAt ?? null,
         meals: s.meals ?? null,
+        mealNames: s.mealsLogged === undefined ? null : JSON.stringify(s.mealsLogged),
         source: s.source,
       });
     return s;
+  }
+
+  /**
+   * Take one reading back out of a day.
+   *
+   * `upsertHealth` cannot express this: every column is written through
+   * `COALESCE(excluded, existing)`, so a missing field means "leave it alone" and
+   * there is no value that means "forget it" — which is correct for a phone
+   * posting one number, and wrong for a person who tapped the wrong day.
+   *
+   * A day whose last reading is removed stops existing. An empty row would
+   * otherwise be a day the briefing counts as logged, and `lastHealthSource`
+   * would report a phone's newest day as a row with nothing in it.
+   *
+   * Returns the day as it now stands, or undefined when it is gone entirely.
+   */
+  clearHealthField(day: string, field: HealthField): HealthSample | undefined {
+    const column = HEALTH_COLUMNS[field];
+    this.db.prepare(`UPDATE health_samples SET ${column} = NULL WHERE day = ?`).run(day);
+
+    const row = this.db.prepare(`SELECT * FROM health_samples WHERE day = ?`).get(day) as Row | undefined;
+    if (!row) return undefined;
+    // `day` is the key and `source` is provenance, not a reading.
+    const readings = Object.entries(row).filter(([key]) => key !== "day" && key !== "source");
+    if (readings.every(([, value]) => value === null)) {
+      this.db.prepare(`DELETE FROM health_samples WHERE day = ?`).run(day);
+      return undefined;
+    }
+    return rowToHealth(row);
+  }
+
+  /** Forget a whole day, readings and all. */
+  deleteHealth(day: string): boolean {
+    return this.db.prepare(`DELETE FROM health_samples WHERE day = ?`).run(day).changes > 0;
   }
 
   /** Most recent `limit` days, oldest first — the shape trend maths wants. */
@@ -1963,9 +2011,49 @@ function rowToHealth(row: Row): HealthSample {
     energy: row.energy == null ? undefined : Number(row.energy),
     energyAt: row.energy_at ? String(row.energy_at) : undefined,
     meals: row.meals == null ? undefined : Number(row.meals),
+    mealsLogged: parseMealNames(row.meal_names),
     source: row.source ? String(row.source) : "local",
   };
 }
+
+/**
+ * The names of the meals, out of the JSON column.
+ *
+ * A column that will not parse is treated as absent rather than fatal: this
+ * runs inside every health read, and one malformed cell must not take the
+ * briefing, the energy forecast and the patterns down with it.
+ */
+function parseMealNames(value: unknown): MealName[] | undefined {
+  if (typeof value !== "string" || value.length === 0) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (!Array.isArray(parsed)) return undefined;
+    return parsed.filter((name): name is MealName =>
+      name === "breakfast" || name === "lunch" || name === "dinner" || name === "snack",
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Which column each nameable reading lives in.
+ *
+ * A map rather than interpolation: the field arrives from an HTTP body, and a
+ * column name built from request data is how a "clear one number" endpoint
+ * becomes a way to write any column in the table.
+ */
+const HEALTH_COLUMNS: Record<HealthField, string> = {
+  sleepHours: "sleep_hours",
+  sleepQuality: "sleep_quality",
+  steps: "steps",
+  activeMinutes: "active_minutes",
+  restingHeartRate: "resting_heart_rate",
+  mood: "mood",
+  energy: "energy",
+  meals: "meals",
+  mealsLogged: "meal_names",
+};
 
 /* ------------------------------------------------------------------ */
 /* Derived values                                                      */

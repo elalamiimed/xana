@@ -51,6 +51,14 @@ const MARKERS = [
   // carries the new sentence is a bundle that carries the fix.
   ["cave: reading state", "Reading…"],
   ["cave: memory room empty state", "No memories yet."],
+  // The log. Its markers are the words a person sees when they open the room and
+  // find it empty, plus the sentence that says a number can be spoken — the two
+  // things that make the feature discoverable rather than merely present.
+  ["cave: log room", "not recorded"],
+  ["cave: log room speech hint", "Saying it works too"],
+  // Not "Last 7 days": the window comes from the server, so that sentence only
+  // exists once the component runs. A bundle marker has to be a literal.
+  ["cave: log window", "what the energy forecast is built on"],
 ];
 
 const html = await (await fetch(base)).text();
