@@ -22,6 +22,12 @@ import {
 } from "../speech";
 import { getSpeechRecognition } from "../speech";
 import { canRecord, transcriberHealth, type TranscriberHealth } from "../local-speech";
+import {
+  SPEECH_LANGUAGES,
+  browserLanguages,
+  languageLabel,
+  resolveSpeechLanguage,
+} from "../speech-language";
 import { DEFAULT_WAKE_PHRASES } from "../wake-word";
 
 /**
@@ -52,6 +58,7 @@ export default function VoicePanel({ view, onSave, saving }: VoicePanelProps) {
   const [wakeEnabled, setWakeEnabled] = useState(view.voice.wakeEnabled);
   const [wakePhrases, setWakePhrases] = useState(view.voice.wakePhrases);
   const [transcribe, setTranscribe] = useState<"browser" | "local">(view.voice.transcribe);
+  const [speechLang, setSpeechLang] = useState(view.voice.speechLang);
   /** Whether the local transcriber is actually running, measured not assumed. */
   const [localState, setLocalState] = useState<TranscriberHealth | null>(null);
   const [probing, setProbing] = useState(false);
@@ -103,10 +110,23 @@ export default function VoicePanel({ view, onSave, saving }: VoicePanelProps) {
 
   const save = async () => {
     const next = await onSave({
-      voice: { speakReplies, voiceName, rate, pitch, wakeEnabled, wakePhrases, transcribe },
+      voice: { speakReplies, voiceName, rate, pitch, wakeEnabled, wakePhrases, transcribe, speechLang },
     });
     if (next) setSaved(true);
   };
+
+  /**
+   * What the browser is asking for, and what will actually be sent.
+   *
+   * Worth showing rather than hiding behind "Automatic", because the two differ
+   * in exactly the case this control exists for: a browser that reports the bare
+   * tag `en` is a browser whose speech service will refuse it, and a user who can
+   * see "the browser asks for en, dictation uses English (United States)" has the
+   * whole explanation of the failure they came here to fix. Read at render rather
+   * than stored, since it is a property of the browser and not of the form.
+   */
+  const automatic = resolveSpeechLanguage("", browserLanguages());
+  const effective = speechLang ? languageLabel(speechLang) || speechLang : languageLabel(automatic.tag);
 
   /**
    * Where transcription happens.
@@ -132,6 +152,29 @@ export default function VoicePanel({ view, onSave, saving }: VoicePanelProps) {
           { value: "local", label: "This machine, with local Whisper" },
         ]}
         hint="If dictation or her name keeps failing, switch to the local transcriber."
+      />
+
+      {/* The language, right under the transport, because the two failures look
+          identical from the outside and neither sentence says which one it was:
+          "network" is a blocked service and "language-not-supported" is a tag the
+          service would not serve. This control is the fix for the second, and it
+          used to be nowhere at all — the app simply sent `navigator.language` and
+          told the user to go and change it. */}
+      <SelectField
+        label="Dictation language"
+        value={speechLang}
+        onChange={setSpeechLang}
+        options={[
+          { value: "", label: `Automatic — uses ${languageLabel(automatic.tag)}` },
+          ...SPEECH_LANGUAGES.map((option) => ({ value: option.tag, label: option.label })),
+        ]}
+        hint={
+          automatic.fromBrowser
+            ? `Automatic is in use because this browser asks for "${automatic.fromBrowser}", which a speech service will not accept on its own — dictation sends ${automatic.tag} instead. Set it by hand only if that is the wrong language for you.`
+            : `Applies to the browser's speech service only: the local transcriber works the language out from the audio. ${
+                effective ? `Dictation will ask for ${effective}.` : ""
+              }`
+        }
       />
 
       {transcribe === "local" ? (

@@ -10,12 +10,19 @@ import {
 } from "react";
 
 import {
+  configureRecognizer,
   dictationFailure,
   dictationNote as buildDictationNote,
   getSpeechRecognition,
   hasOnDeviceRecognition,
   type SpeechRecognizer,
 } from "./speech";
+import {
+  browserLanguages,
+  nextSpeechLanguage,
+  resolveSpeechLanguage,
+  speechLanguageFallbacks,
+} from "./speech-language";
 import { canRecord, recordUtterance, transcribe, transcriberHealth } from "./local-speech";
 import { logMic } from "./mic-log";
 
@@ -50,12 +57,32 @@ import { logMic } from "./mic-log";
  * prompt, its failures name their cause, and a refusal is then reported before
  * anything is opened. The probe stream is stopped immediately, since leaving it
  * running would hold the microphone while the recogniser tries to open it.
+ *
+ * AND THEN THE LANGUAGE
+ *
+ * `instance.lang = navigator.language` is what produced "This browser cannot
+ * recognise your language for dictation" on a machine whose owner speaks English:
+ * the tag went to the speech service untouched, this profile reports the bare
+ * `en`, and a service that wanted a locale refused it. The tag is now resolved
+ * (`speech-language.ts`), the user can override it, and a refusal is answered by
+ * trying the next tag of the same language rather than by blaming the browser.
  */
 
 export interface ComposerHandle {
   focus: () => void;
   blur: () => void;
 }
+
+/**
+ * How long to wait before starting a replacement recogniser.
+ *
+ * Not politeness. Chromium throws `InvalidStateError` when a new recogniser
+ * starts in the same tick as the previous one ending, and `startRecognizer`
+ * turns that throw into a note — so a retry started immediately would surface as
+ * "Dictation could not start. Press the mic again." rather than as the attempt it
+ * was meant to be. The wake listener waits for the same reason.
+ */
+const RETRY_DELAY_MS = 400;
 
 export interface ComposerProps {
   onSubmit: (text: string, modality: "text" | "voice") => void;
@@ -87,10 +114,27 @@ export interface ComposerProps {
    * errors on every attempt.
    */
   transcribe?: "browser" | "local";
+  /**
+   * Which language to recognise, from Settings → Voice.
+   *
+   * Empty means "work it out from the browser", which is the default and what
+   * almost every user wants: the tag is normalised and a bare language is
+   * resolved to a regional model, because a service that wants a locale will not
+   * accept `en`. A non-empty value is the user overruling that inference, and it
+   * is used exactly as given.
+   */
+  language?: string;
 }
 
 const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
-  { onSubmit, busy, onTakeMicrophone, onReleaseMicrophone, transcribe: mode = "browser" },
+  {
+    onSubmit,
+    busy,
+    onTakeMicrophone,
+    onReleaseMicrophone,
+    transcribe: mode = "browser",
+    language = "",
+  },
   ref,
 ) {
   const [value, setValue] = useState("");
@@ -128,6 +172,28 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
    * because the user pressed stop must not be, or the button cannot turn it off.
    */
   const stopping = useRef(false);
+  /**
+   * Every language tag the service has refused in this dictation.
+   *
+   * State rather than a local, because a refusal arrives as an event and the
+   * answer to it is another attempt: without a record of what has already
+   * failed, the retry hands back the same tag and the app spins with the
+   * microphone light on. See `nextSpeechLanguage`.
+   */
+  const triedLanguages = useRef<readonly string[]>([]);
+  /** The tags worth trying after the first, decided once when dictation starts. */
+  const languageLadder = useRef<readonly string[]>([]);
+  /**
+   * Start one more recogniser, wired for everything except the retries.
+   *
+   * A ref rather than a `useCallback` called directly, because the error handler
+   * built below has to start the next attempt and is itself what the starter is
+   * built from — the two would be a cycle. This is the same indirection as
+   * `live.current` in `useWakeListener.ts`: the handler reads it when it fires,
+   * so it always reaches the current function rather than the one from the render
+   * that created the recogniser.
+   */
+  const launch = useRef<(language: string, local: boolean) => boolean>(() => false);
 
   useImperativeHandle(
     ref,
@@ -147,14 +213,22 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
     // Whether the button exists at all is the first question when a user says
     // "I clicked the mic" — if this is false, there was no button to click and
     // the problem is the browser, not the recogniser.
+    //
+    // The resolved language is here because it is the second question, and
+    // because the browser's own tags cannot be read any other way once the
+    // session is over: `browser` is what the browser asked for and `lang` is
+    // what will actually be sent, which is the pair that explains a refusal.
+    const chosen = resolveSpeechLanguage(language, browserLanguages());
     logMic("composer.mount", {
       micButton: available,
       onDevice: hasOnDeviceRecognition(),
       secure: window.isSecureContext,
-      lang: navigator.language,
+      lang: chosen.tag,
+      langSource: chosen.source,
+      browserLang: chosen.fromBrowser || navigator.language || "none",
       hasMediaDevices: typeof navigator.mediaDevices?.getUserMedia === "function",
     });
-  }, []);
+  }, [language]);
 
   /**
    * Close the microphone.
@@ -185,20 +259,20 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
   /**
    * The wiring every recognizer this component starts shares.
    *
-   * Split out so the on-device retry below is the same recognizer with one
-   * option changed, rather than a second copy that could drift from the first.
+   * Split out so the language retry, the on-device retry and the first attempt are
+   * the same recogniser with one argument changed, rather than three copies that
+   * can drift — which they already had: the retry copy was missing the `try/catch`
+   * around `start` that the other one had.
+   *
+   * `language` is a parameter rather than read from the prop, because the whole
+   * point of a retry is to send a different tag than the last one.
    */
   const buildRecognizer = useCallback(
-    (instance: SpeechRecognizer, local: boolean): void => {
-      instance.lang = navigator.language || "en-US";
-      // Continuous, unlike the original. One press means "listen until I say
-      // stop", not "listen to one sentence": the browser ends the session after
-      // a pause regardless, and `onend` restarts it while the user still wants
-      // it. See the module note.
-      instance.continuous = true;
-      instance.interimResults = true;
-      instance.maxAlternatives = 1;
-      if (local) instance.processLocally = true;
+    (instance: SpeechRecognizer, local: boolean, language: string): void => {
+      // Language, continuity, interim results and alternatives are set in one
+      // place, shared with the wake listener and the microphone check. Handing
+      // the recogniser a tag nobody resolved is what this app used to do.
+      configureRecognizer(instance, language, { onDevice: local });
 
       instance.onresult = (event) => {
         /**
@@ -247,11 +321,57 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
       };
       instance.onerror = (event) => {
         const reason = event?.error ?? "";
-        logMic("composer.error", { reason, local });
+        logMic("composer.error", { reason, local, lang: language });
         if (openTimer.current) {
           clearTimeout(openTimer.current);
           openTimer.current = null;
         }
+
+        /**
+         * Start the next attempt, after the delay this API needs.
+         *
+         * The `stopping` check is what makes the delay safe: a user who presses
+         * the mic to stop during those milliseconds must not have a recogniser
+         * opened behind them.
+         */
+        const retrySoon = (next: () => void) => {
+          window.setTimeout(() => {
+            if (stopping.current) return;
+            next();
+          }, RETRY_DELAY_MS);
+        };
+
+        /**
+         * The service refused the language, so try another tag of the SAME
+         * language before saying anything to the user.
+         *
+         * This is the reported failure's second line of defence. The first is
+         * not sending a bare language tag at all (see `speech-language.ts`), but
+         * an inference can still be wrong, and when it is, the wrong value came
+         * from this app — so correcting it is this app's job rather than a
+         * sentence telling the user to go and change their browser's language.
+         *
+         * The abort is load-bearing for the same reason as the on-device retry
+         * below: the superseded recogniser fires `onend` afterwards, and without
+         * the identity check in that handler it would tear down the attempt that
+         * replaced it and leave a live microphone the component cannot stop.
+         */
+        if (reason === "language-not-supported") {
+          const next = nextSpeechLanguage(triedLanguages.current, languageLadder.current);
+          if (next) {
+            triedLanguages.current = [...triedLanguages.current, next];
+            logMic("composer.language.retry", { from: language, to: next });
+            const previous = recognizer.current;
+            recognizer.current = null;
+            previous?.abort();
+            setDictationNote(`The browser would not recognise “${language}”. Trying ${next}.`);
+            retrySoon(() => {
+              launch.current(next, local);
+            });
+            return;
+          }
+        }
+
         // Only the first failure of a session gets a recovery attempt, and only
         // if there is a model that can serve it. Retrying on every error would
         // spin against a permission the user has already refused.
@@ -273,27 +393,16 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
           setDictationNote(
             "That needed the browser's speech service. Trying the on-device model.",
           );
-          const Recognition = getSpeechRecognition();
-          if (Recognition) {
-            const retry = new Recognition();
-            buildRecognizer(retry, true);
-            recognizer.current = retry;
-            setDictating(true);
-            try {
-              retry.start();
-            } catch {
-              // Guarded, unlike an earlier version. `hasOnDeviceRecognition`
-              // only proves the two statics exist; the model itself can still be
-              // absent, and an unguarded throw from inside an error handler
-              // leaves the UI claiming to listen with nothing running.
-              recognizer.current = null;
-              setDictating(false);
-              setDictationNote(dictationFailure(reason, false));
-            }
-            return;
-          }
+          retrySoon(() => {
+            if (launch.current(language, true)) return;
+            // `hasOnDeviceRecognition` only proves the two statics exist; the
+            // model itself can still be absent, and this is what that looks like.
+            setDictationNote(dictationFailure(reason, false, language));
+            closeDictation(false);
+          });
+          return;
         }
-        const message = dictationFailure(reason, local);
+        const message = dictationFailure(reason, local, language);
         if (message) setDictationNote(message);
         // `false`: a failure keeps the microphone. Releasing it here would hand
         // it to always-listening, which would fail the same way and hand it
@@ -343,6 +452,82 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
     },
     [closeDictation, onDevice, onReleaseMicrophone],
   );
+
+  /**
+   * Build, start and watch one recogniser.
+   *
+   * Every attempt goes through here — the first, the language retry, and the
+   * on-device retry — because they differ only in which tag and which engine they
+   * ask for. They used to be three copies of the same twelve lines, and the
+   * copies had already drifted: only the first one armed the watchdog for the
+   * silent case, so an attempt that started and never opened left the button lit
+   * with nothing behind it. That is the one failure this component otherwise
+   * cannot report, because it produces neither a result nor an error.
+   *
+   * Returns whether the attempt is now running. A caller that needs to say
+   * something when there is nothing to launch reads that rather than guessing.
+   */
+  const startRecognizer = useCallback(
+    (language: string, local: boolean): boolean => {
+      const Recognition = getSpeechRecognition();
+      if (!Recognition) return false;
+
+      const instance = new Recognition();
+      buildRecognizer(instance, local, language);
+      recognizer.current = instance;
+      setDictating(true);
+      try {
+        instance.start();
+        logMic("composer.start", { continuous: instance.continuous, lang: language, local });
+      } catch (error) {
+        // Guarded, unlike an earlier version of the retry. `hasOnDeviceRecognition`
+        // only proves the two statics exist; the model itself can still be
+        // absent, and an unguarded throw from inside an error handler leaves the
+        // UI claiming to listen with nothing running.
+        logMic("composer.start.threw", { name: error instanceof Error ? error.name : "unknown" });
+        recognizer.current = null;
+        setDictating(false);
+        setDictationNote("Dictation could not start. Press the mic again.");
+        return false;
+      }
+
+      /**
+       * The watchdog for the silent case.
+       *
+       * A recogniser can start and never open: no error, no event, no `onend`,
+       * and the microphone indicator stays lit while the field stays empty. Five
+       * seconds is long enough for a slow service and short enough that a user
+       * does not conclude the button is dead.
+       */
+      if (openTimer.current) clearTimeout(openTimer.current);
+      openTimer.current = setTimeout(() => {
+        openTimer.current = null;
+        if (stopping.current || recognizer.current !== instance) return;
+        if (opened.current === instance) return; // It did open; it is just quiet.
+        logMic("composer.never-opened", { lang: language, local });
+        recognizer.current = null;
+        try {
+          instance.abort();
+        } catch {
+          // Never opened, so there is nothing to abort.
+        }
+        setDictating(false);
+        setDictationNote(
+          "The microphone did not open. The browser may be blocked from its speech service, or the device may be held by another app.",
+        );
+      }, 5000);
+
+      return true;
+    },
+    [buildRecognizer],
+  );
+
+  // The error handler above reaches the starter through this, so a retry always
+  // calls the current one rather than the one captured when the recogniser was
+  // built.
+  useEffect(() => {
+    launch.current = startRecognizer;
+  }, [startRecognizer]);
 
   /**
    * Dictation through the local transcriber.
@@ -477,52 +662,37 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
     setHeard("");
 
     /**
+     * Which language tag to send, decided once per dictation.
+     *
+     * `resolveSpeechLanguage` prefers the setting, then the browser's own
+     * preference with a bare language resolved to a regional model — the bare
+     * `en` this machine reports is exactly what the speech service refuses — and
+     * falls back to `en-US` when the browser will not name a language at all.
+     * The ladder is what a refusal then walks: other regional variants of the
+     * SAME language, never a different one, because answering in a language the
+     * user did not choose produces confident nonsense that reads as a bad
+     * microphone rather than as a refusal.
+     */
+    const chosen = resolveSpeechLanguage(language, browserLanguages());
+    const ladder = speechLanguageFallbacks(chosen);
+    triedLanguages.current = [chosen.tag];
+    languageLadder.current = ladder;
+    // The tag and its provenance, because "what language was actually sent" is
+    // the first question for this class of failure and the flight recorder is
+    // the only place the answer survives the session.
+    logMic("composer.language", {
+      tag: chosen.tag,
+      source: chosen.source,
+      browser: chosen.fromBrowser || "none",
+      fallbacks: ladder.length,
+    });
+
+    /**
      * Ask for the microphone with the API that produces a real prompt, then let
      * it go. Failures here are named, and the recogniser's are not.
      */
     const begin = () => {
-      const instance = new Recognition();
-      buildRecognizer(instance, false);
-      recognizer.current = instance;
-      setDictating(true);
-      try {
-        instance.start();
-        logMic("composer.start", { continuous: instance.continuous });
-        /**
-         * The watchdog for the silent case.
-         *
-         * A recogniser can start and never open: no error, no event, no `onend`,
-         * and the microphone indicator stays lit while the field stays empty.
-         * That is the one failure this component used to be unable to report at
-         * all, because every other path produces either a result or an error and
-         * this one produces neither.
-         *
-         * Five seconds is long enough for a slow service and short enough that a
-         * user does not conclude the button is dead.
-         */
-        if (openTimer.current) clearTimeout(openTimer.current);
-        openTimer.current = setTimeout(() => {
-          openTimer.current = null;
-          if (stopping.current || recognizer.current !== instance) return;
-          if (opened.current === instance) return; // It did open; it is just quiet.
-          logMic("composer.never-opened");
-          recognizer.current = null;
-          try {
-            instance.abort();
-          } catch {
-            // Never opened, so there is nothing to abort.
-          }
-          setDictating(false);
-          setDictationNote(
-            "The microphone did not open. The browser may be blocked from its speech service, or the device may be held by another app.",
-          );
-        }, 5000);
-      } catch (error) {
-        logMic("composer.start.threw", { name: error instanceof Error ? error.name : "unknown" });
-        recognizer.current = null;
-        setDictating(false);
-        setDictationNote("Dictation could not start. Press the mic again.");
-      }
+      startRecognizer(chosen.tag, false);
     };
 
     if (typeof navigator.mediaDevices?.getUserMedia !== "function") {
@@ -556,7 +726,7 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
         setDictating(false);
         setDictationNote(buildDictationNote(error));
       });
-  }, [buildRecognizer, mode, onTakeMicrophone, startLocalDictation, value]);
+  }, [language, mode, onTakeMicrophone, startLocalDictation, startRecognizer, value]);
 
   // A recogniser left running across an unmount keeps the microphone open.
   useEffect(() => {

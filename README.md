@@ -453,6 +453,17 @@ permission, a browser with no speech service, an unplugged headset and a languag
 the browser cannot recognise each get their own sentence rather than a button that
 appears to do nothing.
 
+**The dictation language is chosen here, not by your browser.** A recogniser is
+asked for a *locale* — `en-US` — while a browser often reports only a
+*language* — `en` — and a service handed the bare language refuses it. That
+refusal used to arrive as "This browser cannot recognise your language for
+dictation", which asked you to change a browser setting that was not wrong. So the
+tag is resolved before it is sent, a refusal is met by trying another model of the
+same language rather than by blaming the browser, and
+**Settings → Voice → Dictation language** overrides the whole thing if the guess
+is wrong for you. The microphone check shows which tag is being sent, where it
+came from, and what will be tried after it.
+
 ### A local transcriber, for when the cloud path is blocked
 
 `python/xana_stt.py` is a local Whisper service — no key, no cloud, no account.
@@ -470,6 +481,8 @@ powershell -ExecutionPolicy Bypass -File python\serve.ps1   # each session
 ```
 
 Then **Settings → Voice → Transcription → "This machine, with local Whisper"**.
+That choice is read as soon as the app loads, so it applies to the very next
+thing you say rather than only after the settings panel has been opened once.
 The panel has a **Check the local transcriber** button that reports what the
 service says about itself, so you find out before relying on it rather than
 mid-sentence.

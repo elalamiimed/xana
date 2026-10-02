@@ -92,7 +92,7 @@ export default function Page() {
    * reply out loud.
    */
   const spokenRef = useRef<string | null>(null);
-  const { speakReplies, voiceName, rate, pitch, wakeEnabled, wakePhrases, transcribe } = shell.voice;
+  const { speakReplies, voiceName, rate, pitch, wakeEnabled, wakePhrases, transcribe, speechLang } = shell.voice;
 
   /**
    * Whether she is speaking right now.
@@ -138,6 +138,7 @@ export default function Page() {
     phrases: wakePhrases,
     paused: thinking || speaking,
     transcribe,
+    language: speechLang,
     onSubmit: (text) => {
       nudge();
       void send(text, "voice");
@@ -312,6 +313,7 @@ export default function Page() {
             onTakeMicrophone={wake.stop}
             onReleaseMicrophone={wake.resume}
             transcribe={transcribe}
+            language={speechLang}
             onSubmit={(text, modality) => {
               nudge();
               void send(text, modality);

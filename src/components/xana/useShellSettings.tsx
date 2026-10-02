@@ -50,6 +50,8 @@ export interface ShellSettings {
     wakePhrases: string;
     /** "local" transcribes on this machine; "browser" uses the browser's service. */
     transcribe: "browser" | "local";
+    /** The language to recognise; empty means "work it out from the browser". */
+    speechLang: string;
   };
   /** Adapter id -> state, for the Connections screen. */
   statuses: Record<string, { state: string; mode: string; detail?: string }>;
@@ -88,7 +90,7 @@ export function useShellSettings(
 ): ShellSettings {
   const [open, setOpen] = useState(false);
   const [caveOpen, setCaveOpen] = useState(false);
-  const controller = useSettings(open);
+  const controller = useSettings();
   const view = controller.view;
 
   const openSettings = useCallback(() => setOpen(true), []);
@@ -144,6 +146,7 @@ export function useShellSettings(
       wakeEnabled: view?.voice.wakeEnabled ?? false,
       wakePhrases: view?.voice.wakePhrases ?? "",
       transcribe: view?.voice.transcribe ?? "browser",
+      speechLang: view?.voice.speechLang ?? "",
     }),
     [view],
   );

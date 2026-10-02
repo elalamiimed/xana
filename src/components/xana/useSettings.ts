@@ -93,7 +93,7 @@ export interface SettingsController {
   clearError: () => void;
 }
 
-export function useSettings(open: boolean): SettingsController {
+export function useSettings(): SettingsController {
   const [view, setView] = useState<SettingsView | null>(null);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -114,16 +114,35 @@ export function useSettings(open: boolean): SettingsController {
     }
   }, []);
 
-  // Fetch on first open rather than on mount: a user who never opens
-  // Settings should never pay for the request, and the values are only
-  // needed when the panel is on screen.
+  /**
+   * Read once, as soon as the shell exists — NOT when Settings is opened.
+   *
+   * The earlier version waited for the panel, on the reasoning that a user who
+   * never opens Settings should not pay for the request. That reasoning was wrong
+   * about what this hook is for: it is called once, by the shell, and its answer
+   * is not only for the panel. `speakReplies`, `voiceName`, `wakeEnabled`,
+   * `wakePhrases` and `transcribe` decide what the app DOES, before Settings has
+   * ever been on screen.
+   *
+   * What that cost, concretely: a fresh page ran on the defaults, so
+   * always-listening stayed off and replies stayed silent even with both switched
+   * on — and, the reason this was found, a saved "transcribe on this machine" was
+   * ignored, so the microphone used the browser's recogniser instead. A user who
+   * had already switched away from the browser's speech service to escape its
+   * errors kept meeting those errors until they happened to open Settings once in
+   * that session, which is a fix that silently expires on every reload.
+   *
+   * One request per page load, to loopback, for values the interface cannot be
+   * correct without. A later edit to the file is still picked up: the store is
+   * memoised on mtime and the panel has a Reload button.
+   */
   useEffect(() => {
-    if (!open || view || inFlight.current) return;
+    if (view || inFlight.current) return;
     inFlight.current = true;
     void reload().finally(() => {
       inFlight.current = false;
     });
-  }, [open, view, reload]);
+  }, [view, reload]);
 
   const save = useCallback(async (patch: SettingsPatch): Promise<SettingsView | null> => {
     setSaving(true);

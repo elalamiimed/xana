@@ -139,6 +139,8 @@ export const DEFAULT_SETTINGS: XanaSettings = {
     wakePhrases: "",
     // Browser by default: faster where it works, and it needs no install.
     transcribe: "browser",
+    // Empty means "resolve it from the browser". See `VoiceSettings`.
+    speechLang: "",
   },
   /**
    * The model defaults to DeepSeek, and to *switched off*.
@@ -310,6 +312,16 @@ export function coerceSettings(raw: unknown): XanaSettings {
       // transcript.
       wakePhrases: str(voice.wakePhrases, "").slice(0, 300),
       transcribe: voice.transcribe === "local" ? "local" : "browser",
+      // Stored as given, and NOT validated against a list of tags here.
+      //
+      // The tag is checked where it is used, by `resolveSpeechLanguage`, which
+      // normalises whatever it is handed and falls back to the browser's own
+      // language when the value is unusable. Repeating that rule in the store
+      // would mean two copies of it, and the copy on this side would be the one
+      // that decides a user's perfectly good locale is not on a list somebody
+      // typed out. What this does guarantee is that the field is a short string,
+      // so a hand-edited file cannot put a paragraph into every recogniser.
+      speechLang: str(voice.speechLang, "").slice(0, 24),
     },
     model: {
       enabled: bool(model.enabled, false),
@@ -715,6 +727,9 @@ export function mergePatch(
     if (typeof p.wakeEnabled === "boolean") next.voice.wakeEnabled = p.wakeEnabled;
     if (typeof p.wakePhrases === "string") next.voice.wakePhrases = p.wakePhrases.slice(0, 300);
     if (p.transcribe === "local" || p.transcribe === "browser") next.voice.transcribe = p.transcribe;
+    // Empty is meaningful here: it is how the user goes back to "work it out
+    // from the browser", which has to stay reachable once it has been set.
+    if (typeof p.speechLang === "string") next.voice.speechLang = p.speechLang.trim().slice(0, 24);
   }
 
   if (patch.model) {

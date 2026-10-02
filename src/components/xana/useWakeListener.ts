@@ -3,8 +3,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { SpeechRecognizer } from "./speech";
+import { configureRecognizer } from "./speech";
 import { logMic } from "./mic-log";
 import { recordUtterance, transcribe, transcriberHealth } from "./local-speech";
+import {
+  browserLanguages,
+  nextSpeechLanguage,
+  resolveSpeechLanguage,
+  speechLanguageFallbacks,
+  type SpeechLanguageSource,
+} from "./speech-language";
 import {
   endFromError,
   matchWake,
@@ -66,6 +74,38 @@ const SETTLE_MS = 1100;
 /** After a request is sent, ignore results for this long. */
 const COOLDOWN_MS = 1200;
 
+/**
+ * How long to wait before starting the recogniser again with another language.
+ *
+ * Not politeness. Chromium throws `InvalidStateError` when a new recogniser
+ * starts in the same tick as the previous one ending, and `start()` swallows that
+ * throw — so retrying too eagerly would leave always-listening silently dead
+ * rather than retried. The same reasoning is behind `planRestart`'s delays; this
+ * one is short because the user is waiting on her name.
+ */
+const LANGUAGE_RETRY_MS = 400;
+
+/**
+ * The language the listener is using, and where it came from.
+ *
+ * Held across sessions, which is the point: a tag the service refused must not be
+ * tried again on every restart, or every utterance pays for the same refusal.
+ * Re-resolved whenever the setting changes — see `planLanguage`.
+ */
+interface SpeechPlan {
+  /** The setting this was resolved from, so a change is noticed. */
+  from: string;
+  /** The tag to try next, which changes as refusals come in. */
+  tag: string;
+  /** Every tag refused so far, including the first. */
+  tried: string[];
+  /** The order to try after the first, within one language only. */
+  ladder: readonly string[];
+  source: SpeechLanguageSource;
+  /** The browser's own tag, when it was not usable as sent. */
+  fromBrowser: string;
+}
+
 export type WakeState = "off" | "starting" | "armed" | "listening" | "paused" | "failed";
 
 export interface WakeListenerOptions {
@@ -83,6 +123,15 @@ export interface WakeListenerOptions {
    * is blocked — the diagnosed cause of every `network` failure.
    */
   transcribe: "browser" | "local";
+  /**
+   * The dictation language, from Settings → Voice.
+   *
+   * Empty means "resolve it from the browser". See `ComposerProps.language` and
+   * `speech-language.ts`: the tag this app sends is the difference between
+   * watching for her name and `language-not-supported`, and the reported failure
+   * was a bare `en` going out unaltered.
+   */
+  language: string;
   /** Called with a request heard without a button press. */
   onSubmit: (text: string) => void;
 }
@@ -136,6 +185,7 @@ export function useWakeListener({
   phrases,
   paused,
   transcribe: mode,
+  language,
   onSubmit,
 }: WakeListenerOptions): WakeListener {
   const [state, setState] = useState<WakeState>("off");
@@ -174,7 +224,15 @@ export function useWakeListener({
    * heard. Refs are refreshed in an effect, so the callbacks always see current
    * values without the recogniser's identity depending on them.
    */
-  const live = useRef({ paused, onSubmit, phraseList });
+  const live = useRef({ paused, onSubmit, phraseList, language });
+
+  /**
+   * The language plan in force, or null before the first session.
+   *
+   * A ref for the same reason as `live`: the callbacks read it when they fire,
+   * and it must survive the restarts that happen several times a minute.
+   */
+  const speech = useRef<SpeechPlan | null>(null);
 
   /**
    * The local loop's cancel handle.
@@ -324,6 +382,45 @@ export function useWakeListener({
     }
   }, [enabled, submitLocal]);
 
+  /**
+   * The language to send, resolved once per setting.
+   *
+   * Called at the start of every session, and it returns the SAME plan unless the
+   * setting changed — that is what carries a language retry forward: once `en-US`
+   * has been refused and `en-GB` accepted, the restarts that follow a pause carry
+   * on with `en-GB` instead of re-paying for the refusal every utterance.
+   *
+   * The comparison is on the setting rather than on the resolved tag so that a
+   * user who changes the setting gets the new one immediately, while a tag this
+   * app inferred on their behalf stays correctable by the retry below.
+   */
+  const planLanguage = useCallback((): SpeechPlan => {
+    const setting = live.current.language;
+    const current = speech.current;
+    if (current && current.from === setting) return current;
+
+    const resolved = resolveSpeechLanguage(setting, browserLanguages());
+    const plan: SpeechPlan = {
+      from: setting,
+      tag: resolved.tag,
+      tried: [resolved.tag],
+      ladder: speechLanguageFallbacks(resolved),
+      source: resolved.source,
+      fromBrowser: resolved.fromBrowser,
+    };
+    speech.current = plan;
+    // The tag and its provenance. "What language was actually sent" is the first
+    // question when her name stops being heard, and the browser's own tags are
+    // unreadable once the session is over.
+    logMic("wake.language", {
+      tag: plan.tag,
+      source: plan.source,
+      browser: plan.fromBrowser || "none",
+      fallbacks: plan.ladder.length,
+    });
+    return plan;
+  }, []);
+
   const clearTimers = useCallback(() => {
     for (const timer of [restartTimer, settleTimer, windowTimer]) {
       if (timer.current) clearTimeout(timer.current);
@@ -400,12 +497,11 @@ export function useWakeListener({
       clearTimers();
 
       const instance = new Recognition();
-      instance.lang = navigator.language || "en-US";
-      // Requested even though it is not honoured, because where it IS honoured
-      // the listener survives several sentences instead of one.
-      instance.continuous = true;
-      instance.interimResults = true;
-      instance.maxAlternatives = 1;
+      // Language, continuity, interim results and alternatives come from one
+      // shared place now — the wake listener and the Composer had their own
+      // copies, and a wrong language tag is not a difference worth having.
+      const plan = planLanguage();
+      configureRecognizer(instance, plan.tag);
 
       let handledByError = false;
 
@@ -522,8 +618,49 @@ export function useWakeListener({
       instance.onerror = (event) => {
         const reason = event?.error ?? "";
         const kind = endFromError(reason);
-        logMic("wake.error", { reason, kind });
+        logMic("wake.error", { reason, kind, lang: instance.lang });
         if (kind === "silence") return; // `onend` follows and handles it.
+
+        /**
+         * The service refused the language, so try another tag of the SAME
+         * language before giving up on watching for her name at all.
+         *
+         * The tag was chosen here — a bare `en` resolved to `en-US`, or the
+         * user's setting — so a refusal is this app's to correct. `planRestart`
+         * treats a refused language as terminal, and rightly, because the one
+         * thing that cannot fix it is retrying the same tag; what it cannot know
+         * is that there are other tags worth trying first, and that is what this
+         * branch does. `nextSpeechLanguage` never returns a tag already refused,
+         * so the ladder is finite and this cannot become a loop.
+         */
+        if (kind === "error-language") {
+          const plan = speech.current;
+          const next = plan ? nextSpeechLanguage(plan.tried, plan.ladder) : null;
+          if (plan && next) {
+            plan.tried = [...plan.tried, next];
+            plan.tag = next;
+            logMic("wake.language.retry", { from: instance.lang, to: next });
+            setNote(`The browser would not recognise “${instance.lang}”. Trying ${next}.`);
+            handledByError = true;
+            recognizer.current = null;
+            try {
+              instance.abort();
+            } catch {
+              // The error already ended it. Nothing to abort.
+            }
+            clearTimers();
+            restartTimer.current = setTimeout(() => {
+              restartTimer.current = null;
+              if (live.current.paused || held.current) {
+                setState(held.current ? "off" : "paused");
+                return;
+              }
+              start();
+            }, LANGUAGE_RETRY_MS);
+            return;
+          }
+        }
+
         handledByError = true;
         recognizer.current = null;
         handleEnd(kind);
@@ -556,13 +693,13 @@ export function useWakeListener({
         recognizer.current = null;
       }
     },
-    [clearTimers, endCapture, submit],
+    [clearTimers, endCapture, planLanguage, submit],
   );
 
   // Keep the callbacks' view of the world current.
   useEffect(() => {
-    live.current = { paused, onSubmit, phraseList };
-  }, [paused, onSubmit, phraseList]);
+    live.current = { paused, onSubmit, phraseList, language };
+  }, [paused, onSubmit, phraseList, language]);
 
   /**
    * The switch.

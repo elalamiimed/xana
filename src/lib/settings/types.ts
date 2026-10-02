@@ -102,6 +102,25 @@ export interface VoiceSettings {
    */
   transcribe: "browser" | "local";
   /**
+   * The language the browser's recogniser is asked to recognise.
+   *
+   * Empty means "work it out", which is what almost everyone wants: the app reads
+   * `navigator.languages`, normalises the tag, and resolves a bare language to a
+   * regional model (see `speech-language.ts`).
+   *
+   * It exists because the inference is not always right and the user is the only
+   * one who can correct it. The failure that created this field was a browser
+   * reporting the bare tag `en` on a machine whose owner speaks English: the
+   * service refused it, and the app answered with "This browser cannot recognise
+   * your language" — advice to change a browser setting that was not wrong, about
+   * a tag the app had chosen. A user who can say "use en-GB" is never stuck
+   * behind that sentence again.
+   *
+   * It applies to the browser's speech service only. The local transcriber
+   * detects the language itself from the audio, so there is nothing to tell it.
+   */
+  speechLang: string;
+  /**
    * Keep a recogniser open and answer when she is addressed by name.
    *
    * Off by default, and deliberately so. This holds the microphone open

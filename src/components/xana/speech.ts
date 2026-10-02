@@ -73,6 +73,37 @@ export interface SpeechRecognizer {
 
 type RecognizerConstructor = new () => SpeechRecognizer;
 
+/**
+ * The four options every recogniser in this app is built with, in one place.
+ *
+ * They were written out three times — the Composer, the wake listener and the
+ * microphone check — and they had already drifted: the check page left
+ * `maxAlternatives` alone while the other two set it, and `processLocally` was
+ * set only from the retry path. Three copies of a value that must agree is a
+ * disagreement waiting to happen, and the one that matters most is `lang`: the
+ * module note in `speech-language.ts` describes what a wrong language tag costs.
+ *
+ * The language is a PARAMETER rather than read here, because it is the one option
+ * that is not a constant — it comes from the setting, the browser, and possibly
+ * from a retry after the service refused the previous tag.
+ */
+export function configureRecognizer(
+  instance: SpeechRecognizer,
+  language: string,
+  options: { onDevice?: boolean } = {},
+): void {
+  instance.lang = language;
+  // Continuous, because one press means "listen until I say stop" rather than
+  // "listen to one sentence". The browser ends the session after a pause
+  // regardless; every caller restarts it while the user is still listening.
+  instance.continuous = true;
+  instance.interimResults = true;
+  instance.maxAlternatives = 1;
+  // Requested, never forced: setting it where the model is absent makes
+  // `start()` fail outright. See `hasOnDeviceRecognition`.
+  if (options.onDevice) instance.processLocally = true;
+}
+
 interface SpeechWindow {
   SpeechRecognition?: RecognizerConstructor;
   webkitSpeechRecognition?: RecognizerConstructor;
@@ -132,8 +163,19 @@ export function hasOnDeviceRecognition(): boolean {
  * first is a permission the user can grant in one click, the second usually
  * means the browser cannot reach its speech service at all (Brave, some hardened
  * Chromium builds, and anything offline).
+ *
+ * `language-not-supported` is the third, and it is the one this app used to cause
+ * itself. The recogniser is handed `navigator.language`, this machine's browser
+ * reports the bare tag `en`, the service refuses a language where it wanted a
+ * locale, and the user is told to change a browser setting that was never wrong.
+ * Two things changed with that: the tag is resolved before it is sent (see
+ * `speech-language.ts`), and the sentence below now names the tag that was
+ * refused, points at the setting that overrides it, and no longer reads as an
+ * instruction to reconfigure the browser. `refusedTag` is what makes the first
+ * of those possible; without it the message can only be generic, which is why it
+ * is a parameter rather than a second function.
  */
-export function dictationFailure(error: string, onDevice: boolean): string {
+export function dictationFailure(error: string, onDevice: boolean, refusedTag = ""): string {
   switch (error) {
     case "not-allowed":
     case "permission-denied":
@@ -145,11 +187,19 @@ export function dictationFailure(error: string, onDevice: boolean): string {
     case "audio-capture":
       return "No microphone was found. Check that one is plugged in and not in use by another app.";
     case "language-not-supported":
-      // Reached when the browser cannot recognise the page's language. Worth
-      // its own sentence because the generic fallback ("Dictation stopped.")
-      // gives the user nothing to act on, and the browser's language setting
-      // is not somewhere they would think to look.
-      return "This browser cannot recognise your language for dictation. Change the browser's language, or type instead.";
+      // The browser's language setting is not the thing to change, and saying so
+      // was this app's least useful sentence. The tag is chosen here, and the
+      // override is here too.
+      return refusedTag
+        ? `This browser's speech service refused the language "${refusedTag}". Set the dictation language in Settings → Voice — English (United States) is the safest choice.`
+        : "This browser's speech service refused the dictation language. Set it in Settings → Voice — English (United States) is the safest choice.";
+    case "bad-grammar":
+    case "phrases-not-supported":
+      // Not the language: the *hints* were rejected. Nothing in Xana sends a
+      // grammar or a phrase list, so this means the browser or an extension is
+      // substituting its own recognition configuration. Worth its own sentence
+      // because every other explanation sends the user to the wrong screen.
+      return "The browser rejected the recognition hints it was given. An extension may be replacing this page's speech settings — try a private window, or switch to the local transcriber.";
     case "network":
       return onDevice
         ? "The on-device model stopped. Try again."

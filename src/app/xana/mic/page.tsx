@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
+  configureRecognizer,
   dictationFailure,
   dictationNote,
   getSpeechRecognition,
@@ -10,6 +11,11 @@ import {
   transcriptFrom,
   type SpeechRecognizer,
 } from "@/components/xana/speech";
+import {
+  browserLanguages,
+  resolveSpeechLanguage,
+  speechLanguageFallbacks,
+} from "@/components/xana/speech-language";
 import { logMic } from "@/components/xana/mic-log";
 
 /**
@@ -77,6 +83,14 @@ export default function MicPage() {
     const recognition = getSpeechRecognition();
     const cannotMeter = typeof navigator.mediaDevices?.getUserMedia !== "function";
     const languages = typeof navigator.languages !== "undefined" ? navigator.languages.join(", ") : navigator.language;
+    const chosen = resolveSpeechLanguage("", browserLanguages());
+    const ladder = speechLanguageFallbacks(chosen);
+    const where =
+      chosen.source === "setting"
+        ? "from Settings"
+        : chosen.source === "browser"
+          ? "from this browser"
+          : "the built-in default, because this browser will not name a language";
 
     setFacts([
       {
@@ -112,7 +126,34 @@ export default function MicPage() {
         tone: typeof window.speechSynthesis !== "undefined" ? "ok" : "bad",
       },
       { label: "Page origin", value: window.location.origin, tone: "idle" },
-      { label: "Language", value: `${languages} (recognition uses this)`, tone: "idle" },
+      {
+        label: "Dictation language",
+        value: `${chosen.tag} — ${where}`,
+        tone: "ok",
+      },
+      /**
+       * Both halves of the language question, side by side.
+       *
+       * The browser's own tags are the input and the sent tag is the output, and
+       * when they differ that difference IS the explanation: this profile reports
+       * the bare `en`, which a speech service refuses as a locale, so `en-US` is
+       * sent instead. Before this row existed the app sent `navigator.language`
+       * untouched and blamed the user for the refusal.
+       */
+      {
+        label: "Browser language",
+        value:
+          `${languages}${chosen.fromBrowser ? ` — "${chosen.fromBrowser}" is not a locale a service will accept, so ${chosen.tag} is sent instead` : ""}`,
+        tone: "idle",
+      },
+      {
+        label: "If that is refused",
+        value:
+          ladder.length > 0
+            ? `${ladder.join(", ")} are tried in turn — other regional variants of the same language, never a different one`
+            : "nothing further is tried; a language chosen by hand is not second-guessed",
+        tone: "idle",
+      },
       { label: "User agent", value: navigator.userAgent, tone: "idle" },
     ]);
   }, []);
@@ -198,7 +239,13 @@ export default function MicPage() {
 
   const tryRecognition = useCallback(() => {
     const Recognition = getSpeechRecognition();
-    logMic("micpage.recognition.start", { available: Recognition !== null });
+    const chosen = resolveSpeechLanguage("", browserLanguages());
+    logMic("micpage.recognition.start", {
+      available: Recognition !== null,
+      lang: chosen.tag,
+      source: chosen.source,
+      browser: chosen.fromBrowser || "none",
+    });
     if (!Recognition) {
       setRecognitionError("This browser has no speech recognition API.");
       return;
@@ -209,9 +256,9 @@ export default function MicPage() {
     setRecognitionState("starting");
 
     const instance = new Recognition();
-    instance.lang = navigator.language || "en-US";
-    instance.continuous = true;
-    instance.interimResults = true;
+    // The same configuration the app itself uses, from one place — this page is
+    // only worth anything as a diagnosis if it exercises the real path.
+    configureRecognizer(instance, chosen.tag);
 
     instance.onstart = () => {
       logMic("micpage.recognition.open");
@@ -224,9 +271,14 @@ export default function MicPage() {
     };
     instance.onerror = (event) => {
       const reason = event?.error ?? "";
-      logMic("micpage.recognition.error", { reason });
+      logMic("micpage.recognition.error", { reason, lang: chosen.tag });
       setRecognitionState(`error: ${reason}`);
-      setRecognitionError(dictationFailure(reason, false) || `Recognition stopped (${reason}).`);
+      // The tag is passed through, because "the service refused en-US" and "the
+      // service refused a language" are different findings and only one of them
+      // tells the user which control to change.
+      setRecognitionError(
+        dictationFailure(reason, false, chosen.tag) || `Recognition stopped (${reason}).`,
+      );
       setRecognising(false);
     };
     instance.onend = () => {
@@ -403,6 +455,14 @@ export default function MicPage() {
             usually a blocked network, a hardened browser build, or being offline.
             Dictation then cannot work at all, which is what the local Whisper
             service in <code className="text-accent">python/</code> is for.
+          </li>
+          <li>
+            <span className="text-text">The bar moves, recognition fails with a language error.</span>{" "}
+            The service will not serve the tag it was sent. The row above says which
+            tag that is and what will be tried after it; if none of them is your
+            language, set it by hand in Settings &rsaquo; Voice &rsaquo; Dictation
+            language. Nothing here needs your browser&apos;s own language setting
+            changed.
           </li>
           <li>
             <span className="text-text">Both work here but not in the app.</span> Say

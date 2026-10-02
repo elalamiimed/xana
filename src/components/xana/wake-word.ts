@@ -518,11 +518,21 @@ export function planRestart(end: WakeEnd, consecutiveFailures = 0): RestartDecis
         note: "No microphone was found. Plug one in, then switch listening back on.",
       };
     case "error-language":
+      /**
+       * Reached only after the app has tried every tag of the language it has.
+       *
+       * A refused language is not something the user fixes in their browser: the
+       * tag is chosen here, it is normalised here, and it is retried here (see
+       * `speech-language.ts`). So the note names the setting that overrides the
+       * choice rather than sending the user to a browser language menu — which is
+       * what it used to do, for a failure the app had caused by sending a bare
+       * `en` to a service that wanted a locale.
+       */
       return {
         restart: false,
         delayMs: 0,
         fatal: true,
-        note: "This browser cannot recognise your language for dictation, so she cannot watch for her name. Change the browser's language, or use the mic button.",
+        note: "This browser's speech service will not recognise the dictation language in use, so she cannot watch for her name. Set it in Settings → Voice → Dictation language, or use the mic button.",
       };
     case "error-network":
       /**

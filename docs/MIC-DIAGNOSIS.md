@@ -434,6 +434,27 @@ and add `language-not-supported` plus `bad-grammar`/`phrases-not-supported`
 cases to `dictationFailure`. Cheap, and it converts the app's most useless
 sentence into a real instruction.
 
+**RESOLVED — and this was the reported symptom.** The fix above was applied, and
+then made general, because "default to `en-US`" was right about the value and
+wrong about the shape: a bare language is only one of the ways a tag can fail.
+
+| What was prescribed | Where it lives now |
+|---|---|
+| Default to `en-US` instead of `navigator.language` | `speech-language.ts` — the tag is normalised (case, `_`/`-`, `;q=`), and a bare language is resolved to a regional model. `en` becomes `en-US`; a tag outside the curated list is still sent as-is, because MDN is explicit that the supported set cannot be read from front-end code |
+| Make it a Voice setting | `voice.speechLang`, in Settings → Voice → Dictation language, with the resolved value and its provenance shown beside it. An explicit choice beats the inference and gets no fallback ladder |
+| `language-not-supported` in `dictationFailure` | Done, and it now names the tag that was refused and points at the setting rather than at the browser's language menu |
+| `bad-grammar` / `phrases-not-supported` | Done, with their own sentence: nothing in Xana sends a grammar, so those mean an extension is substituting its own recognition configuration |
+| — | **Added:** a refusal is retried down a finite ladder of other regional variants of the *same* language, never a different one, and never a tag already refused. The app chose the tag, so correcting it is the app's job |
+| — | **Added:** the Composer, the wake listener and this page's recogniser all take their four shared options from `configureRecognizer`, so a language can no longer be set in one place and not another |
+
+`npm run verify:speech` drives the decision through the reported case
+(`["en", "zh-CN", "en-GB", "en-US"]` → `en-US`), the ladder's finiteness, and the
+rule that a fallback never changes language. MEMORY.md §21 has the reasoning;
+§22 records the second half of the report — the shell never read the saved
+transcription setting until the settings panel had been opened, so a saved
+"transcribe on this machine" was ignored on every fresh page load and this
+browser's recogniser was used anyway.
+
 ### Refuted — do not spend time here
 
 | Hypothesis | Verdict | Evidence |

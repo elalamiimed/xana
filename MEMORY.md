@@ -472,6 +472,87 @@ What remains genuinely unproven is **quality** — synthetic audio has no words 
 it, so nothing asserts that Whisper transcribes accurately. That is a different
 claim from "the path works", and it is the one still owed a real microphone.
 
+### 21. A language tag is not a locale, and the app must not blame the user for its own guess
+
+The sentence was *"This browser cannot recognise your language for dictation.
+Change the browser's language, or type instead."* — shown to a user who speaks
+English, on a machine set to English, with a working microphone. It is a good
+example of a diagnostic that is worse than silence: it names a cause, it is wrong,
+and it sends the user to fix something that was never broken.
+
+The cause was one line:
+
+```tsx
+instance.lang = navigator.language || "en-US";
+```
+
+`docs/MIC-DIAGNOSIS.md` §2 Cause 5 had already identified it. This browser profile
+carries `intl.accept_languages = "en,zh-CN,en-GB,en-US"`, so `navigator.language`
+is the bare **`en`**; Chromium forwards that tag to its speech service as the
+`language=` query parameter; and a service that needs a **locale** refuses a
+**language**. `en` is a language. `en-US` is the model to ask for — and en-GB and
+en-IN are different models of the same language.
+
+Three things were wrong, and only fixing all three is a fix:
+
+**The app sent a value it had not read.** A tag is normalised (case, `_`/`-`,
+`;q=` qualifiers), and a bare language is resolved to a regional model before it
+goes out. The list of tags is a curated *starting set*, never an authority: MDN is
+plain that there is no way to determine from front-end code which languages a
+browser supports, so a tag outside the list is still sent as-is. Refusing it in
+the app would be inventing a restriction the browser never stated.
+
+**A refusal was not answered.** `language-not-supported` is a refusal of the tag,
+not of the user, and the tag was chosen here — so the next attempt is another
+regional variant of the *same* language, walked as a finite ladder that never
+re-offers a tag already refused. The tempting shortcut is to fall back to `en-US`
+come what may; it is refused, and the reason is the whole point of §2's honesty
+rule. Falling back to English for a Chinese user's refusal produces confident
+English nonsense, and wrong words are indistinguishable from a bad microphone — so
+the user buys a new headset instead of changing one setting. A ladder that stays
+inside one language can only ever change the *accent model*, which is the most a
+retry can honestly do.
+
+**The user could not disagree.** The inference can still be wrong, and
+`voice.speechLang` (Settings → Voice → Dictation language) overrules it. A
+deliberate choice gets no ladder at all — second-guessing the user with a
+different language is the same mistake wearing a helpful expression.
+
+The general shape, and it applies to every inference this app makes on a user's
+behalf: **when a guess fails, correct the guess before reporting a fault.** A
+message that tells someone to reconfigure their environment is, nine times in ten,
+a message that should have been code.
+
+### 22. A setting that changes behaviour cannot be loaded only when its editor is opened
+
+`useSettings` fetched `/api/settings` when the settings panel was opened, and not
+before. The reasoning was stated in the file — "the values are only needed when
+the panel is on screen" — and it was simply false. The shell reads
+`speakReplies`, `voiceName`, `wakeEnabled`, `wakePhrases` and `transcribe` on
+every render, so until someone opened Settings, the app ran on **defaults**: replies
+silent, always-listening off, and `transcribe` reported as `"browser"` no matter
+what was saved.
+
+That is how a user who had already switched to the local Whisper service, to
+escape the browser's speech service entirely, kept meeting that service's errors:
+the saved choice was real, on disk, and correct — and ignored until the panel had
+been opened once in that session. A fix that silently expires on every reload is
+not a fix, and it is the worst kind of bug to report because the user's own
+workaround appears not to work.
+
+Two lessons, and the second is the one that generalises:
+
+**The read moved to mount.** One request per page load against loopback, for
+values the interface cannot be correct without. An external edit is still picked
+up (the store memoises on mtime) and the panel keeps its Reload button.
+
+**A settings default is a claim about the app, not a placeholder.** Every
+`view?.x ?? default` in a shell is a decision made in the absence of the answer,
+and the absence was an artefact of when the fetch happened. Before writing a `??`
+in a component, ask who is holding the value and when they got it. The same
+question applies to `transcribe` and to the dictation language, which is why both
+now arrive before anything can ask for the microphone.
+
 ---
 
 ## Traps that have already bitten
@@ -638,6 +719,7 @@ claim from "the path works", and it is the one still owed a real microphone.
 | Task | Where | Watch out for |
 |---|---|---|
 | New connection | A descriptor in `src/lib/plugins/registry.ts`, an adapter in `src/lib/adapters/`, and its settings keys in `PLUGIN_SETTING_KEYS` | Return a status; never throw; declare the true mode; pick the `kind` honestly, because it decides which group the consent card sits under |
+| New recognition behaviour | `src/components/xana/speech-language.ts` for anything about *which* language, `configureRecognizer` in `speech.ts` for the four options every recogniser shares | A recogniser is built in three places (Composer, wake listener, mic check) and reads the language from one function; never set `instance.lang` from `navigator` directly |
 | New secret | The descriptor's `config`, with `kind: "secret"` | Presence, never a value, on the way back to the browser |
 | New device / ingest path | `src/lib/plugins/health-bridge.ts` as the model | The token is the authorisation; check it before revealing whether the feature is on; never echo it |
 | New action | `ActionIntent` in `core/types.ts`, then the executor's switch | The exhaustive `never` default will fail the typecheck until handled |
