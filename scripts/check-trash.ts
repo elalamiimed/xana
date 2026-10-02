@@ -464,6 +464,35 @@ group("The bin the interface reads and writes", () => {
     refused = true;
   }
   check("a nonsense kind is refused rather than guessed at", refused);
+
+  /**
+   * A note can reach the bin, which it could not before.
+   *
+   * `note` has been a bin kind since the beginning — the store could move one
+   * in and put one back — and no route called either, so the only way to delete
+   * a note was to open the database by hand. The assertion is on the operation
+   * rather than the store method, because the store method was never the part
+   * that was missing.
+   */
+  const note = store.createNote({ title: "Plumber", body: "Quoted 340 for the valve." });
+  runCaveOperation("note.delete", { id: note.id });
+  check("a note can be deleted through the route", !store.listNotes().some((n) => n.id === note.id));
+  check(
+    "and it lands in the bin rather than nowhere",
+    (runCaveOperation("trash.list", {}).trash ?? []).some((i) => i.kind === "note" && i.id === note.id),
+    JSON.stringify((runCaveOperation("trash.list", {}).trash ?? []).map((i) => `${i.kind}:${i.title}`)),
+  );
+  runCaveOperation("trash.restore", { kind: "note", id: note.id });
+  check("and comes back to the note list", store.listNotes().some((n) => n.id === note.id));
+
+  let missing = false;
+  try {
+    runCaveOperation("note.delete", { id: "note_does_not_exist" });
+  } catch {
+    missing = true;
+  }
+  check("deleting a note that is not there is a 404, not a silent success", missing);
+  getStoreForTrash().emptyTrash();
 });
 
 /* ------------------------------------------------------------------ */

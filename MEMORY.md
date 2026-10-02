@@ -801,6 +801,19 @@ is derived from.
 The general shape: **a delete is a decision, and every background job that can
 re-create the record has to be able to see it.**
 
+**AND A KIND WITH NO DOOR**
+
+The bin has listed `note` among its kinds since the day it was written. The store
+could move a note into it and put one back; nothing in the app called either. The
+only way to delete a note was to open `xana.db` with a SQLite client — which is
+how it surfaced, as a request to empty everything that is not one of the four
+rooms. `note.delete` exists now, and the check drives it through the route rather
+than the store method, because the store method was never the part that was
+missing.
+
+The general shape: **a capability the store has and no route exposes does not
+exist.** Grep for the callers, not for the implementation.
+
 ### 27. A screen that never asks looks exactly like an empty life
 
 The report: *"Goals and tasks show empty but we have some goals and tasks in the

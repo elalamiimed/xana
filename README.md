@@ -275,7 +275,7 @@ have.
 | `GET` | `/api/plugins/google/callback` | Pre-rename alias of the callback, kept for a redirect URI already registered |
 | `GET` | `/xana/plugins` | Pre-rename alias of `/xana/connections`; `POST` answers there too |
 | `GET` | `/xana/cave` | My cave: the goal board with computed pace, and a page of memories |
-| `POST` | `/xana/cave` | `{ op, ...args }` — one of fourteen fixed goal and memory operations |
+| `POST` | `/xana/cave` | `{ op, ...args }` — one of the fixed goal, step, task, event, memory, note and bin operations |
 
 ---
 

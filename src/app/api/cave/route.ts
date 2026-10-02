@@ -87,6 +87,7 @@ export async function POST(request: Request) {
           "memory.update",
           "memory.pin",
           "memory.forget",
+          "note.delete",
           "trash.list",
           "trash.restore",
           "trash.purge",

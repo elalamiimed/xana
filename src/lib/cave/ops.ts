@@ -501,6 +501,32 @@ export function createMemory(input: Record<string, unknown>): CavePayload {
 }
 
 /* ------------------------------------------------------------------ */
+/* Notes                                                              */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Remove a note.
+ *
+ * `note` has been one of the bin's kinds since the bin was written — the store
+ * knows how to move a note into it and how to put it back — and nothing in the
+ * app could reach either: no route called `deleteNote`, so the five notes on
+ * this machine were deletable only by opening the database with a SQLite
+ * client. Found by trying to empty everything that is not one of the rooms, and
+ * finding that the bin had a door on one side only.
+ *
+ * The note's derived memory is a separate record and keeps its own key, so
+ * forgetting the note does not silently take it: that is what the Memory room
+ * is for.
+ */
+export function deleteNote(input: Record<string, unknown>): CavePayload {
+  const id = bareId(input.id, "note");
+  if (!getStore().deleteNote(id)) throw new CaveError("That note no longer exists.", 404);
+
+  invalidateContext();
+  return { removed: id, trash: listTrash() };
+}
+
+/* ------------------------------------------------------------------ */
 /* Tasks                                                              */
 /* ------------------------------------------------------------------ */
 
@@ -855,6 +881,7 @@ const OPERATIONS = {
   "memory.update": updateMemory,
   "memory.pin": pinMemory,
   "memory.forget": forgetMemory,
+  "note.delete": deleteNote,
   "trash.list": trashPayload,
   "trash.restore": restoreFromTrash,
   "trash.purge": purgeFromTrash,
