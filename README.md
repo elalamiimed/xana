@@ -384,12 +384,24 @@ already have installed. Turn it on in **Settings → Voice** and pick one; the
 voice, rate and pitch are controls, and each has a sample button. The text is
 stripped of markdown first, so a briefing does not read out "dash energy colon".
 
-**She listens** through the browser's `SpeechRecognition` API, in one of two
-places: the **mic button** beside the input, or **hands-free** — say her name and
-she answers without a button. Both write into the same field you would type into.
-Dictation is a way to fill the composer, not a separate conversation mode.
+**She listens** through the browser's `SpeechRecognition` API, or — better on a
+machine where that service is blocked — through the local Whisper service below.
+In both cases there are two ways in: the **mic button** beside the input, or
+**hands-free** — say her name and she answers without a button.
 
-**Dictation stays open until you stop it, and shows what it is hearing.** One
+**The mic button asks, or dictates, and which one it is depends on the box.**
+Press it with an **empty** input and speak: the first finished sentence is sent
+and she answers, and the microphone closes when it has. Press it with **text
+already in the box** and everything you say is appended to what you were writing
+instead, and nothing is sent until you send it. That is the difference between
+asking a question and composing a long message out loud, and the empty box is the
+only signal that separates them.
+
+> The report that produced this: *"when I ask a question she does not answer
+> it."* The microphone was working perfectly — it filled the field with the
+> question and waited, which is right for dictation and useless for asking.
+
+**Dictation keeps listening until you stop it, and shows what it is hearing.** One
 press means "listen until I say stop", not "listen to one sentence" — the browser
 ends its session after a pause regardless, and Xana starts another. As you speak,
 the words appear above the field so a misheard word is visible as words rather
@@ -401,10 +413,14 @@ deleted everything before it.
 
 Turn on **Settings → Voice → Hands-free → Listen for her name**. The microphone
 stays open while the page is in front of you, and nothing you say is treated as a
-request until she hears her name. A line above the input always states which of
-the two states she is in — *Listening for her name* or *Go ahead — I am
-listening* — because a microphone that is open without saying so is the most
-objectionable thing an always-on assistant can do.
+request until she hears her name. **It is off by default**, and it is the one
+setting in the app that leaves a device open, so the line above the input says so
+in those words: *Microphone open — listening for her name*, then *Go ahead — I am
+listening*. That wording is deliberate and was changed after a report — *"she is
+always listening even without me calling her name, which is weird and against
+privacy"* — from a user whose panel read *Listening for her name*: the feature was
+working, and the sentence never mentioned the microphone. If you would rather
+nothing listened unless you asked, leave this off and use the mic button.
 
 Her name is matched **anywhere in the first three words**, allowing one filler in
 front ("hey Xana", "okay Xana"), because a wake word is how a sentence is
@@ -509,6 +525,18 @@ library with no weights reports itself as not ready and looks like a broken
 install. The app finds both the environment and the model on its own, with no
 environment variables to set — the same two lookups `serve.ps1` does. See
 **[python/README.md](python/README.md)**.
+
+**Which model is worth having.** `setup.ps1` fetches **`tiny`** by default — 75 MB,
+and the weakest of the Whisper models. It is fine for a clear sentence and poor at
+an unusual name, which is exactly what a wake word is. **`base`** is 145 MB and
+much better at both:
+
+```powershell
+$env:XANA_STT_MODEL="base"; powershell -ExecutionPolicy Bypass -File python\setup.ps1
+```
+
+The app loads the newest model it finds, so a model fetched later takes over at the
+next service start — nothing else to change.
 
 **What changes when it is on.** Audio is recorded locally, the end of your
 sentence is found from the waveform rather than a timer, and the clip goes to

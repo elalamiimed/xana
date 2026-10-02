@@ -28,7 +28,18 @@ import type { WakeState } from "./useWakeListener";
 const LABELS: Record<WakeState, string> = {
   off: "",
   starting: "Opening the microphone…",
-  armed: "Listening for her name",
+  /**
+   * "Microphone open" first, and deliberately.
+   *
+   * The state a user most needs to be told about is not that she is looking for
+   * her name — it is that the device is live at all. The previous wording said
+   * only "Listening for her name", and a user read it as the app having opened
+   * the microphone without being asked, which is a fair reading of a sentence
+   * that never mentions the microphone. Reported as "she is always listening
+   * even without me calling her name, which is weird and against privacy": the
+   * feature was working, the sentence was hiding it.
+   */
+  armed: "Microphone open — listening for her name",
   listening: "Go ahead — I am listening",
   paused: "Waiting until she stops speaking",
   failed: "",

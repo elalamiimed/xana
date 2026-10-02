@@ -79,13 +79,30 @@ shortcut. Defaults are in brackets.
 |---|---|
 | `XANA_STT_PORT` | The port to listen on. `[4319]` |
 | `XANA_STT_HOST` | The address to bind. `[127.0.0.1]` — see the warning below |
-| `XANA_STT_MODEL` | Which Whisper model: `tiny`, `base`, `small`, `medium`, `large-v3`. `[base]` |
-| `XANA_STT_BACKEND` | `auto`, `faster-whisper` or `whisper`. `[auto]` picks faster-whisper if it is installed |
-| `XANA_STT_MODEL_DIR` | Where the downloaded model is kept. `[%LOCALAPPDATA%\xana-stt\models]` |
-| `XANA_STT_VAD` | Set to `0` to turn off silence trimming. `[1]` |
+| `XANA_STT_MODEL` | Which Whisper model. A **name** (`base`) is fetched by `setup.ps1`; a **folder** is what the app passes, and it is the folder holding `model.bin` |
+| `XANA_STT_BACKEND` | `auto`, `faster-whisper` or `whisper` `[auto]` |
+| `XANA_STT_MODEL_DIR` | Where a downloaded model lives `[%LOCALAPPDATA%\xana-stt\models]` |
+| `XANA_STT_VAD` | Set to `0` to disable the voice-activity filter `[1]` |
 
-Bigger models are more accurate and slower. `base` is the right place to start
-on a laptop; `small` is a noticeable step up if you have the patience.
+### Choosing a model
+
+`setup.ps1` installs **`tiny`** unless told otherwise. `tiny` is 75 MB and the
+weakest of the Whisper models: it transcribes a clear sentence acceptably and
+mangles an unusual name, which is what a hands-free wake word depends on. `base`
+is 145 MB and noticeably better:
+
+```powershell
+$env:XANA_STT_MODEL="base"; powershell -ExecutionPolicy Bypass -File python\setup.ps1
+```
+
+`small` is a further step up if you have the patience; above that the wait stops
+being worth it on a laptop. Both are fetched from ModelScope, falling back to the
+Hugging Face mirror — the same mirrors `setup.ps1` uses for the libraries, because
+the network that blocks speech services usually blocks these too.
+
+Xana loads the newest `model.bin` it can find under `models\` and hands the
+service that folder, so a model fetched later takes over at the next service
+start. There is nothing to configure and no path to type.
 
 **On `XANA_STT_HOST`:** leave it alone. It defaults to loopback, which means
 only this computer can reach the service. Setting it to `0.0.0.0` lets a phone

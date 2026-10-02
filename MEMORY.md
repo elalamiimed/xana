@@ -649,6 +649,57 @@ first press does not pay for a model load; `/api/transcriber` starts it on deman
 which is what covers `next start` and a service that dies mid-session; and
 `python\serve.ps1` stays for the person who wants to watch it run.
 
+### 25. The microphone that filled a box instead of answering
+
+Two complaints in one sentence, and the flight recorder said the feature was
+working perfectly:
+
+    "She is always listening even without me calling her name which is weird and
+     against privacy, and also when i ask a question she does not answer it."
+
+    wake.on            engine=local phrases=xana
+    wake.local.heard   chars=6   ms=3715
+    wake.local.match   matched=false
+    ... eight clips, eight transcriptions, no match, and not one submit
+
+Nothing was broken. The microphone transcribed every sentence and looked for a
+name that was never in them, and the user had no way to know that "she answers
+when you say her name" was the contract — the indicator said *Listening for her
+name*, which describes what she was looking for and never mentions that the
+device was open. **When a feature leaves a microphone open, the sentence has to
+name the microphone.** It now reads *Microphone open — listening for her name*,
+and the feature is off unless it is switched on.
+
+**And a microphone that fills a box has not answered anything.** The mic button
+transcribed into the composer and stopped, which is right for composing a message
+and useless for asking a question — the user watched their own sentence appear in
+a field and waited for a reply that was never coming. The two are distinguishable
+from outside with one signal, and it is not a subtle one:
+
+    empty box    a question. The first finished sentence is sent, the microphone
+                 closes, she answers.
+    text in it   a continuation. Everything said is appended, nothing is sent
+                 until the user sends it.
+
+That is `spokenInputMode`, one line, named and tested, because it is a contract
+rather than an implementation detail. "The first finished sentence" is the
+recogniser's own judgement on the browser engine (a final result) and the
+waveform's on the local one (sustained quiet after speech) — both are the engine
+saying the speaker stopped, which is what an answer has to wait for.
+
+**The model a transcriber runs is a quality decision, and the default was the
+worst one.** `setup.ps1` fetched `tiny` — 75 MB, the weakest Whisper model — and
+`tiny` mangles an unusual name, which is precisely what a wake word is made of.
+`base` is 145 MB and much better, and the app already loads the newest model it
+finds, so switching is one command and no configuration. Recorded in the README
+rather than left as folklore.
+
+One environment trap came with that download. Hugging Face's `xet` backend writes
+its own logs to `%USERPROFILE%\.cache\huggingface\xet\logs`, and under a sandbox
+that is an access denial several seconds into a download that otherwise works —
+the failure looks like the network, and it is the cache path. `HF_HOME` inside
+the project and `HF_HUB_DISABLE_XET=1` is what fixed it.
+
 ---
 
 ## Traps that have already bitten

@@ -16,6 +16,7 @@ import {
   getSpeechRecognition,
   hasOnDeviceRecognition,
   planDictation,
+  spokenInputMode,
   type DictationPlan,
   type SpeechRecognizer,
 } from "./speech";
@@ -36,6 +37,22 @@ import { logMic } from "./mic-log";
  * transcriber — and not at all where nothing could. `planDictation` decides both,
  * because a control that does nothing is worse than no control, and a control
  * that explains itself is better than either.
+ *
+ * THE MICROPHONE ANSWERS
+ *
+ * Two things a microphone can be for, and the app now tells them apart by the
+ * only signal available from outside: whether the user was already writing.
+ *
+ *   empty box   — the press was a question. The first finished sentence is sent,
+ *                 the microphone closes, and she answers. See `asking`.
+ *   text in it  — the press was dictation. Everything said is appended and
+ *                 nothing is sent until the user sends it, which is what
+ *                 composing a long message by voice needs.
+ *
+ * Before this, both cases filled the box and stopped. That is right for composing
+ * and wrong for asking, and it is exactly what was reported: "when I ask a
+ * question she does not answer it" — she had answered nothing, because nothing
+ * had been asked.
  *
  * WHY DICTATION USED TO LOOK BROKEN
  *
@@ -151,6 +168,20 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
   /** The transcript that was in the field when dictation started. */
   const baseText = useRef("");
   /**
+   * Whether the press that started this dictation was a QUESTION.
+   *
+   * The field was empty when the mic was pressed, so there is nothing to add to
+   * — the user pressed a microphone and spoke, and what they want is an answer,
+   * not a box with their own sentence in it. That is the difference between the
+   * two things a microphone can be for, and the only signal that separates them
+   * from the outside is whether the user was already writing something.
+   *
+   * It is also the fix for the report that produced it: "when I ask a question
+   * she does not answer it". Dictation filled the field and stopped there, which
+   * is exactly right for composing and exactly wrong for asking.
+   */
+  const asking = useRef(false);
+  /**
    * The transcript heard so far, split into what the recogniser has finished
    * deciding and what it is still revising. Refs rather than state because
    * `onresult` fires several times a second and must read the previous value
@@ -219,6 +250,21 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
    */
   const launch = useRef<(language: string, local: boolean) => boolean>(() => false);
 
+  /**
+   * The props the recogniser's handlers need, as refs.
+   *
+   * A handler built when the microphone opened runs with the render that built
+   * it, so `busy` and `onSubmit` would be values from several seconds ago. Both
+   * are read at the moment a spoken question is sent.
+   */
+  const busyRef = useRef(busy);
+  const onSubmitRef = useRef(onSubmit);
+
+  useEffect(() => {
+    busyRef.current = busy;
+    onSubmitRef.current = onSubmit;
+  }, [busy, onSubmit]);
+
   useImperativeHandle(
     ref,
     () => ({
@@ -286,6 +332,28 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
   const stopDictation = useCallback(() => closeDictation(true), [closeDictation]);
 
   /**
+   * Send a question that was spoken rather than typed.
+   *
+   * Returns whether it went. A caller that gets `false` leaves the words in the
+   * field, which is the honest outcome: she is mid-reply, so there is nothing to
+   * answer yet, and throwing the sentence away would be worse than keeping it.
+   *
+   * The props are read through refs because this is called from a recogniser's
+   * event handler, which was built on an earlier render — `busy` would otherwise
+   * be the value it had when the microphone opened.
+   */
+  const sendSpoken = useCallback((text: string): boolean => {
+    const question = text.trim();
+    if (!question || busyRef.current) return false;
+    setValue("");
+    setHeard("");
+    setDictationNote(null);
+    logMic("composer.ask", { chars: question.length });
+    onSubmitRef.current(question, "voice");
+    return true;
+  }, []);
+
+  /**
    * The wiring every recognizer this component starts shares.
    *
    * Split out so the language retry, the on-device retry and the first attempt are
@@ -322,6 +390,7 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
          * from one to the other without being written twice.
          */
         let fresh = "";
+        let finalized = false;
         for (let index = event.resultIndex; index < event.results.length; index += 1) {
           const result = event.results[index];
           const text = result?.[0]?.transcript ?? "";
@@ -329,6 +398,7 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
           if (result?.isFinal) {
             committed.current = `${committed.current}${text}`.trim();
             interim.current = "";
+            finalized = true;
             continue;
           }
           fresh += text;
@@ -339,6 +409,20 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
         if (!spoken) return;
         setHeard(spoken);
         setValue(baseText.current ? `${baseText.current} ${spoken}` : spoken);
+
+        /**
+         * The first FINISHED sentence answers a question that was spoken.
+         *
+         * A final result is the recogniser's own judgement that the speaker
+         * stopped — the same signal the wake listener acts on — so it is the
+         * closest thing the browser engine has to the local engine's
+         * end-of-sentence detector. See `asking`: this only happens when the
+         * field was empty when the microphone was pressed, which is the
+         * difference between asking something and dictating into a draft.
+         */
+        if (finalized && asking.current && sendSpoken(committed.current)) {
+          closeDictation(true);
+        }
       };
       instance.onstart = () => {
         logMic("composer.session.open", { local });
@@ -479,7 +563,7 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
         onReleaseMicrophone?.();
       };
     },
-    [closeDictation, onDevice, onReleaseMicrophone],
+    [closeDictation, onDevice, onReleaseMicrophone, sendSpoken],
   );
 
   /**
@@ -667,6 +751,20 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
         const spoken = committed.current;
         setHeard(spoken);
         setValue(baseText.current ? `${baseText.current} ${spoken}` : spoken);
+
+        /**
+         * A press with an empty box was a question, and it is answered here.
+         *
+         * The end of the sentence is the signal, and the local engine is the one
+         * that genuinely knows where the sentence ended: the waveform went quiet
+         * for most of a second after speech. So the answer is sent, the
+         * microphone is closed, and the user is not left holding a transcription
+         * of their own question wondering why nothing happened.
+         */
+        if (asking.current && sendSpoken(spoken)) {
+          committed.current = "";
+          break;
+        }
       }
     } finally {
       localLoop.current = false;
@@ -675,7 +773,7 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
       setHeard("");
       onReleaseMicrophone?.();
     }
-  }, [onReleaseMicrophone]);
+  }, [onReleaseMicrophone, sendSpoken]);
 
   const startDictation = useCallback(() => {
     /**
@@ -697,6 +795,9 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
     if (plan.engine === "local") {
       onTakeMicrophone?.();
       baseText.current = value;
+      // An empty box means the user pressed a microphone to ask something, not
+      // to write something. See `asking` and `spokenInputMode`.
+      asking.current = spokenInputMode(value) === "question";
       stopping.current = false;
       committed.current = "";
       interim.current = "";
@@ -722,6 +823,8 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
     onTakeMicrophone?.();
 
     baseText.current = value;
+    // See the local path above: empty box, spoken question, answer.
+    asking.current = spokenInputMode(value) === "question";
     stopping.current = false;
     triedLocally.current = false;
     committed.current = "";
@@ -844,7 +947,7 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
           aria-live="polite"
           className="absolute inset-x-4 bottom-full mb-2 truncate text-[12px] leading-relaxed font-normal text-accent"
         >
-          {heard ? `Listening — “${heard}”` : "Listening…"}
+          {heard ? `Listening — “${heard}”` : asking.current ? "Listening — ask your question" : "Listening…"}
         </p>
       ) : null}
 
@@ -920,7 +1023,12 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
           type="button"
           onClick={() => (dictating ? stopDictation() : startDictation())}
           aria-pressed={dictating}
-          aria-label={dictating ? "Stop dictation" : "Speak to Xana"}
+          aria-label={dictating ? "Stop listening" : "Ask by voice"}
+          title={
+            dictating
+              ? "Stop listening"
+              : "Ask by voice — with an empty box she answers what you say; with text in it, she adds to it"
+          }
           className={`mb-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full transition-colors duration-[var(--t-fast)] hover:bg-surface-2 ${
             dictating ? "text-accent" : "text-faint hover:text-dim"
           }`}

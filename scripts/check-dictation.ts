@@ -21,9 +21,10 @@
  * `event.results` is the list for the CURRENT session and is re-sent in full on
  * every event, while `event.resultIndex` says how much of it is new.
  *
- * The last group is a second, unrelated question that is decided in code and
- * useless in a browser: which engine the microphone button means, and whether it
- * should exist at all. It used to be answered twice — once for the button, once
+ * The last groups are two unrelated questions that are decided in code and
+ * useless in a browser: which engine the microphone button means and whether it
+ * should exist at all, and whether a press of it was a question or a
+ * continuation. The first used to be answered twice — once for the button, once
  * for the click — and the two answers disagreed, which is what a pure function
  * with a test is for.
  */
@@ -35,7 +36,7 @@ import {
   type DictationEvent,
   type DictationState,
 } from "../src/components/xana/dictation";
-import { planDictation } from "../src/components/xana/speech";
+import { planDictation, spokenInputMode } from "../src/components/xana/speech";
 
 /* ------------------------------------------------------------------ */
 /* Harness                                                             */
@@ -371,6 +372,25 @@ group("A new session resets the tail but never the committed words", () => {
     dictationText(state) === "said earlier new words and more",
     dictationText(state),
   );
+});
+
+group("A press of the microphone is a question or a continuation, and the box decides", () => {
+  /**
+   * The report this covers: *"when I ask a question she does not answer it."*
+   * The microphone worked — it transcribed the question into the field and
+   * stopped, which is right for dictation and useless for asking. The only
+   * signal that separates the two from outside is whether the user was already
+   * writing, and this is that decision, named.
+   */
+  const empty = spokenInputMode("");
+  check("an empty box means a question", empty === "question", empty);
+  check("so does a box holding only whitespace", spokenInputMode("   ") === "question");
+  check("and a newline is not writing either", spokenInputMode("\n\t ") === "question");
+
+  const drafted = spokenInputMode("remind me to");
+  check("text in the box means dictation", drafted === "dictation", drafted);
+  check("however little of it there is", spokenInputMode("a") === "dictation");
+  check("and leading space does not hide it", spokenInputMode("  hello") === "dictation");
 });
 
 group("The initial state is genuinely empty", () => {

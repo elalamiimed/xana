@@ -209,6 +209,29 @@ export function planDictation(input: {
   return { engine: "none", button: false, note: "" };
 }
 
+/* ================================================================== */
+/* What a press of the microphone means                               */
+/* ================================================================== */
+
+/**
+ * Whether the user is asking something or writing something.
+ *
+ * The only signal available from outside is whether they were already writing:
+ * a microphone pressed over an **empty** box was pressed to ask a question, and
+ * the first finished sentence should be sent and answered. A microphone pressed
+ * over **text** was pressed to add to it, and nothing is sent until the user
+ * sends it — which is what composing a long message out loud needs.
+ *
+ * It is one line of logic and it is here, named, because it is a *contract* and
+ * not an implementation detail: it is the whole difference between the two
+ * things a microphone can be for, and getting it backwards is what produced
+ * "when I ask a question she does not answer it" — the app filled the box with
+ * the question and waited, which is right for dictation and useless for asking.
+ */
+export function spokenInputMode(fieldText: string): "question" | "dictation" {
+  return fieldText.trim() === "" ? "question" : "dictation";
+}
+
 /**
  * Why dictation stopped, in words a person can act on.
  *
