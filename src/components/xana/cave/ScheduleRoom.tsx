@@ -3,6 +3,14 @@
 import { useMemo, useState } from "react";
 
 import type { CalendarEvent } from "@/lib/cave/types";
+import {
+  addDaysInZone,
+  clockInZone,
+  dateKeyInZone,
+  fromDateKeyInZone,
+  hourMinuteInZone,
+  weekdayMonthDayInZone,
+} from "@/lib/core/zone";
 
 import { emptyNote } from "./empty-note";
 import type { CaveController } from "./useCave";
@@ -24,24 +32,24 @@ import type { CaveController } from "./useCave";
  * calendar, and this is not trying to be one.
  */
 
-/** The local `YYYY-MM-DD` for an instant, which is what a date input wants. */
+/** The app's `YYYY-MM-DD` for an instant, which is what a date input wants. */
 function dayKey(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  return dateKeyInZone(d);
 }
 
-/** "09:30" for an instant. */
+/** "09:30" for an instant, the 24 hour form a time input wants. */
 function timeKey(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
-  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  return hourMinuteInZone(d);
 }
 
 function humanTime(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  return clockInZone(d);
 }
 
 function durationMinutes(event: CalendarEvent): number {
@@ -51,18 +59,20 @@ function durationMinutes(event: CalendarEvent): number {
   );
 }
 
-/** "Today" / "Tomorrow" / a weekday, for grouping. */
+/**
+ * "Today" / "Tomorrow" / a weekday, for grouping.
+ *
+ * Today and tomorrow are the app's days, not the browser's: a machine set to
+ * another zone must not put tonight's lecture under the wrong heading.
+ */
 function dayHeading(key: string): string {
-  const today = dayKey(new Date().toISOString());
-  const tomorrow = new Date();
-  tomorrow.setDate(tomorrow.getDate() + 1);
+  const today = dateKeyInZone(new Date());
   if (key === today) return "Today";
-  if (key === dayKey(tomorrow.toISOString())) return "Tomorrow";
-  return new Date(`${key}T00:00:00`).toLocaleDateString(undefined, {
-    weekday: "long",
-    month: "short",
-    day: "numeric",
-  });
+  if (key === dateKeyInZone(addDaysInZone(new Date(), 1))) return "Tomorrow";
+  const instant = fromDateKeyInZone(key);
+  // A key that is not a date is shown as it came rather than as "Invalid Date".
+  if (Number.isNaN(instant.getTime())) return key;
+  return weekdayMonthDayInZone(instant);
 }
 
 export interface ScheduleRoomProps {

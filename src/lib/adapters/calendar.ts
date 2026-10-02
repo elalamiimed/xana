@@ -15,6 +15,13 @@ import type { AdapterStatus, CalendarEvent } from "../core/types";
 import { getStore } from "../core/store";
 import { endOfDay, startOfDay, addDays, uid } from "../core/time";
 import {
+  addDaysInZone,
+  addMonthsInZone,
+  fromDateKeyInZone,
+  instantFromWallClock,
+  weekdayIndexInZone,
+} from "../core/zone";
+import {
   cred,
   defineAdapter,
   errorMessage,
@@ -46,57 +53,46 @@ function unescapeText(v: string): string {
     .trim();
 }
 
-/** "20240517T140000Z" | "20240517T140000" | "20240517" -> Date | undefined */
+/**
+ * "20240517T140000Z" | "20240517T140000" | "20240517" -> Date | undefined
+ *
+ * All four shapes RFC 5545 allows land in the app's zone. `Z` is already
+ * absolute and needs no conversion; a floating time is read as the app's own
+ * wall clock; a `TZID` names its zone; `VALUE=DATE` is a whole day, so it
+ * starts at that day's midnight in the app's zone.
+ */
 function parseIcsDate(value: string, tzid?: string): Date | undefined {
   const v = value.trim();
   const dateOnly = /^(\d{4})(\d{2})(\d{2})$/.exec(v);
   if (dateOnly) {
-    return new Date(Number(dateOnly[1]), Number(dateOnly[2]) - 1, Number(dateOnly[3]), 0, 0, 0);
+    return fromDateKeyInZone(`${dateOnly[1]}-${dateOnly[2]}-${dateOnly[3]}`);
   }
   const m = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})(Z)?$/.exec(v);
   if (!m) return undefined;
   const [, y, mo, d, h, mi, s, z] = m;
+  const wall = {
+    year: Number(y),
+    month: Number(mo),
+    day: Number(d),
+    hour: Number(h),
+    minute: Number(mi),
+    second: Number(s),
+  };
   if (z) {
-    // UTC — build from the epoch so the local zone applies.
-    return new Date(Date.UTC(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), Number(s)));
+    // UTC. Built from the epoch so the instant is exact; every reader formats it
+    // in the app's zone, which is where the eight hour shift becomes visible.
+    return new Date(Date.UTC(wall.year, wall.month - 1, wall.day, wall.hour, wall.minute, wall.second));
   }
   // Floating or TZID-qualified. Node resolves TZID names via Intl.
   if (tzid) {
-    const guess = zonedToDate(y, mo, d, h, mi, s, tzid);
-    if (guess) return guess;
-  }
-  return new Date(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), Number(s));
-}
-
-/**
- * Convert a wall-clock time in a named IANA zone to an absolute Date by
- * measuring the zone's offset at that instant. Two passes handle DST edges.
- */
-function zonedToDate(
-  y: string, mo: string, d: string, h: string, mi: string, s: string, tzid: string,
-): Date | undefined {
-  const naive = Date.UTC(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), Number(s));
-  try {
-    const fmt = new Intl.DateTimeFormat("en-US", {
-      timeZone: tzid,
-      hour12: false,
-      year: "numeric", month: "2-digit", day: "2-digit",
-      hour: "2-digit", minute: "2-digit", second: "2-digit",
-    });
-    let offset = 0;
-    for (let i = 0; i < 2; i++) {
-      const parts = fmt.formatToParts(new Date(naive - offset));
-      const get = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? "0");
-      const asUtc = Date.UTC(
-        get("year"), get("month") - 1, get("day"),
-        get("hour") % 24, get("minute"), get("second"),
-      );
-      offset = asUtc - (naive - offset);
+    try {
+      return instantFromWallClock(wall, tzid);
+    } catch {
+      // An unknown zone name falls through to the app's zone, which is a real
+      // answer rather than a crash on someone else's calendar.
     }
-    return new Date(naive - offset);
-  } catch {
-    return undefined; // unknown zone name — caller falls back to local time
   }
+  return instantFromWallClock(wall);
 }
 
 function splitProp(line: string): { name: string; params: Record<string, string>; value: string } {
@@ -231,7 +227,7 @@ function expandRrule(
   // Hard ceiling: a bad RRULE must never spin.
   const MAX = 500;
   const out: Date[] = [];
-  const cursor = new Date(start);
+  let cursor = new Date(start);
   const stepDays = freq === "DAILY" ? interval : freq === "WEEKLY" ? 7 * interval : 0;
 
   if (freq === "DAILY" || freq === "WEEKLY") {
@@ -241,25 +237,25 @@ function expandRrule(
       if (cursor >= to) break;
 
       if (freq === "WEEKLY" && byDay.length) {
-        const weekStart = new Date(cursor);
-        weekStart.setDate(weekStart.getDate() - ((weekStart.getDay() + 6) % 7));
+        // The week is the app's week, and every occurrence keeps the series'
+        // wall-clock time: stepping by days in the zone is what makes an 09:00
+        // class stay at 09:00 in the zone the app displays, on any host.
+        const weekStart = addDaysInZone(cursor, -weekdayIndexInZone(cursor));
         for (const day of byDay) {
           const target = "MO TU WE TH FR SA SU".split(" ").indexOf(day.slice(-2));
           if (target < 0) continue;
-          const occ = new Date(weekStart);
-          occ.setDate(occ.getDate() + target);
-          occ.setHours(cursor.getHours(), cursor.getMinutes(), 0, 0);
+          const occ = addDaysInZone(weekStart, target);
           if (occ < start) continue;
           if (until && occ > until) continue;
           if (occ >= from && occ < to) out.push(occ);
         }
-        cursor.setDate(cursor.getDate() + stepDays);
+        cursor = addDaysInZone(cursor, stepDays);
         i++;
         continue;
       }
 
       if (cursor >= from && cursor < to) out.push(new Date(cursor));
-      cursor.setDate(cursor.getDate() + stepDays);
+      cursor = addDaysInZone(cursor, stepDays);
       i++;
     }
     return out;
@@ -272,7 +268,7 @@ function expandRrule(
       if (count !== undefined && i >= count) break;
       if (cursor >= to) break;
       if (cursor >= from && cursor < to) out.push(new Date(cursor));
-      cursor.setMonth(cursor.getMonth() + stepMonths);
+      cursor = addMonthsInZone(cursor, stepMonths);
     }
     return out;
   }

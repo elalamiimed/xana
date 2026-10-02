@@ -374,3 +374,44 @@ scrolling.
   spring.
 - A full pill on a small chip: pills are for the composer and for things a
   thumb presses.
+
+## 9. Time
+
+**The app's clock is Asia/Shanghai's, not the machine's and not the browser's.**
+
+Everything calendar-shaped goes through one module, `src/lib/core/zone.ts`, and
+`APP_TIME_ZONE` there is the only place a timezone is named. Date keys, clock
+readings, day starts and ends, weekday labels, and every "today" or "tomorrow"
+come from it, on the server and in the browser alike, so the two cannot disagree
+about which day it is. They used to: date keys were built from `getFullYear()`
+and each client component formatted with its own `toLocale*` call, which made the
+same instant two different days for eight hours out of every day in any pair of
+zones that straddle midnight. The user asked for Beijing time in the calendar;
+what made it a bug rather than a preference is that this machine already runs
+Asia/Shanghai, so the dependency on the host was invisible from here.
+
+Two things the contract fixes:
+
+- **No offset is written down.** `+08:00` appears nowhere. The zone is read
+  through `Intl`, every helper takes the zone as a parameter, and moving the app
+  to another zone means changing that one constant. Asia/Shanghai has no daylight
+  saving, so a day is exactly 24 hours here, but the boundaries derive that
+  rather than assume it: `endOfDay` is the next day's start minus a millisecond,
+  and adding a day keeps the wall-clock time rather than adding 24 hours.
+- **The zone is a constant, not a setting.** There is no picker and no
+  per-connection override, deliberately: one user, one machine, and a wrong zone
+  in a settings file is a silent eight hour error in everything downstream.
+  `npm run verify:zone` measures the whole layer, including in a child process
+  whose host zone is UTC, which is the check a machine already set to Beijing
+  cannot make from the inside.
+- **A label never throws.** `Intl.DateTimeFormat` raises a `RangeError` on an
+  unusable instant, where the `toLocale*` calls it replaces returned the string
+  "Invalid Date". The zone helpers answer with an empty string instead. This is
+  not hypothetical: a cave room renders its day label before the server has said
+  which day it is, and the difference between the two was a wrong label and a
+  blank room with a stack trace in it.
+
+The zone is pinned; the language is not. Clock and weekday labels still follow
+the runtime's locale, exactly as the `toLocale*` calls they replace did, so an
+English browser reads "01:30 AM" and "Saturday" rather than a 24 hour clock and
+another language's day names. Time is the app's; language is the reader's.

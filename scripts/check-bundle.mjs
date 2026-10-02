@@ -27,6 +27,12 @@ const MARKERS = [
   ["endpoint preview line", "Requests go to"],
   ["the sentinel import", "__xana_keep__"],
   ["the composer slash hint", "Press / to jump here"],
+  // The room to breathe, as the user reads it. The countdown is generated from
+  // the setting, so its presence in the served chunk is the difference between
+  // "the pause is wired to the interface" and "the pause exists in a module
+  // nothing imports any more".
+  ["composer: room to breathe", "take your time, answering in"],
+  ["settings: room to breathe", "Room to breathe"],
   // The briefing card's own wording. These are the markers that catch a client
   // holding an old bundle: a stale page keeps rendering the previous card
   // shape while the server sends the new one, which looks exactly like the

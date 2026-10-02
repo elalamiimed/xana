@@ -28,6 +28,7 @@ import {
 } from "./speech-language";
 import { canRecord, ensureLocalTranscriber, recordUtterance, transcribe, transcriberHealth } from "./local-speech";
 import { logMic } from "./mic-log";
+import { normalisePauseMs, recorderWindow, remainingMs, waitCopy } from "@/lib/voice/pause";
 
 /**
  * The single input line. Pinned to the bottom, one hairline, radius-full.
@@ -145,6 +146,12 @@ export interface ComposerProps {
    * is used exactly as given.
    */
   language?: string;
+  /**
+   * How long a silence means "I have finished", in milliseconds. See
+   * `lib/voice/pause.ts`: this is the room to think mid-sentence, and it is the
+   * same number the wake listener and the recorder use.
+   */
+  pauseMs?: number;
 }
 
 const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
@@ -155,9 +162,11 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
     onReleaseMicrophone,
     transcribe: mode = "browser",
     language = "",
+    pauseMs = 4_000,
   },
   ref,
 ) {
+  const pause = normalisePauseMs(pauseMs);
   const [value, setValue] = useState("");
   const [dictating, setDictating] = useState(false);
   const [dictationNote, setDictationNote] = useState<string | null>(null);
@@ -165,6 +174,19 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
   const [heard, setHeard] = useState("");
   /** Live loudness while recording locally, for the indicator. */
   const [level, setLevel] = useState(0);
+  /**
+   * When the last thing was heard, while the app waits out the user's pause
+   * before answering. `null` means nothing is pending.
+   *
+   * This is the room to breathe made into a clock. The browser's recogniser
+   * finalises a result on its own schedule, about a second of quiet, and the
+   * app used to treat that as "the question is complete" — so a person who
+   * paused mid-thought had half a sentence sent and answered. Now a final
+   * result *arms* this instead, and any new result restarts it.
+   */
+  const [armedAt, setArmedAt] = useState<number | null>(null);
+  /** Milliseconds left on that wait, for the countdown in the indicator. */
+  const [waitLeft, setWaitLeft] = useState(0);
   /** The transcript that was in the field when dictation started. */
   const baseText = useRef("");
   /**
@@ -319,6 +341,9 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
     stopping.current = true;
     setDictating(false);
     setHeard("");
+    // A pending send belongs to the dictation that armed it. Leaving it armed
+    // across a close is a question answered after the microphone was shut.
+    setArmedAt(null);
     const instance = recognizer.current;
     recognizer.current = null;
     try {
@@ -352,6 +377,37 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
     onSubmitRef.current(question, "voice");
     return true;
   }, []);
+
+  /**
+   * The pause, as a timer.
+   *
+   * Two clocks, not one: `setTimeout` for the send and a slower interval for
+   * the countdown the user reads. The countdown is not decoration — without it
+   * a four second wait is indistinguishable from the app having missed the
+   * request, and the user repeats themselves into a recogniser that is already
+   * listening. Pressing Enter sends immediately; this only decides when the app
+   * stops waiting on its own.
+   */
+  useEffect(() => {
+    if (armedAt === null) {
+      setWaitLeft(0);
+      return;
+    }
+    const fire = () => {
+      setArmedAt(null);
+      if (sendSpoken(committed.current)) closeDictation(true);
+    };
+    const timer = window.setTimeout(fire, remainingMs(armedAt, Date.now(), pause));
+    const tick = window.setInterval(
+      () => setWaitLeft(remainingMs(armedAt, Date.now(), pause)),
+      200,
+    );
+    setWaitLeft(remainingMs(armedAt, Date.now(), pause));
+    return () => {
+      window.clearTimeout(timer);
+      window.clearInterval(tick);
+    };
+  }, [armedAt, pause, closeDictation, sendSpoken]);
 
   /**
    * The wiring every recognizer this component starts shares.
@@ -411,18 +467,19 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
         setValue(baseText.current ? `${baseText.current} ${spoken}` : spoken);
 
         /**
-         * The first FINISHED sentence answers a question that was spoken.
+         * The first FINISHED sentence no longer answers on its own.
          *
          * A final result is the recogniser's own judgement that the speaker
-         * stopped — the same signal the wake listener acts on — so it is the
-         * closest thing the browser engine has to the local engine's
-         * end-of-sentence detector. See `asking`: this only happens when the
-         * field was empty when the microphone was pressed, which is the
-         * difference between asking something and dictating into a draft.
+         * stopped, and it makes that judgement after roughly a second of quiet —
+         * which is not the same thing as a person having finished their
+         * thought. It now *arms* the pause instead, so a mid-sentence breath
+         * keeps the turn open, and any new result in that window restarts the
+         * count. See `lib/voice/pause.ts`, and `asking`: this only applies when
+         * the box was empty, because that is the case where the app answers
+         * rather than keeps a draft.
          */
-        if (finalized && asking.current && sendSpoken(committed.current)) {
-          closeDictation(true);
-        }
+        setArmedAt(null);
+        if (finalized && asking.current) setArmedAt(Date.now());
       };
       instance.onstart = () => {
         logMic("composer.session.open", { local });
@@ -705,6 +762,12 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
 
       while (!stopping.current) {
         const clip = await recordUtterance({
+          // The recorder waits out the user's pause itself, so a sentence that
+          // contains a four second think arrives as ONE clip rather than two.
+          // That is why the local path sends as soon as it has text and does
+          // not need the browser path's timer: the wait has already happened,
+          // in the audio, where it belongs.
+          ...recorderWindow(pause),
           onLevel: (level) => setLevel(level),
           onSpeechStart: () => setHeard(""),
         });
@@ -947,7 +1010,13 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
           aria-live="polite"
           className="absolute inset-x-4 bottom-full mb-2 truncate text-[12px] leading-relaxed font-normal text-accent"
         >
-          {heard ? `Listening — “${heard}”` : asking.current ? "Listening — ask your question" : "Listening…"}
+          {armedAt !== null
+            ? waitCopy(waitLeft)
+            : heard
+              ? `Listening — “${heard}”`
+              : asking.current
+                ? "Listening — ask your question"
+                : "Listening…"}
         </p>
       ) : null}
 

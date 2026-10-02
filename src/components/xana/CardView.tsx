@@ -1,14 +1,15 @@
 "use client";
 
 import type { BriefingSection, Card } from "@/lib/api/contract";
+import { clockInZone, daysBetweenInZone, monthDayInZone } from "@/lib/core/zone";
 
 import { Bar, Ring } from "./Rings";
 
-/** Formats an ISO instant as a local clock time. */
+/** Formats an ISO instant as a clock time in the app's own zone. */
 function formatTime(iso: string): string {
   const when = new Date(iso);
   if (Number.isNaN(when.getTime())) return iso;
-  return when.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  return clockInZone(when);
 }
 
 /**
@@ -82,23 +83,24 @@ function paceLabel(pace: string): string {
   return pace.replace(/-/g, " ");
 }
 
-/** A due date said the way a person would say it, in local time. */
+/**
+ * A due date said the way a person would say it.
+ *
+ * Counted in the app's zone rather than by subtracting the browser's midnight:
+ * `new Date("2026-10-05")` is UTC midnight, which is the previous evening west
+ * of Greenwich, so the old arithmetic could call a due date "tomorrow" on the
+ * day it was due. A date key has no such ambiguity.
+ */
 function dueLabel(due: string): string | null {
   const when = new Date(due);
   if (Number.isNaN(when.getTime())) return null;
-  const now = new Date();
-  const startOfToday = new Date(
-    now.getFullYear(),
-    now.getMonth(),
-    now.getDate(),
-  ).getTime();
-  const days = Math.round((when.getTime() - startOfToday) / 86_400_000);
+  const days = daysBetweenInZone(new Date(), when);
 
   if (days < 0) return `${Math.abs(days)}d overdue`;
   if (days === 0) return "today";
   if (days === 1) return "tomorrow";
   if (days < 7) return `in ${days}d`;
-  return when.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return monthDayInZone(when);
 }
 
 /* ------------------------------------------------------------------ */

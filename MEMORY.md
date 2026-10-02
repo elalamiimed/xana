@@ -912,6 +912,44 @@ from every angle except the user's.
 
 ## Traps that have already bitten
 
+- **`Intl` throws where `toLocale*` lied, and a label must never do that.** Moving
+  a formatter from `new Date(key).toLocaleDateString(undefined, {…})` to
+  `Intl.DateTimeFormat` with a `timeZone` looks like the same call with one option
+  added. It is not: on an invalid instant the first returns the string "Invalid
+  Date" and the second throws `RangeError: Invalid time value`. The cave's Log
+  room renders `dayFullLabel("")` on its first frame — the week has loaded and the
+  selection has not — so the difference was a blank label versus a crashed panel.
+  The live browser pass caught it; the type checker did not, and neither did the
+  fourteen `check:*` suites. Labels degrade to `""`, arithmetic degrades to an
+  unusable `Date`, and `verify:zone` measures that exact call site.
+- **The machine you develop on cannot test the app's timezone.** This host is
+  already Asia/Shanghai, so every zone assertion passes whether the zone is pinned
+  or quietly ignored — which is the same shape as the bug being fixed: green here,
+  wrong eight hours a day somewhere else. `verify:zone` therefore re-asks its
+  questions in a child process with `TZ=UTC` and fails if any answer follows the
+  host. A pin that cannot be falsified on the development machine is not tested.
+- **`hour12: false` is not `hourCycle: "h23"`.** The first resolves per locale and
+  can choose h24, which renders midnight as hour "24"; every date key in the app
+  would then be built from a "24:xx" wall clock. Name the cycle. (The same
+  reasoning in reverse is why the zone helpers keep the runtime's *language* while
+  pinning the zone: the calls they replaced were locale-shaped, and switching an
+  English machine to a 24 hour clock would have been a visible change nobody
+  asked for.)
+- **A pause is information, not absence.** Every voice path in this app decided a
+  thought was over after roughly a second of quiet, and each one had its own
+  constant for it: the browser's recogniser finalises a result on its own
+  schedule, the wake listener submitted when the transcript had merely stopped
+  *changing* for 1100ms, and the local recorder closed a clip after 850ms. The
+  user's requirement was a behaviour, not a bug report — "i may stay quiet for 3
+  seconds, therefore give me a room to breath" — and the symptom of getting it
+  wrong is not silence: it is half a question answered, with the rest arriving as
+  a second turn, which reads as mishearing rather than as interruption. Nothing
+  in any of those three files looks wrong in a reading. The fix is one number,
+  `pauseMs`, applied in four places (`lib/voice/pause.ts`), with a settings
+  slider because the right value belongs to the person, and a check that reads
+  the four call sites because a fifth path inventing its own window is exactly
+  how this comes back. **The browser's endpointing is not yours to set; the send
+  is.** Wait on the side you own.
 - **The shell is not a text editor.** A mechanical replacement across sixteen
   components — `text-[11px]` for `text-[12px]`, one line of PowerShell — wrecked
   every curly quote, em dash, ellipsis and middot in those files and added a BOM,
@@ -1143,6 +1181,9 @@ from every angle except the user's.
 | New theme | `THEME_PRESETS` in `settings/themes.ts` | Two channel triplets. Tune by eye, not by hue rotation |
 | New presence state | `PRESENCE_STYLE` in `orb/scene.ts` | Every field is a target the renderer eases toward |
 | New motion | A token in `globals.css`, multiplied by `var(--motion)` | It has to stop under `prefers-reduced-motion` |
+| New voice timing | `src/lib/voice/pause.ts`, then the four call sites | One number, four places: both engines in the composer and both in the wake listener. `verify:pause` reads those sources, so a fifth path cannot quietly invent its own window |
+| A new date, clock or day key | `src/lib/core/zone.ts` (client safe, no imports) for both halves, or `core/time.ts` on the server | Never `new Date(...).toLocale*`, `.getHours()` or `.getDay()`: the host clock is not the app's clock, and the browser's is not either. Seven paths still read the host — `cave/ops.ts` (event instants and the window query), `core/nlp.ts` ("tomorrow at 3pm"), `cave/TasksRoom.tsx`, `cave/GoalCard.tsx`, `cave/MemoryRoom.tsx`, `cave/TrashRoom.tsx`, and `derived/{energy,nudges,habits,patterns}.ts` — each a one-line swap onto the zone helpers |
+| New voice setting | `VoiceSettings` in `settings/types.ts`, then the store's three places (default, normaliser, patch) | Miss the third and the slider saves a value the app never reads |
 
 The `never`-typed defaults in `executor.ts`, `CardView.tsx` and `leadInFor` are
 deliberate: adding a variant without handling it fails `npm run typecheck`

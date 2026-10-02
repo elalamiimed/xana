@@ -52,6 +52,8 @@ export interface ShellSettings {
     transcribe: "browser" | "local";
     /** The language to recognise; empty means "work it out from the browser". */
     speechLang: string;
+    /** How long a silence means "I have finished", in milliseconds. */
+    pauseMs: number;
   };
   /** Adapter id -> state, for the Connections screen. */
   statuses: Record<string, { state: string; mode: string; detail?: string }>;
@@ -147,6 +149,11 @@ export function useShellSettings(
       wakePhrases: view?.voice.wakePhrases ?? "",
       transcribe: view?.voice.transcribe ?? "browser",
       speechLang: view?.voice.speechLang ?? "",
+      // The default is repeated here rather than imported: this is the value
+      // used for the second before `/api/settings` answers, and importing the
+      // module would put the whole pause rule in the first-load bundle for one
+      // constant. `normalisePauseMs` clamps anything that reaches a recogniser.
+      pauseMs: view?.voice.pauseMs ?? 4_000,
     }),
     [view],
   );

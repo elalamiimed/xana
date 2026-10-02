@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { SpeechRecognizer } from "./speech";
 import { configureRecognizer } from "./speech";
 import { logMic } from "./mic-log";
+import { normalisePauseMs, recorderWindow } from "@/lib/voice/pause";
 import { recordUtterance, transcribe, transcriberHealth, ensureLocalTranscriber } from "./local-speech";
 import {
   browserLanguages,
@@ -61,15 +62,17 @@ import {
 const COMMAND_WINDOW_MS = 9000;
 
 /**
- * How long a partial request is left alone before it is taken as complete.
+ * There is no settle constant any more.
  *
- * Chromium marks a result final only when it decides the speaker stopped, which
- * can be a second or more after they did. Waiting for that makes the feature
- * feel slow; acting on the partial text immediately truncates anyone who pauses
- * mid-sentence. This is the compromise — short enough to feel immediate, long
- * enough to survive a breath.
+ * This used to be 1100ms: how long a partial transcript was left alone before
+ * it was taken as complete, weighed against Chromium marking a result final a
+ * second or more after the speaker stopped. "Short enough to feel immediate,
+ * long enough to survive a breath" was the compromise, and it is the wrong
+ * compromise, because a breath is not the longest thing a person does
+ * mid-sentence. The window is now the user's own pause setting, applied to a
+ * final result as well as a partial one, so thinking for three seconds no
+ * longer sends half a request and answers it. See `lib/voice/pause.ts`.
  */
-const SETTLE_MS = 1100;
 
 /** After a request is sent, ignore results for this long. */
 const COOLDOWN_MS = 1200;
@@ -132,6 +135,15 @@ export interface WakeListenerOptions {
    * was a bare `en` going out unaltered.
    */
   language: string;
+  /**
+   * How long a silence means the request is finished, in milliseconds.
+   *
+   * Both engines use it and for the same reason: a person who pauses to think
+   * mid-sentence has not finished it. The browser's recogniser is settled on this
+   * window rather than on its own endpointing, and the local recorder waits it
+   * out before closing a clip. See `lib/voice/pause.ts`.
+   */
+  pauseMs: number;
   /** Called with a request heard without a button press. */
   onSubmit: (text: string) => void;
 }
@@ -186,6 +198,7 @@ export function useWakeListener({
   paused,
   transcribe: mode,
   language,
+  pauseMs,
   onSubmit,
 }: WakeListenerOptions): WakeListener {
   const [state, setState] = useState<WakeState>("off");
@@ -196,6 +209,16 @@ export function useWakeListener({
   const restartTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const settleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const windowTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /**
+   * The user's pause, in a ref.
+   *
+   * The recogniser callbacks are created once per session and live across
+   * restarts, so a value read from props at that moment would be the value from
+   * whenever the recogniser happened to open. A user who moves the slider
+   * expects the next sentence to honour it, not the next session. Refreshed in
+   * the same effect as `live`, below.
+   */
+  const pauseRef = useRef(normalisePauseMs(pauseMs));
   /** Consecutive transient failures, for the backoff policy. */
   const failures = useRef(0);
   /** How much of the current transcript belonged to the previous wake. */
@@ -342,7 +365,22 @@ export function useWakeListener({
         return;
       }
 
-      const clip = await recordUtterance({ silenceMs: awaitingCommand ? 1100 : 700, noSpeechMs: 9000 });
+      /**
+       * The recorder's own window.
+       *
+       * While a request is expected it waits out the user's pause, so a sentence
+       * with a four second think inside it arrives as one clip instead of two
+       * fragments, and `maxMs` grows with it so a long sentence cannot be cut
+       * off by the ceiling instead of by silence. While only her name is being
+       * watched for there is nothing to wait for, so the short window keeps the
+       * loop responsive.
+       */
+      const window = recorderWindow(pauseRef.current);
+      const clip = await recordUtterance({
+        silenceMs: awaitingCommand ? window.silenceMs : 700,
+        maxMs: window.maxMs,
+        noSpeechMs: 9000,
+      });
       if (localStop.current || !enabled) return;
 
       if (clip.ended === "error") {
@@ -644,7 +682,11 @@ export function useWakeListener({
             lastHeard.current = "";
             if (pending) submit(pending);
             else endCapture();
-          }, COMMAND_WINDOW_MS);
+            // At least three pauses long: a window shorter than the pause the
+            // user asked for would submit their half-finished sentence on a
+            // timer instead of on their silence, which is the bug this feature
+            // exists to remove, arriving by another route.
+          }, Math.max(COMMAND_WINDOW_MS, pauseRef.current * 3));
         }
 
         const command = transcript.slice(anchor.current).trim();
@@ -652,11 +694,16 @@ export function useWakeListener({
         setDraft(command);
 
         const latest = event.results[event.results.length - 1];
-        if ((latest?.isFinal ?? false) && command) {
-          submit(command);
-          return;
-        }
-        // A partial is not a request yet, but one that stops changing is.
+        const final = latest?.isFinal ?? false;
+        /**
+         * One timer, restarted by every result, whether final or not.
+         *
+         * A final result used to submit on the spot and only a partial waited.
+         * That is backwards for the thing the user asked for: the recogniser's
+         * endpointing is about a second, the user asked for three, and the app
+         * has to be the one that waits. The transcript is not lost while it
+         * waits — `lastHeard` holds it, and the next result restarts the clock.
+         */
         if (settleTimer.current) clearTimeout(settleTimer.current);
         settleTimer.current = setTimeout(() => {
           settleTimer.current = null;
@@ -664,7 +711,8 @@ export function useWakeListener({
           lastHeard.current = "";
           if (settled) submit(settled);
           else endCapture();
-        }, SETTLE_MS);
+        }, pauseRef.current);
+        logMic("wake.settle.armed", { final, chars: command.length, pauseMs: pauseRef.current });
       };
 
       instance.onerror = (event) => {
@@ -751,7 +799,8 @@ export function useWakeListener({
   // Keep the callbacks' view of the world current.
   useEffect(() => {
     live.current = { paused, onSubmit, phraseList, language };
-  }, [paused, onSubmit, phraseList, language]);
+    pauseRef.current = normalisePauseMs(pauseMs);
+  }, [paused, onSubmit, phraseList, language, pauseMs]);
 
   /**
    * The switch.

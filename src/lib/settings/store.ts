@@ -35,6 +35,7 @@ import { join } from "node:path";
 
 import { DEFAULT_THEME_ID, findTheme, findThemeByAccents, safeAccent } from "./themes";
 import { normaliseEndpoint } from "./endpoints";
+import { MAX_PAUSE_MS, MIN_PAUSE_MS, normalisePauseMs } from "../voice/pause";
 import {
   canonicalBaseUrl,
   findProvider,
@@ -141,6 +142,10 @@ export const DEFAULT_SETTINGS: XanaSettings = {
     transcribe: "browser",
     // Empty means "resolve it from the browser". See `VoiceSettings`.
     speechLang: "",
+    // Four seconds of quiet before a thought counts as finished. Above the
+    // three the user named, because the pause and the app's own reaction time
+    // stack. See `pause-window.ts`.
+    pauseMs: 4_000,
   },
   /**
    * The model defaults to DeepSeek, and to *switched off*.
@@ -322,6 +327,11 @@ export function coerceSettings(raw: unknown): XanaSettings {
       // typed out. What this does guarantee is that the field is a short string,
       // so a hand-edited file cannot put a paragraph into every recogniser.
       speechLang: str(voice.speechLang, "").slice(0, 24),
+      // Clamped here as well as at the slider, because this file is editable by
+      // hand and a window of zero would send half-sentences while a window of a
+      // minute would hold the microphone open. `normalisePauseMs` is the one
+      // rule; it lives next to the code that uses it.
+      pauseMs: normalisePauseMs(num(voice.pauseMs, DEFAULT_SETTINGS.voice.pauseMs, MIN_PAUSE_MS, MAX_PAUSE_MS)),
     },
     model: {
       enabled: bool(model.enabled, false),
@@ -730,6 +740,9 @@ export function mergePatch(
     // Empty is meaningful here: it is how the user goes back to "work it out
     // from the browser", which has to stay reachable once it has been set.
     if (typeof p.speechLang === "string") next.voice.speechLang = p.speechLang.trim().slice(0, 24);
+    // Clamped by the same rule the recognisers use, so a slider bug cannot put
+    // an unusable window in front of the microphone.
+    if (typeof p.pauseMs === "number") next.voice.pauseMs = normalisePauseMs(p.pauseMs);
   }
 
   if (patch.model) {

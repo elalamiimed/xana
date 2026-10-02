@@ -59,6 +59,8 @@ export default function VoicePanel({ view, onSave, saving }: VoicePanelProps) {
   const [wakePhrases, setWakePhrases] = useState(view.voice.wakePhrases);
   const [transcribe, setTranscribe] = useState<"browser" | "local">(view.voice.transcribe);
   const [speechLang, setSpeechLang] = useState(view.voice.speechLang);
+  /** Held in milliseconds, shown in seconds. See the slider's comment. */
+  const [pauseMs, setPauseMs] = useState(view.voice.pauseMs);
   /** Whether the local transcriber is actually running, measured not assumed. */
   const [localState, setLocalState] = useState<TranscriberHealth | null>(null);
   const [probing, setProbing] = useState(false);
@@ -112,7 +114,7 @@ export default function VoicePanel({ view, onSave, saving }: VoicePanelProps) {
 
   const save = async () => {
     const next = await onSave({
-      voice: { speakReplies, voiceName, rate, pitch, wakeEnabled, wakePhrases, transcribe, speechLang },
+      voice: { speakReplies, voiceName, rate, pitch, wakeEnabled, wakePhrases, transcribe, speechLang, pauseMs },
     });
     if (next) setSaved(true);
   };
@@ -177,6 +179,29 @@ export default function VoicePanel({ view, onSave, saving }: VoicePanelProps) {
                 effective ? `Dictation will ask for ${effective}.` : ""
               }`
         }
+      />
+
+      {/*
+        Room to breathe.
+
+        The one number behind every voice path: how long a silence means the
+        thought is finished. It is here rather than under Hands-free because it
+        applies to the microphone button too, and the person it exists for is
+        the one who stops mid-sentence to think — which happens while dictating
+        as much as while talking hands-free.
+
+        The slider is in seconds with one decimal, because "4000" is a number
+        nobody has an intuition for and "4.0s" is a pause anyone can picture.
+      */}
+      <Slider
+        label="Room to breathe"
+        value={pauseMs / 1000}
+        min={1.5}
+        max={10}
+        step={0.5}
+        onChange={(next) => setPauseMs(Math.round(next * 1000))}
+        format={(value) => `${value.toFixed(1)}s`}
+        hint={`How long you can stay quiet before she takes it as finished. Raise it if you think mid-sentence: at ${(pauseMs / 1000).toFixed(1)}s a pause shorter than that keeps the microphone open and nothing is sent early. Press Enter to send at once without waiting.`}
       />
 
       {transcribe === "local" ? (

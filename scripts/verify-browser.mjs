@@ -620,6 +620,67 @@ async function main() {
       JSON.stringify(tabReports.map((r) => `${r.label}:${r.text}`)),
     );
 
+    /* The room to breathe, driven through the real form.
+     *
+     * `verify:pause` proves the rule and the store; this proves the third
+     * hand-written layer, the panel. A slider whose value never reaches the
+     * store behaves exactly like a working setting until somebody speaks to her,
+     * and that is not a thing to discover by talking. It writes 5.0s, saves,
+     * reads the setting back from the API, and then puts back the value it
+     * found — the same discipline the cave's writes follow, because this is the
+     * owner's real machine and their real settings file. */
+    const pauseBefore = await evaluate(
+      devtools,
+      sessionId,
+      `fetch('/api/settings').then((r) => r.json()).then((s) => s.settings.voice.pauseMs)`,
+      true,
+    );
+    const pauseRound = await evaluate(
+      devtools,
+      sessionId,
+      `(async () => {
+        const tab = [...document.querySelectorAll('[role="tab"]')].find((t) => t.textContent.trim() === 'Voice');
+        if (!tab) return { found: false };
+        tab.click();
+        await new Promise((r) => setTimeout(r, 400));
+        const panel = document.querySelector('[role="tabpanel"]');
+        const label = [...(panel?.querySelectorAll('label') || [])].find((l) => l.textContent.trim() === 'Room to breathe');
+        const input = label ? document.getElementById(label.htmlFor) : null;
+        if (!input) return { found: false };
+        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+        const set = (value) => {
+          setter.call(input, String(value));
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+        };
+        const save = () => {
+          const button = [...panel.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Save voice');
+          button?.click();
+          return Boolean(button);
+        };
+        const stored = async () => (await (await fetch('/api/settings')).json()).settings.voice.pauseMs;
+        const shown = panel.innerText.includes((input.valueAsNumber).toFixed(1) + 's');
+        set(5);
+        await new Promise((r) => setTimeout(r, 250));
+        const clicked = save();
+        await new Promise((r) => setTimeout(r, 900));
+        const written = await stored();
+        set(${(Number(pauseBefore) || 4_000) / 1000});
+        await new Promise((r) => setTimeout(r, 250));
+        save();
+        await new Promise((r) => setTimeout(r, 900));
+        return { found: true, shown, clicked, written, restored: await stored() };
+      })()`,
+      true,
+    );
+    check("the voice panel has the room-to-breathe slider", Boolean(pauseRound?.found));
+    check("it renders the stored value", Boolean(pauseRound?.shown));
+    check("saving it writes the setting", pauseRound?.written === 5000, `${pauseRound?.written}`);
+    check(
+      "and the value it found is put back",
+      pauseRound?.restored === pauseBefore,
+      `${pauseRound?.restored} vs ${pauseBefore}`,
+    );
+
     const shotAbout = await screenshot(devtools, sessionId, "04-desktop-about");
     console.log(`  info  ${shotAbout}`);
 

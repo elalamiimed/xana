@@ -20,6 +20,7 @@ import type {
   Task,
   TrashItem,
 } from "@/lib/core/types";
+import { fromDateKeyInZone, weekdayMonthDayInZone, weekdayShortInZone } from "@/lib/core/zone";
 
 export type {
   CalendarEvent,
@@ -105,10 +106,17 @@ export function healthDays(today: string, windowDays: number): string[] {
   return out;
 }
 
-/** "Mon" for a past day, "today" for the one the room opens on. */
+/**
+ * "Mon" for a past day, "today" for the one the room opens on.
+ *
+ * The weekday comes from the app's own zone rather than from a host-local
+ * `Date`: the strip has to agree with the server's `today`, which is a Beijing
+ * day, on whatever machine the browser is running on. It is the one home for
+ * this label; the log room imports it rather than writing its own.
+ */
 export function daySlotLabel(date: string, today: string): string {
   if (date === today) return "today";
-  return new Date(`${date}T12:00:00`).toLocaleDateString(undefined, { weekday: "short" }).toLowerCase();
+  return weekdayShortInZone(fromDateKeyInZone(date)).toLowerCase();
 }
 
 /** "3" — the day of the month, so a week is readable at a glance. */
@@ -118,11 +126,7 @@ export function dayOfMonth(date: string): string {
 
 /** The whole of a day, in one word, for the strip's title attribute. */
 export function dayFullLabel(date: string): string {
-  return new Date(`${date}T12:00:00`).toLocaleDateString(undefined, {
-    weekday: "long",
-    month: "short",
-    day: "numeric",
-  });
+  return weekdayMonthDayInZone(fromDateKeyInZone(date));
 }
 
 /** True when a day has anything recorded at all. */

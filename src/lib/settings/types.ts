@@ -122,6 +122,21 @@ export interface VoiceSettings {
    */
   speechLang: string;
   /**
+   * How long a silence means "I have finished", in milliseconds.
+   *
+   * The single number behind every voice path: it is the recorder's silence
+   * window for the local transcriber, the settle window after a transcript stops
+   * changing, and the delay before a spoken question is sent through the
+   * browser's recogniser. See `pause-window.ts` for why it is one number in four
+   * places rather than four numbers.
+   *
+   * It exists because thinking mid-sentence is not the same as finishing one.
+   * The user asked for room to breathe at three seconds, so the default is four
+   * and the range runs to ten; the floor of 1.5 is where the window stops being
+   * room to think and becomes a slower interruption.
+   */
+  pauseMs: number;
+  /**
    * Keep a recogniser open and answer when she is addressed by name.
    *
    * Off by default, and deliberately so. This holds the microphone open

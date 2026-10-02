@@ -285,6 +285,17 @@ A room for the things worth editing directly rather than talking about: your
 goals, your tasks, your schedule, what you did today, and what she remembers.
 Reachable from **My cave** in the header.
 
+**Days are Beijing days.** The app's calendar is Asia/Shanghai's, not the
+machine's and not the browser's. `src/lib/core/zone.ts` names the zone once and
+everything calendar-shaped reads it: date keys, clock readings, day starts and
+ends, the weekday strip in the log, "today" and "tomorrow" on a task. That one
+place is the point. The server and the browser used to decide the day
+separately, so on any clock that is not set to Beijing the same instant could be
+"today" in the chat and "tomorrow" in the cave for eight hours out of every day.
+The zone is a constant today rather than a setting: moving it means changing
+`APP_TIME_ZONE` and nothing else, and `npm run verify:zone` re-measures the
+whole layer, including in a process whose own zone is UTC.
+
 **The goal board.** Three columns — working on, set aside, done — and you drag
 cards between them. Each card holds its own editing: title, the reason it
 matters, a horizon, a deadline, milestones you tick off, and a **moved today**
@@ -489,12 +500,12 @@ In both cases there are two ways in: the **mic button** beside the input, or
 **hands-free** — say her name and she answers without a button.
 
 **The mic button asks, or dictates, and which one it is depends on the box.**
-Press it with an **empty** input and speak: the first finished sentence is sent
-and she answers, and the microphone closes when it has. Press it with **text
-already in the box** and everything you say is appended to what you were writing
-instead, and nothing is sent until you send it. That is the difference between
-asking a question and composing a long message out loud, and the empty box is the
-only signal that separates them.
+Press it with an **empty** input and speak: what you said is sent once you have
+been quiet for the pause below, and she answers, and the microphone closes when
+she has. Press it with **text already in the box** and everything you say is
+appended to what you were writing instead, and nothing is sent until you send
+it. That is the difference between asking a question and composing a long
+message out loud, and the empty box is the only signal that separates them.
 
 > The report that produced this: *"when I ask a question she does not answer
 > it."* The microphone was working perfectly — it filled the field with the
@@ -507,6 +518,35 @@ the words appear above the field so a misheard word is visible as words rather
 than discovered as a wrong reply. What you have said survives those session
 boundaries; before that was fixed, a pause in the middle of a sentence silently
 deleted everything before it.
+
+### Room to breathe: how long a silence means you have finished
+
+**Settings → Voice → Room to breathe** is one number, and every voice path in
+the app obeys it: the mic button, dictation into the box, and hands-free
+listening. It is how long you can stay quiet mid-sentence before she takes the
+thought as finished. The default is **4.0 seconds**, and the range runs from
+1.5s to 10s.
+
+It exists because every voice path used to decide a thought was over after about
+a second, and each one decided it differently: the browser's recogniser
+finalises a result on its own schedule, the wake listener acted on a transcript
+that had merely stopped *changing* for 1.1s, and the local recorder closed a clip
+after 850ms of quiet. The user's own words were the requirement — *"i may stay
+quiet for 3 seconds, therefore give me a room to breath to continue my
+conversation"* — and the symptom of getting it wrong is not silence. It is half
+a question, answered, with the rest of it arriving as a second turn, which reads
+as mishearing rather than as interruption.
+
+While the app is waiting out your pause it says so and counts down: *Listening —
+take your time, answering in 3s*. Without the countdown a four second wait is
+indistinguishable from having been missed. **Enter sends immediately** at any
+point in the wait, so the setting is a floor on patience rather than a delay you
+have to sit through.
+
+The number is a property of the person, not of the software, which is why it is
+a slider rather than a constant: `lib/voice/pause.ts` holds the rule, the
+settings store clamps what it is given, and `npm run verify:pause` asserts the
+three seconds the user named plus a real settings-file round trip.
 
 ### Hands-free: saying her name
 
@@ -794,12 +834,13 @@ and nothing else on that surface does.
 ## Verifying it
 
 ```bash
-npm run check                # typecheck + wake word + dictation + demo + route smoke + orb + craft floor
+npm run check                # typecheck + wake word + vad + pause + dictation + speech + transcriber + trash + health log + energy + zone + cave load + task edit + demo + route smoke + orb + providers + craft floor + palette
 npm run verify:web           # with the server running: the real HTTP surface
 npm run verify:browser       # with the server running: a real browser
 npm run verify:crypto        # the keyless quote path, on a stubbed CoinGecko
 npm run verify:health-bridge # the phone door: token, statuses, day upserts
 npm run verify:health-log    # the log: the sentences, the guards, clearing a reading
+npm run verify:zone          # the app's clock: day keys, day bounds, the four ICS shapes
 npm run verify:durability    # local saving: folding, reopening, backup, a kill
 npm run verify:stt           # the optional Python transcriber: routes, honesty, wake port
 ```
@@ -873,6 +914,16 @@ node scripts/probe-status-rows.mjs 40         # is the one-row-per-connection ru
   first-class rather than extras. Four separate versions of the matching were
   wrong in ways only this file caught, including one that stopped recognising
   "okay Xana" while still answering "can I ask you something".
+- `npm run verify:pause` — the room to breathe, in the units the user asked for.
+  Three seconds of quiet inside a four second window does not end the turn, and
+  neither does 3.9; 4.0 does, on the millisecond. It also covers the clamp on both
+  ends for a hand-edited settings file, the recorder window the VAD is handed, the
+  copy the user reads while waiting, and a real settings-file round trip in a
+  throwaway directory — because the slider and the store are two hand-written
+  validators for one number and it is the file that decides. The last group is a
+  source reading of the four call sites, which is the assertion that keeps the
+  feature from quietly un-shipping itself: every one of those files looked correct
+  while it was sending half a sentence.
 - `npm run verify:dictation` — that a pause does not delete what you said. The
   fixtures are the event stream a browser actually emits, session boundary
   included, because the session ending mid-sentence is exactly what cannot be
@@ -909,6 +960,15 @@ node scripts/probe-status-rows.mjs 40         # is the one-row-per-connection ru
   replacing, a reading taken back leaving no row behind, and — the assertion the
   whole feature is for — that the number written in the room moves the energy
   forecast the briefing shows.
+- `npm run verify:zone` — the app's clock is Beijing's and not the machine's.
+  Every measurement is taken at a fixed instant with a known Beijing reading:
+  17:30Z is 01:30 on the next day, a day starts and ends at Beijing midnight,
+  23:30 is night and 07:00 is morning, a Monday weekly series keeps its 09:00
+  wall clock, and the four ICS shapes (`Z`, floating, `TZID` qualified and
+  `VALUE=DATE`) land where RFC 5545 says they should. The assertion that matters
+  most asks its questions again in a child process whose own zone is UTC, because
+  this machine is already Asia/Shanghai: a suite that only agrees with the host
+  would stay green while the feature did nothing.
 - `npm run verify:transcriber` — that the app starts the Python service rather  than asking you to. The decision is a pure function of five facts and is driven
   across all 32 combinations, because every way it can be wrong is invisible from
   outside: starting a second copy of a service that is still loading its model,

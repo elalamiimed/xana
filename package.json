@@ -30,6 +30,8 @@
     "verify:vad": "node --import ./scripts/ts-loader.mjs scripts/check-vad.ts",
     "verify:dictation": "node --import ./scripts/ts-loader.mjs scripts/check-dictation.ts",
     "verify:speech": "node --import ./scripts/ts-loader.mjs scripts/check-speech-language.ts",
+    "verify:pause": "node --import ./scripts/ts-loader.mjs scripts/check-pause.ts",
+    "verify:zone": "node --import ./scripts/ts-loader.mjs scripts/check-zone.ts",
     "verify:transcriber": "node --import ./scripts/ts-loader.mjs scripts/check-stt-supervisor.ts",
     "verify:trash": "node --import ./scripts/ts-loader.mjs scripts/check-trash.ts",
     "verify:health-log": "node --import ./scripts/ts-loader.mjs scripts/check-health-log.ts",
@@ -49,7 +51,7 @@
     "debug:key": "node scripts/debug-key.mjs",
     "debug:engine": "node scripts/debug-engine.mjs",
     "inspect": "node --import ./scripts/ts-loader.mjs scripts/inspect.ts",
-    "check": "npm run typecheck && npm run verify:wake && npm run verify:vad && npm run verify:dictation && npm run verify:speech && npm run verify:transcriber && npm run verify:trash && npm run verify:health-log && npm run verify:cave-load && npm run verify:task-edit && npm run demo && npm run smoke && npm run verify:orb && npm run verify:providers && npm run check:design && npm run check:palette"
+    "check": "npm run typecheck && npm run verify:wake && npm run verify:vad && npm run verify:pause && npm run verify:dictation && npm run verify:speech && npm run verify:transcriber && npm run verify:trash && npm run verify:health-log && npm run verify:energy && npm run verify:zone && npm run verify:cave-load && npm run verify:task-edit && npm run demo && npm run smoke && npm run verify:orb && npm run verify:providers && npm run check:design && npm run check:palette"
   },
   "dependencies": {
     "better-sqlite3": "^13.0.3",

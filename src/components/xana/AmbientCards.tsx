@@ -1,6 +1,7 @@
 "use client";
 
 import type { ActionIntent, Analysis, LifeState, Presence } from "@/lib/api/contract";
+import { clockInZone, daysBetweenInZone, monthDayInZone } from "@/lib/core/zone";
 
 import { Bar } from "./Rings";
 import GhostButton from "./GhostButton";
@@ -40,37 +41,29 @@ export interface AmbientCardsProps {
   modelName: string;
 }
 
-/** A relative day label for an ISO timestamp. Null when unparseable. */
+/**
+ * A relative day label for an ISO timestamp. Null when unparseable.
+ *
+ * The day count comes from the app's own zone, so a task due tonight at 23:00
+ * is "today" here and on the server, whatever the browser's clock is set to.
+ */
 function relativeDay(iso: string): string | null {
   const when = new Date(iso);
   if (Number.isNaN(when.getTime())) return null;
-  const now = new Date();
-  const startOfToday = new Date(
-    now.getFullYear(),
-    now.getMonth(),
-    now.getDate(),
-  ).getTime();
-  const days = Math.round(
-    (new Date(when.getFullYear(), when.getMonth(), when.getDate()).getTime() -
-      startOfToday) /
-      86_400_000,
-  );
+  const days = daysBetweenInZone(new Date(), when);
 
   if (days < 0) return `${Math.abs(days)}d overdue`;
   if (days === 0) return "today";
   if (days === 1) return "tomorrow";
   if (days < 7) return `in ${days}d`;
-  return when.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return monthDayInZone(when);
 }
 
-/** "14:30" in the user's locale, or null when the timestamp is unusable. */
+/** "14:30" for an instant, in the app's zone, or null when it is unusable. */
 function clockTime(iso: string): string | null {
   const when = new Date(iso);
   if (Number.isNaN(when.getTime())) return null;
-  return when.toLocaleTimeString(undefined, {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  return clockInZone(when);
 }
 
 /** Minutes from `now` until an instant, floored at zero. */

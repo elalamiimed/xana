@@ -43,6 +43,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 
 import type { AdapterStatus, CalendarEvent } from "../core/types";
 import { startOfDay, endOfDay, addDays, uid } from "../core/time";
+import { APP_TIME_ZONE } from "../core/zone";
 import { defineAdapter, errorMessage, httpJson, status, type LifeAdapter } from "../adapters/types";
 import {
   definePlugin,
@@ -445,6 +446,28 @@ export interface GoogleReadResult {
 }
 
 /**
+ * The `events.list` query, built from the app's own days.
+ *
+ * `timeZone` is sent explicitly rather than left to the account's default. The
+ * window alone is not enough: Google expands a recurring event in the zone it is
+ * told about, so a 09:00 series read with a UTC window can expand at 09:00 UTC
+ * and land on the previous day's row here. The window is the app's day boundary,
+ * so the first and last days are whole days in Beijing rather than in UTC.
+ *
+ * Exported so the query can be asserted without a network call.
+ */
+export function eventsQuery(now: Date = new Date()): URLSearchParams {
+  return new URLSearchParams({
+    timeMin: startOfDay(now).toISOString(),
+    timeMax: endOfDay(addDays(now, 7)).toISOString(),
+    timeZone: APP_TIME_ZONE,
+    singleEvents: "true",
+    orderBy: "startTime",
+    maxResults: "250",
+  });
+}
+
+/**
  * Read events from the account's calendar.
  *
  * `singleEvents=true` is what makes a recurring event arrive as the individual
@@ -456,13 +479,7 @@ export async function readEvents(now: Date = new Date()): Promise<GoogleReadResu
   const auth = await accessToken();
   if ("error" in auth) return { events: [], notes: [], error: auth.error };
 
-  const params = new URLSearchParams({
-    timeMin: startOfDay(now).toISOString(),
-    timeMax: endOfDay(addDays(now, 7)).toISOString(),
-    singleEvents: "true",
-    orderBy: "startTime",
-    maxResults: "250",
-  });
+  const params = eventsQuery(now);
 
   try {
     const data = await httpJson<GoogleEventsResponse>(

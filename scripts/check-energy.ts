@@ -263,13 +263,20 @@ await say("remind me to buy dinner ingredients");
 check("shopping for dinner does not log one", mealsLogged() === beforePlan, String(mealsLogged()));
 
 // The reply depends on how many are already logged, so this asserts the shape
-// rather than a number: it either counts or says the day is done, and it never
-// congratulates someone for eating.
+// rather than a number: it counts the meals, says the day is done, or says the
+// meal is already on the day — and it never congratulates someone for eating.
+//
+// The third shape is the one that made this assertion stale. Since meals are
+// logged by NAME, saying "had lunch" twice is answered rather than counted
+// twice, which is the promise this check is about; the pattern had two
+// alternatives and the reply was using a third. `verify:energy` was not in the
+// `check` chain at the time, so the suite sat red for two changes without
+// anybody seeing it.
 const mealReply = await say("had lunch");
 const mealText = mealReply.outcome?.message ?? "";
 check(
   "the reply counts the meals rather than congratulating",
-  /of 3|all three/.test(mealText),
+  /of 3|all three|already logged/.test(mealText),
   mealText,
 );
 check("and does not praise the user for eating", !/well done|nice|great|good job/i.test(mealText), mealText);
