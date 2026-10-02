@@ -779,6 +779,28 @@ now purges a goal and asserts its steps cannot be restored — asserted through
 `restoreFromTrash`, because the listing hides them and a test that only read the
 listing would pass while the rows piled up.
 
+**AND A DERIVED MEMORY HAS TO STAY FORGOTTEN**
+
+Most memories are projections: a note becomes a note memory, a week of sleep
+becomes one average, an open high-priority task becomes a standing intention. Each
+carries a `key:` tag so the ingest pass can skip what it has already written — and
+that pass read only the live table. So forgetting a derived memory lasted about a
+minute: the next refresh saw the key as unknown and wrote the record straight back.
+
+This was watched happening on the real database. A sleep average the user deleted
+at 23:52 was in the list again at 23:54, which meant a user emptying the room was
+deleting more slowly than the job refilling it — and that everything the Memory
+room says about a removed memory was false for anything the ingester owns.
+
+`knownKeys` now counts the bin as known, so a forgotten key stays forgotten for the
+life of its tombstone. Past the seven days the tombstone is gone and the fact can
+be derived again: that is the bin's window, deliberately, and not a second and
+quieter rule about forgetting. To remove a derived memory for good, remove what it
+is derived from.
+
+The general shape: **a delete is a decision, and every background job that can
+re-create the record has to be able to see it.**
+
 ### 27. A screen that never asks looks exactly like an empty life
 
 The report: *"Goals and tasks show empty but we have some goals and tasks in the

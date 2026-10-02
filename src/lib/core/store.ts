@@ -648,6 +648,43 @@ export class XanaStore {
     return rows.filter((row) => payloadGoalId(row.payload) === goalId).map((row) => row.ref_id);
   }
 
+  /**
+   * The `key:` tags of the memories that are in the bin.
+   *
+   * A derived memory is a projection of the data underneath it, so an ingest
+   * pass that cannot see the tombstone writes it straight back. Forgetting
+   * "Sleep averaged 7.3h over 6 days" therefore lasted about a minute — and
+   * the Memory room's promise that a removed memory is not recalled again was
+   * false for everything the ingester owns.
+   *
+   * A forgotten key counts as known until its tombstone expires. After that
+   * the fact is free to be derived again, which is the bin's window and not a
+   * second, quieter rule about forgetting.
+   */
+  trashedMemoryKeys(): string[] {
+    const rows = this.db
+      .prepare(`SELECT payload FROM trash WHERE kind = 'memory'`)
+      .all() as Array<{ payload: string }>;
+
+    const keys: string[] = [];
+    for (const row of rows) {
+      let parsed: { tags?: unknown };
+      try {
+        parsed = JSON.parse(row.payload) as { tags?: unknown };
+      } catch {
+        continue;
+      }
+      // The row was stored whole, so its `tags` column is JSON text inside the
+      // JSON payload: one decode for the row, one for the column.
+      const tags = typeof parsed.tags === "string" ? j<string[]>(parsed.tags, []) : parsed.tags;
+      if (!Array.isArray(tags)) continue;
+      for (const tag of tags) {
+        if (typeof tag === "string" && tag.startsWith("key:")) keys.push(tag.slice(4));
+      }
+    }
+    return keys;
+  }
+
   /* ---------------- memories ---------------- */
 
   remember(input: {

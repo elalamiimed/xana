@@ -222,7 +222,7 @@ export function ingestSnapshot(
   return result;
 }
 
-/** Every `key:` tag currently in the store. */
+/** Every `key:` tag currently in the store — including the ones in the bin. */
 export function knownKeys(store: XanaStore = getStore()): Set<string> {
   const keys = new Set<string>();
   for (const mem of store.allMemories()) {
@@ -230,6 +230,20 @@ export function knownKeys(store: XanaStore = getStore()): Set<string> {
       if (tag.startsWith("key:")) keys.add(tag.slice(4));
     }
   }
+
+  /**
+   * A memory the user forgot is not unknown — it is forgotten, and this is
+   * the pass that has to know the difference.
+   *
+   * Every key here is a projection of live data: a note, a completed task, a
+   * week of sleep. Reading only the live memories meant the tombstone was
+   * invisible, so the next ingest pass wrote the record straight back and the
+   * user watched something they had just removed reappear within the minute.
+   * Counting the bin's keys as known is what makes forgetting a decision
+   * rather than a race with a background job.
+   */
+  for (const key of store.trashedMemoryKeys()) keys.add(key);
+
   return keys;
 }
 

@@ -39,6 +39,7 @@ import path from "node:path";
 import { XanaStore, getStore, setStore } from "../src/lib/core/store";
 import { TRASH_DAYS } from "../src/lib/core/types";
 import { executeAction } from "../src/lib/actions/executor";
+import { knownKeys } from "../src/lib/derived/memory";
 import { localMind } from "../src/lib/mind/local";
 import { runCaveOperation } from "../src/lib/cave/ops";
 
@@ -272,6 +273,51 @@ group("A forgotten memory comes back still findable", () => {
 /* ------------------------------------------------------------------ */
 /* The window                                                          */
 /* ------------------------------------------------------------------ */
+
+/**
+ * A derived memory must not come back from the dead.
+ *
+ * Every key in `knownKeys` is a projection of live data — a note, a completed
+ * task, a week of sleep — so an ingest pass that cannot see the bin writes the
+ * record straight back. This was watched happening on the real database: a
+ * sleep average forgotten at 23:52 was in the list again at 23:54, which meant
+ * the list of things to delete grew while it was being deleted.
+ *
+ * The assertion is on `knownKeys` rather than on a second ingest, because the
+ * ingest is the caller and the key set is the decision it makes.
+ */
+group("A forgotten derived memory stays forgotten", () => {
+  const derived = store.remember({
+    kind: "fact",
+    title: "Sleep averaged 7.3h over 6 days",
+    content: "Trailing sleep average with 1.2h of debt.",
+    entities: [],
+    tags: ["health", "sleep", "key:health-sleep:2026-10-02"],
+    salience: 0.3,
+    source: "health",
+  });
+  const key = "health-sleep:2026-10-02";
+
+  check("the key is known while the memory is live", knownKeys(store).has(key));
+  check("forgetting it takes", store.forgetMemory(derived.id));
+  check(
+    "and the key is still known, from the bin",
+    knownKeys(store).has(key),
+    "without this the next ingest pass re-derives it within the minute",
+  );
+  check("the bin holds it", store.listTrash().some((i) => i.kind === "memory" && i.id === derived.id));
+
+  check("restoring it puts it back", store.restoreFromTrash("memory", derived.id));
+  check("and the key is known from the memory itself again", knownKeys(store).has(key));
+
+  // Past the deadline the tombstone is gone, and so is the record of the
+  // decision: the fact is free to be derived again. That is the bin's window,
+  // not a second and quieter rule about forgetting.
+  store.forgetMemory(derived.id);
+  store.purgeOne("memory", derived.id);
+  check("once the tombstone is purged the key is free again", !knownKeys(store).has(key));
+  check("and the bin is empty behind it", store.listTrash().length === 0, JSON.stringify(store.listTrash()));
+});
 
 group("Seven days, and then it is really gone", () => {
   const task = store.createTask({ title: "Old mistake" });

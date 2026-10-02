@@ -309,6 +309,17 @@ the three questions a user actually has:
   means. It goes to the **trash** rather than nowhere, so a misheard "forget
   that" is undoable for a week without weakening any of the above.
 
+Most of what is in memory is derived rather than told: a note becomes a note
+memory, a week of sleep becomes one average, an open high-priority task becomes a
+standing intention. Each carries a `key:` tag so the ingest pass can skip what it
+has already written — and that pass reads the bin as well as the live table, so **a
+forgotten derived memory is not re-derived while its tombstone exists**. It used to
+read only the live table, which made forgetting a derived memory last about a
+minute: the next refresh saw the key as unknown and wrote the record back. Past the
+seven days the tombstone is gone and the fact is free to be derived again — that is
+the bin's window, deliberately, and not a second and quieter rule about forgetting.
+To remove a derived memory for good, remove what it is derived from.
+
 **The trash room.** Everything removed — tasks, events, goals, milestones, notes,
 memories — lands here and stays for **seven days**, with a **Restore** button on
 each row and a **days left** countdown. Restoring puts the record back exactly as
