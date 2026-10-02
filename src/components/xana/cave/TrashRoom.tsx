@@ -60,7 +60,7 @@ export default function TrashRoom({ controller }: TrashRoomProps) {
   if (controller.trash.length === 0) {
     return (
       <section className="mx-auto mt-10 w-full max-w-[var(--content-max)] px-6">
-        <h3 className="text-[13px] font-normal tracking-[0.02em] text-accent uppercase">Trash</h3>
+        <h3 className="label">Trash</h3>
         <p className="mt-3 max-w-[62ch] text-[13px] leading-relaxed font-light text-dim">
           {emptyNote(
             controller.loading,
@@ -74,7 +74,7 @@ export default function TrashRoom({ controller }: TrashRoomProps) {
   return (
     <section className="mx-auto mt-10 w-full max-w-[var(--content-max)] px-6 pb-10">
       <div className="flex flex-wrap items-baseline justify-between gap-3">
-        <h3 className="text-[13px] font-normal tracking-[0.02em] text-accent uppercase">Trash</h3>
+        <h3 className="label">Trash</h3>
         <p className="text-[12px] font-normal text-faint">
           {controller.trash.length} item{controller.trash.length === 1 ? "" : "s"}, gone after{" "}
           {TRASH_DAYS} days.
@@ -87,7 +87,7 @@ export default function TrashRoom({ controller }: TrashRoomProps) {
             key={`${item.kind}:${item.id}`}
             className="card flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3"
           >
-            <span className="shrink-0 rounded-full border border-hairline px-2 py-[2px] text-[12px] font-normal tracking-[0.02em] text-faint uppercase">
+            <span className="label shrink-0 rounded-full border border-hairline px-2 py-[2px]">
               {TRASH_LABELS[item.kind]}
             </span>
 
@@ -101,23 +101,23 @@ export default function TrashRoom({ controller }: TrashRoomProps) {
               </p>
             </div>
 
-            <div className="flex shrink-0 items-center gap-3">
+            <div className="flex shrink-0 items-center gap-2">
               <button
                 type="button"
                 onClick={() => void controller.run("trash.restore", { kind: item.kind, id: item.id }, `restore:${item.id}`)}
                 disabled={controller.pending.has(`restore:${item.id}`)}
-                className="rounded-full border border-hairline px-3 py-1 text-[12px] font-normal text-text transition-colors duration-[var(--t-fast)] hover:bg-surface-2 disabled:opacity-40"
+                className="chip chip-round chip-accent"
               >
-                {controller.pending.has(`restore:${item.id}`) ? "Restoring…" : "Restore"}
+                {controller.pending.has(`restore:${item.id}`) ? "restoring…" : "restore"}
               </button>
               <button
                 type="button"
                 onClick={() => void controller.run("trash.purge", { kind: item.kind, id: item.id }, `purge:${item.id}`)}
                 disabled={controller.pending.has(`purge:${item.id}`)}
                 title={`Delete this for good — this one cannot be undone, and it would otherwise go in ${item.daysLeft} day${item.daysLeft === 1 ? "" : "s"}`}
-                className="text-[12px] font-normal text-faint underline decoration-hairline underline-offset-2 transition-colors duration-[var(--t-fast)] hover:text-danger disabled:opacity-40"
+                className="chip chip-round chip-danger"
               >
-                Delete for good
+                delete for good
               </button>
             </div>
           </li>
@@ -139,25 +139,25 @@ export default function TrashRoom({ controller }: TrashRoomProps) {
                 setConfirmEmpty(false);
                 void controller.run("trash.empty");
               }}
-              className="rounded-full border border-danger/40 px-3 py-1 text-[12px] font-normal text-danger transition-colors duration-[var(--t-fast)] hover:bg-danger/08"
+              className="chip chip-round chip-danger"
             >
-              Yes, empty it
+              yes, empty it
             </button>
             <button
               type="button"
               onClick={() => setConfirmEmpty(false)}
-              className="text-[12px] font-normal text-dim transition-colors duration-[var(--t-fast)] hover:text-text"
+              className="chip chip-round"
             >
-              Never mind
+              never mind
             </button>
           </>
         ) : (
           <button
             type="button"
             onClick={() => setConfirmEmpty(true)}
-            className="text-[12px] font-normal text-faint underline decoration-hairline underline-offset-2 transition-colors duration-[var(--t-fast)] hover:text-dim"
+            className="chip chip-round chip-danger"
           >
-            Empty the bin
+            empty the bin
           </button>
         )}
       </div>

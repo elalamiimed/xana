@@ -183,10 +183,22 @@ function Swatch({
       type="button"
       onClick={onSelect}
       aria-pressed={selected}
-      className={`group flex items-center gap-3 rounded-[var(--r-md)] border px-3 py-2.5 text-left transition-all duration-[var(--t-fast)] ${
+      /* Named properties, never the shorthand that animates all of them: a
+         swatch changes two things on hover and nothing else, and a transition
+         that will animate any property is how the next layout change ends up
+         moving by accident. `tap` is the floor: the swatch clears 44px at
+         390px today, and the class is what stops a later type change from
+         quietly taking that away.
+
+         The selected wash is the ramp token by name, not the utility spelling
+         for eight percent: Tailwind rejects a bare opacity with a leading
+         zero, so the two lowest ramp steps compile to nothing at all while
+         rule 9 still accepts the spelling. `--a-08` is the token the ramp
+         actually defines, and it is what paints this. */
+      className={`group tap flex items-center gap-3 rounded-[var(--r-md)] border px-3 py-2.5 text-left transition-colors duration-[var(--t-fast)] ${
         selected
-          ? "border-accent/40 bg-accent/10"
-          : "border-hairline hover:border-hairline-2 hover:bg-surface-2"
+          ? "border-accent/40 bg-[var(--a-08)] active:bg-accent/14"
+          : "border-hairline hover:border-hairline-2 hover:bg-surface-2 active:bg-surface-3"
       }`}
     >
       <span className="relative h-7 w-7 shrink-0" aria-hidden="true">
@@ -332,9 +344,19 @@ export default function AppearancePanel({
         title="Palette"
         blurb="Six hand-tuned pairs. The whole interface — borders, washes, glows, the orb — re-derives itself from these two colours, so nothing is left behind when you switch."
       >
+        {/* A labelled group of toggle buttons, NOT a radiogroup.
+            The audit was right that `role="radiogroup"` here held zero
+            radios, and the fix is the group rather than real radios: the
+            state this control can be in is "none of these" — two hand-picked
+            colours match no preset, and the paragraph below says the theme is
+            custom — which a radio group cannot express honestly, because its
+            value is supposed to be one of its options. Each swatch is a
+            toggle that says whether *it* is the one in force, which is what
+            `aria-pressed` means, and it is the same vocabulary the rooms use
+            for a chosen filter. */}
         <div
-          role="radiogroup"
-          aria-label="Theme"
+          role="group"
+          aria-label="Theme presets"
           className="grid grid-cols-1 gap-2 sm:grid-cols-2"
         >
           {THEME_PRESETS.map((preset) => (
@@ -356,7 +378,12 @@ export default function AppearancePanel({
         {/* Custom colours. The native picker is deliberate: it is the one
             control that already knows about the OS colour wheel, screen
             eyedroppers and saved swatches, and reimplementing it badly
-            would be a worse experience than using it. */}
+            would be a worse experience than using it.
+
+            The well itself is an OS widget this panel cannot restyle, so its
+            states are on the box around it: a hairline that warms on hover,
+            the shared focus ring, `--a-40` while pressed, and `icon-tap` so a
+            thumb gets 44px on a phone instead of the 32px pointer size. */}
         <div className="grid grid-cols-1 gap-4 border-t border-hairline pt-5 sm:grid-cols-2">
           <div>
             <label
@@ -385,7 +412,7 @@ export default function AppearancePanel({
                   };
                   stage(patch, previewAfter(appearance, patch));
                 }}
-                className="h-8 w-12 cursor-pointer rounded-[var(--r-sm)] border border-hairline bg-transparent"
+                className="icon-tap h-8 w-12 cursor-pointer rounded-[var(--r-sm)] border border-hairline bg-transparent transition-colors duration-[var(--t-fast)] hover:border-hairline-2 active:border-accent/40"
               />
               <code className="font-mono text-[12px] text-dim">
                 rgb({appearance.accent})
@@ -417,7 +444,7 @@ export default function AppearancePanel({
                   };
                   stage(patch, previewAfter(appearance, patch));
                 }}
-                className="h-8 w-12 cursor-pointer rounded-[var(--r-sm)] border border-hairline bg-transparent"
+                className="icon-tap h-8 w-12 cursor-pointer rounded-[var(--r-sm)] border border-hairline bg-transparent transition-colors duration-[var(--t-fast)] hover:border-hairline-2 active:border-accent/40"
               />
               <code className="font-mono text-[12px] text-dim">
                 rgb({appearance.accent2})

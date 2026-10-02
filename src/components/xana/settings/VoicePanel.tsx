@@ -302,11 +302,12 @@ export default function VoicePanel({ view, onSave, saving }: VoicePanelProps) {
                   It was a bare warning, and it read as an error message — the
                   user quoted it back as though something had gone wrong. It is
                   not a failure: it is the one trade this feature makes, and it
-                  belongs next to the switch that makes it. */}
+                  belongs next to the switch that makes it. The label is the
+                  shared `.label`, not a fourth uppercase recipe: 12px at
+                  0.02em was the same idea drawn smaller and looser than the
+                  one the rest of the interface uses. */}
               <div className="card px-4 py-3">
-                <p className="text-[12px] leading-relaxed font-normal tracking-[0.02em] text-dim uppercase">
-                  Privacy note
-                </p>
+                <p className="label">Privacy note</p>
                 <p className="mt-1.5 text-[12px] leading-relaxed font-normal text-dim">
                   The microphone belongs to the browser, not to Xana. In Edge the
                   audio goes to Microsoft&apos;s speech service and in Chrome to

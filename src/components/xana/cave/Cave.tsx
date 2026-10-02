@@ -257,7 +257,7 @@ export default function Cave({ open, onClose, initialRoom = "goals" }: CaveProps
             type="button"
             onClick={onClose}
             aria-label="Close My cave"
-            className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-dim transition-colors duration-[var(--t-fast)] hover:bg-surface-2 hover:text-text"
+            className="icon-tap grid h-8 w-8 shrink-0 place-items-center rounded-full text-dim transition-colors duration-[var(--t-fast)] hover:bg-surface-2 hover:text-text"
           >
             <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
               <path d="M1 1l10 10M11 1L1 11" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
@@ -291,53 +291,61 @@ export default function Cave({ open, onClose, initialRoom = "goals" }: CaveProps
       {/* ---------------- body ---------------- */}
       <div ref={panelRef} className="min-h-0 flex-1 overflow-y-auto">
         {room === "goals" ? (
-          <div className="px-6 py-5">
-            {/* quick add */}
-            <div className="flex flex-wrap items-center gap-3">
-              <input
-                value={quickAdd}
-                placeholder="What are you working towards? Try “this year: run a marathon by 2026-04-01”"
-                onChange={(event) => setQuickAdd(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") void addGoal();
-                  if (event.key === "Escape" && quickAdd) {
-                    event.stopPropagation();
-                    setQuickAdd("");
-                  }
-                }}
-                className="field max-w-[620px] flex-1"
-                aria-label="Add a goal"
-              />
-              <button
-                type="button"
-                onClick={() => void addGoal()}
-                disabled={!quickAdd.trim()}
-                className="btn btn-primary"
-              >
-                Add
-              </button>
-              <input
-                value={query}
-                placeholder="Filter"
-                onChange={(event) => setQuery(event.target.value)}
-                className="field max-w-[180px]"
-                aria-label="Filter goals"
-              />
-              <button
-                type="button"
-                onClick={() => setOnlyAtRisk((value) => !value)}
-                aria-pressed={onlyAtRisk}
-                className={`btn ${onlyAtRisk ? "btn-primary" : "btn-ghost"}`}
-              >
-                {onlyAtRisk ? "Showing what needs attention" : "Only what needs attention"}
-              </button>
-            </div>
+          /* The board is the one room that is not a form or a list: three
+             columns of cards have to sit side by side, so the room's own bound
+             is 1180px rather than the 760px reading measure the other rooms
+             take. The quick-add form keeps the reading measure inside it,
+             because it is a form, and both are centred, so the form reads as
+             the way onto the board rather than as a separate panel above it. */
+          <div className="mx-auto w-full max-w-[1180px] px-6 py-5">
+            <div className="mx-auto w-full max-w-[var(--content-max)]">
+              {/* quick add */}
+              <div className="flex flex-wrap items-center gap-3">
+                <input
+                  value={quickAdd}
+                  placeholder="What are you working towards? Try “this year: run a marathon by 2026-04-01”"
+                  onChange={(event) => setQuickAdd(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") void addGoal();
+                    if (event.key === "Escape" && quickAdd) {
+                      event.stopPropagation();
+                      setQuickAdd("");
+                    }
+                  }}
+                  className="field tap max-w-[620px] flex-1"
+                  aria-label="Add a goal"
+                />
+                <button
+                  type="button"
+                  onClick={() => void addGoal()}
+                  disabled={!quickAdd.trim()}
+                  className="btn btn-primary"
+                >
+                  Add
+                </button>
+                <input
+                  value={query}
+                  placeholder="Filter"
+                  onChange={(event) => setQuery(event.target.value)}
+                  className="field tap max-w-[180px]"
+                  aria-label="Filter goals"
+                />
+                <button
+                  type="button"
+                  onClick={() => setOnlyAtRisk((value) => !value)}
+                  aria-pressed={onlyAtRisk}
+                  className={`btn ${onlyAtRisk ? "btn-primary" : "btn-ghost"}`}
+                >
+                  {onlyAtRisk ? "Showing what needs attention" : "Only what needs attention"}
+                </button>
+              </div>
 
-            <p className="mt-3 max-w-[80ch] text-[12px] leading-relaxed font-normal text-faint">
-              Drag a card between columns to change where it stands. Times and
-              horizons can be set on the card itself, and “moved today” records
-              progress on a goal that has no steps to tick.
-            </p>
+              <p className="mt-3 max-w-[80ch] text-[12px] leading-relaxed font-normal text-faint">
+                Drag a card between columns to change where it stands. Times and
+                horizons can be set on the card itself, and “moved today” records
+                progress on a goal that has no steps to tick.
+              </p>
+            </div>
 
             <div className="mt-5">
               <CaveBoard controller={controller} query={query} onlyAtRisk={onlyAtRisk} />

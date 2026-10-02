@@ -145,18 +145,37 @@ export default function CaveBoard({ controller, query, onlyAtRisk }: CaveBoardPr
               if (!event.currentTarget.contains(event.relatedTarget as Node)) setDropAt(null);
             }}
             onDrop={(event) => handleDrop(event, column.id)}
-            className={`flex min-h-[180px] flex-col rounded-[var(--r-lg)] border p-3 transition-colors duration-150 ${
+            /* The lane is a background, not a card.
+               It used to be a bordered, rounded, filled box holding `.card`
+               GoalCards, and a card inside a card is the nested surface
+               craft-floor refuses outright: two boxes each claiming an
+               elevation the other already has, which reads as neither. The
+               card is the thing you pick up and drag, so the card keeps the
+               surface, the border and the shadow, and the lane is left as a
+               wash. The border stays in the rule as `border-transparent` so
+               the drop state cannot shift the cards by a pixel when it
+               arrives. */
+            className={`flex min-h-[180px] flex-col rounded-[var(--r-lg)] border p-3 transition-colors duration-[var(--t-fast)] ${
               dropAt?.startsWith(`${column.id}:`)
-                ? "border-accent/40 bg-accent/5"
-                : "border-hairline bg-surface/40"
+                ? // The ramp entry itself, not a utility spelled with a
+                  // leading-zero alpha: Tailwind v4 emits no rule for that
+                  // spelling, so the wash would silently paint nothing. Rule 9
+                  // now rejects it outright, which is how this was caught.
+                  "border-dashed border-accent/40 bg-[var(--a-04)]"
+                : "border-transparent bg-surface/40"
             }`}
             aria-label={`${column.label}, ${entries.length} goal${entries.length === 1 ? "" : "s"}`}
           >
             <header className="mb-3 flex items-baseline justify-between gap-2 px-1">
               <div>
                 <h4 className="label">{column.label}</h4>
+                {/* What a drop into this lane means is said once, by the lane
+                    that has room to say it: in the empty state below until it
+                    holds something, and by the drop line while a card is over
+                    it. Under the count it was three identical stat lines with
+                    the one useful clause half said. */}
                 <p className="mt-0.5 text-[12px] font-normal text-faint">
-                  {entries.length} · dropping here {column.onto}
+                  {entries.length} goal{entries.length === 1 ? "" : "s"}
                 </p>
               </div>
               {entries.length > 0 ? (
@@ -189,8 +208,11 @@ export default function CaveBoard({ controller, query, onlyAtRisk }: CaveBoardPr
               ) : null}
 
               {entries.length === 0 ? (
-                <p className="px-1 py-6 text-center text-[12px] font-normal text-faint">
-                  {emptyNote(controller.loading, "Nothing here yet.")}
+                <p className="px-1 py-6 text-center text-[12px] leading-relaxed font-normal text-faint">
+                  {emptyNote(
+                    controller.loading,
+                    `Nothing here yet. Dropping a card here ${column.onto}.`,
+                  )}
                 </p>
               ) : null}
             </div>

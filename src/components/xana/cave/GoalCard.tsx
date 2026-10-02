@@ -131,9 +131,16 @@ export default function GoalCard({
           event.stopPropagation();
         }
       }}
+      aria-busy={busy}
+      /* A save in flight used to wear Tailwind's stock pulse: another
+         product's loading state, and motion the user did not cause on a board
+         they are reading. The card dims and the meta row says "saving…"
+         instead. That is a static state, which is also the only kind that
+         still reads under `prefers-reduced-motion`, where there is nothing
+         left to reduce. */
       className={`card card-entry group cursor-grab p-4 active:cursor-grabbing ${
-        dragging ? "opacity-40" : "opacity-100"
-      } ${busy ? "animate-pulse" : ""}`}
+        dragging ? "opacity-40" : busy ? "opacity-70" : "opacity-100"
+      }`}
       style={{ transitionProperty: "opacity, border-color, background-color" }}
     >
       {/* ---------------- title ---------------- */}
@@ -169,13 +176,13 @@ export default function GoalCard({
                   setEditingTitle(false);
                 }
               }}
-              className="field resize-none text-[14px] leading-snug"
+              className="field resize-none leading-snug"
             />
           ) : (
             <button
               type="button"
               onClick={() => setEditingTitle(true)}
-              className="block w-full text-left text-[14px] leading-snug font-normal text-text hover:text-accent"
+              className="tap block w-full text-left text-[14px] leading-snug font-normal text-text hover:text-accent"
               title="Click to rename"
             >
               {goal.title}
@@ -199,13 +206,13 @@ export default function GoalCard({
                 }
               }}
               placeholder="Why does this matter?"
-              className="field mt-2 resize-none text-[12px]"
+              className="field mt-2 resize-none"
             />
           ) : goal.why ? (
             <button
               type="button"
               onClick={() => setEditingWhy(true)}
-              className="mt-1 block w-full text-left text-[12px] leading-relaxed font-normal text-dim hover:text-text"
+              className="tap mt-1 block w-full text-left text-[12px] leading-relaxed font-normal text-dim hover:text-text"
             >
               {goal.why}
             </button>
@@ -223,6 +230,7 @@ export default function GoalCard({
           </span>
         ) : null}
         {goal.area ? <span className="timestamp">{goal.area}</span> : null}
+        {busy ? <span className="timestamp text-accent">saving…</span> : null}
       </div>
 
       {/* Progress. A bar rather than a ring: these sit in a narrow card, and
@@ -244,20 +252,26 @@ export default function GoalCard({
         <ul className="mt-3 space-y-1 border-t border-hairline pt-3">
           {goal.milestones.map((milestone) => (
             <li key={milestone.id} className="group/ms flex items-start gap-2">
-              <input
-                data-no-drag
-                type="checkbox"
-                checked={milestone.done}
-                onChange={(event) =>
-                  void controller.run(
-                    "milestone.setDone",
-                    { id: milestone.id, done: event.target.checked },
-                    goal.id,
-                  )
-                }
-                aria-label={`${milestone.title}${milestone.done ? ", done" : ""}`}
-                className="mt-[3px] h-3.5 w-3.5 shrink-0 cursor-pointer accent-[var(--accent)]"
-              />
+              {/* The box stays 14px: a native checkbox drawn at 44px is a
+                  different control. The label around it is what grows, because
+                  the label is the real target a thumb aims at and the box the
+                  phone measurement reads. */}
+              <label data-no-drag className="tap -ml-1 grid shrink-0 cursor-pointer place-items-center px-1">
+                <input
+                  data-no-drag
+                  type="checkbox"
+                  checked={milestone.done}
+                  onChange={(event) =>
+                    void controller.run(
+                      "milestone.setDone",
+                      { id: milestone.id, done: event.target.checked },
+                      goal.id,
+                    )
+                  }
+                  aria-label={`${milestone.title}${milestone.done ? ", done" : ""}`}
+                  className="h-3.5 w-3.5 cursor-pointer accent-[var(--accent)]"
+                />
+              </label>
               <span
                 className={`min-w-0 flex-1 text-[12px] leading-relaxed font-normal ${
                   milestone.done ? "text-faint line-through" : "text-text"
@@ -278,7 +292,7 @@ export default function GoalCard({
                 type="button"
                 onClick={() => void controller.run("milestone.delete", { id: milestone.id }, goal.id)}
                 aria-label={`Delete milestone ${milestone.title}`}
-                className="shrink-0 text-faint opacity-0 transition-opacity group-hover/ms:opacity-100 hover:text-danger focus-visible:opacity-100"
+                className="icon-tap grid shrink-0 place-items-center rounded-full text-faint opacity-0 transition-opacity group-hover/ms:opacity-100 hover:text-danger focus-visible:opacity-100"
               >
                 <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
                   <path d="M1 1l8 8M9 1L1 9" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
@@ -307,7 +321,7 @@ export default function GoalCard({
               setAddingMilestone(false);
             }
           }}
-          className="field mt-2 text-[12px]"
+          className="field mt-2"
         />
       ) : null}
 
@@ -318,15 +332,15 @@ export default function GoalCard({
         <button
           type="button"
           onClick={() => setAddingMilestone(true)}
-          className="rounded-[var(--r-sm)] px-2 py-1 text-[12px] font-normal text-dim hover:bg-surface-2 hover:text-text"
+          className="chip"
         >
-          + step
+          add step
         </button>
         <button
           type="button"
           onClick={() => void controller.run("goal.touch", { id: goal.id }, goal.id)}
           title="Record that something moved, so a goal with no steps is not marked stalled"
-          className="rounded-[var(--r-sm)] px-2 py-1 text-[12px] font-normal text-dim hover:bg-surface-2 hover:text-text"
+          className="chip"
         >
           moved today
         </button>
@@ -337,7 +351,7 @@ export default function GoalCard({
             void controller.run("goal.update", { id: goal.id, horizon: event.target.value }, goal.id)
           }
           aria-label="Horizon"
-          className="select rounded-[var(--r-sm)] bg-transparent px-2 py-1 text-[12px] font-normal text-dim hover:bg-surface-2 hover:text-text"
+          className="select tap"
         >
           <option value="short">now</option>
           <option value="mid">this year</option>
@@ -355,7 +369,7 @@ export default function GoalCard({
             )
           }
           aria-label="Target date"
-          className="rounded-[var(--r-sm)] bg-transparent px-2 py-1 text-[12px] font-normal text-dim hover:bg-surface-2"
+          className="tap"
         />
 
         <span className="flex-1" />
@@ -365,14 +379,14 @@ export default function GoalCard({
             <button
               type="button"
               onClick={() => void controller.run("goal.delete", { id: goal.id }, goal.id)}
-              className="rounded-[var(--r-sm)] px-2 py-1 text-[12px] font-normal text-danger hover:bg-surface-2"
+              className="chip chip-danger"
             >
               delete for good
             </button>
             <button
               type="button"
               onClick={() => setConfirmingDelete(false)}
-              className="rounded-[var(--r-sm)] px-2 py-1 text-[12px] font-normal text-dim hover:bg-surface-2"
+              className="chip"
             >
               keep
             </button>
@@ -382,7 +396,7 @@ export default function GoalCard({
             type="button"
             onClick={() => setConfirmingDelete(true)}
             aria-label={`Delete ${goal.title}`}
-            className="rounded-[var(--r-sm)] px-2 py-1 text-[12px] font-normal text-faint hover:bg-surface-2 hover:text-danger"
+            className="chip chip-danger"
           >
             delete
           </button>
@@ -397,7 +411,7 @@ export default function GoalCard({
           onClick={() =>
             void controller.run("goal.update", { id: goal.id, status: "active" as GoalStatus }, goal.id)
           }
-          className="mt-2 w-full rounded-[var(--r-sm)] border border-hairline px-2 py-1.5 text-[12px] font-normal text-dim hover:border-accent/40 hover:text-accent"
+          className="chip chip-accent mt-2 w-full"
         >
           put back in play
         </button>

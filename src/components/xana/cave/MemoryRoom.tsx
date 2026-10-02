@@ -32,15 +32,24 @@ import type { CaveController } from "./useCave";
  *    be about the mistake instead of about the loss.
  */
 
-const KIND_TONE: Record<string, string> = {
-  person: "border-good/30 text-good",
-  place: "border-good/30 text-good",
-  project: "border-accent/30 text-accent",
-  decision: "border-warn/30 text-warn",
-  preference: "border-accent/30 text-accent",
-  fact: "border-hairline-2 text-dim",
-  conversation: "border-hairline text-faint",
-  note: "border-hairline text-dim",
+/**
+ * The toned kind pill, as two spellings rather than one class list.
+ *
+ * `.label` carries an unlayered `color`, which beats any colour utility on the
+ * same element: `class="label text-good"` renders every kind in the same
+ * faint grey. So the pill keeps the label treatment on the box and puts the
+ * tone on an inner element, where nothing competes with it. The accent borders
+ * are on the ramp's /24 rather than an invented /30.
+ */
+const KIND_TONE: Record<string, { border: string; text: string }> = {
+  person: { border: "border-good/30", text: "text-good" },
+  place: { border: "border-good/30", text: "text-good" },
+  project: { border: "border-accent/24", text: "text-accent" },
+  decision: { border: "border-warn/30", text: "text-warn" },
+  preference: { border: "border-accent/24", text: "text-accent" },
+  fact: { border: "border-hairline-2", text: "text-dim" },
+  conversation: { border: "border-hairline", text: "text-faint" },
+  note: { border: "border-hairline", text: "text-dim" },
 };
 
 export interface MemoryRoomProps {
@@ -101,7 +110,7 @@ export default function MemoryRoom({ controller }: MemoryRoomProps) {
   };
 
   return (
-    <div>
+    <div className="mx-auto w-full max-w-[var(--content-max)]">
       {/* ---------------- summary + controls ---------------- */}
       <div className="flex flex-wrap items-end justify-between gap-4 border-b border-hairline px-6 py-5">
         <div>
@@ -180,9 +189,7 @@ export default function MemoryRoom({ controller }: MemoryRoomProps) {
             type="button"
             onClick={() => setKind("")}
             aria-pressed={kind === ""}
-            className={`rounded-full border px-2.5 py-1 text-[12px] font-normal ${
-              kind === "" ? "border-accent/40 bg-accent/10 text-text" : "border-hairline text-dim hover:text-text"
-            }`}
+            className="chip chip-round"
           >
             all
           </button>
@@ -192,11 +199,7 @@ export default function MemoryRoom({ controller }: MemoryRoomProps) {
               type="button"
               onClick={() => setKind(entry.kind === kind ? "" : entry.kind)}
               aria-pressed={kind === entry.kind}
-              className={`rounded-full border px-2.5 py-1 text-[12px] font-normal ${
-                kind === entry.kind
-                  ? "border-accent/40 bg-accent/10 text-text"
-                  : "border-hairline text-dim hover:text-text"
-              }`}
+              className="chip chip-round"
             >
               {entry.kind} <span className="text-faint">{entry.count}</span>
             </button>
@@ -240,21 +243,21 @@ export default function MemoryRoom({ controller }: MemoryRoomProps) {
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
                       <span
-                        className={`rounded-full border px-2 py-[1px] text-[11px] font-medium tracking-[0.12em] uppercase ${
-                          KIND_TONE[record.kind] ?? "border-hairline text-faint"
+                        className={`label rounded-full border px-2 py-[1px] ${
+                          KIND_TONE[record.kind]?.border ?? "border-hairline"
                         }`}
                       >
-                        {record.kind}
+                        <span className={KIND_TONE[record.kind]?.text ?? "text-faint"}>
+                          {record.kind}
+                        </span>
                       </span>
                       {record.pinned ? (
-                        <span className="rounded-full border border-accent/40 px-2 py-[1px] text-[11px] font-medium tracking-[0.12em] text-accent uppercase">
-                          pinned
+                        <span className="label rounded-full border border-accent/40 px-2 py-[1px]">
+                          <span className="text-accent">pinned</span>
                         </span>
                       ) : null}
                       {record.source === "user" ? (
-                        <span className="text-[11px] tracking-[0.12em] text-faint uppercase">
-                          yours
-                        </span>
+                        <span className="label">yours</span>
                       ) : null}
                     </div>
                     <p className="mt-1.5 text-[14px] leading-snug font-normal text-text">
@@ -286,16 +289,19 @@ export default function MemoryRoom({ controller }: MemoryRoomProps) {
                           record.id,
                         )
                       }
-                      className={`rounded-[var(--r-sm)] px-2 py-1 text-[12px] font-normal hover:bg-surface-2 ${
-                        record.pinned ? "text-accent" : "text-dim hover:text-text"
-                      }`}
+                      // `data-on` rather than a colour utility: `.chip` carries
+                      // an unlayered `color`, so `text-accent` on a chip is
+                      // silently dead, and "this one is on" is exactly what the
+                      // chosen state already means.
+                      data-on={record.pinned}
+                      className="chip"
                     >
                       {record.pinned ? "unpin" : "pin"}
                     </button>
                     <button
                       type="button"
                       onClick={() => startEdit(record)}
-                      className="rounded-[var(--r-sm)] px-2 py-1 text-[12px] font-normal text-dim hover:bg-surface-2 hover:text-text"
+                      className="chip"
                     >
                       edit
                     </button>
@@ -307,14 +313,14 @@ export default function MemoryRoom({ controller }: MemoryRoomProps) {
                             void controller.run("memory.forget", { id: record.id }, record.id);
                             setForgettingId(null);
                           }}
-                          className="rounded-[var(--r-sm)] px-2 py-1 text-[12px] font-normal text-danger hover:bg-surface-2"
+                          className="chip chip-danger"
                         >
                           forget
                         </button>
                         <button
                           type="button"
                           onClick={() => setForgettingId(null)}
-                          className="rounded-[var(--r-sm)] px-2 py-1 text-[12px] font-normal text-dim hover:bg-surface-2"
+                          className="chip"
                         >
                           keep
                         </button>
@@ -323,7 +329,7 @@ export default function MemoryRoom({ controller }: MemoryRoomProps) {
                       <button
                         type="button"
                         onClick={() => setForgettingId(record.id)}
-                        className="rounded-[var(--r-sm)] px-2 py-1 text-[12px] font-normal text-faint hover:bg-surface-2 hover:text-danger"
+                        className="chip chip-danger"
                       >
                         forget
                       </button>

@@ -169,14 +169,64 @@ rather than a spec they scan.
 ## 3. Space & shape
 
 - Scale: `4 8 12 16 24 32 48 64 96`.
-- Radius: `--r-sm: 8px`, `--r-md: 12px`, `--r-lg: 18px`, `--r-xl: 24px`,
-  `--r-full: 999px`.
+- Radius: `--r-sm: 8px`, `--r-md: 12px`, `--r-lg: 16px`, `--r-xl: 20px`,
+  `--r-full: 999px`. Cards sit inside the 12–16px band; the step above it is for
+  sheets, which are not cards. (This line said 18px and 24px for two releases
+  after the stylesheet had moved, which is the drift a design document has to be
+  read against the code to catch.)
 - Cards: `--surface`, a `--fill-1` top sheen, a hairline border, `--shadow-2`.
   They lift 1px and warm their border on hover. **1px, not 4px**: the interface
   should feel like it has depth, not like it bounces.
 - Panels and floating surfaces (the settings sheet, tooltips) use `--r-xl` and
   `--shadow-3`.
-- Max content width `760px`, centred. The orb is centred in the viewport.
+- Max content width `760px`, centred. The orb is centred in the viewport. A
+  board (the goals columns) may run wider, about `1180px`, because three columns
+  are the point; a form or a list sits in `--content-max`. What is not allowed is
+  a form spanning a 1416px window, which is what the cave did.
+
+### One small control
+
+`.chip` is every small button in the app: a row action, a filter, a room, a meal,
+a mood. `.chip-round` is the same control drawn as a pill, which is what a row of
+choices looks like. The rooms had grown **twenty inline recipes** for this button
+between them — four radii, three paddings, and a selected state that was `/10` in
+one room, `/15` in another and a `/60` border in a third — and no two of them
+were identical. The chosen state is now `[aria-pressed="true"]` on a chip, which
+is one rule and one look.
+
+`.label` is the only uppercase treatment. It had been retyped five times with a
+different size or tracking each time; rule 11 in `check:design` refuses a new
+one, and `data-mark` is how a deliberately different treatment declares itself.
+
+`.body-text` is the 15px body, in `:where()` so `class="body-text text-dim"` is
+how a quieter paragraph is written. It was dead code before this pass — declared,
+documented and used nowhere while the same recipe was retyped twenty times.
+
+### The tap floor
+
+**Below 768px, every control a thumb presses is at least 44px tall as a real
+box.** `.chip`, `.tap`, `.icon-tap`, `.btn`, `.field` and `.select` carry it;
+`.switch` and `.slider` grow to it. Three things this rule is not:
+
+- **Not a pseudo-element.** A hit area grown by `::before` leaves
+  `getBoundingClientRect()` at the drawn size, so nothing can assert it and
+  nobody can see it in a screenshot. The floor is real height, and
+  `verify:browser` measures every control on the phone viewport against it.
+- **Not the same as small.** A 3px `range` track and a 22px switch track are
+  correct *drawings*; the box around them is what grows. The slider keeps its
+  3px track with `background-clip: content-box`, and the switch stays a pill.
+- **Not only the buttons.** The composer pill looked like one 54px target and
+  behaved like the 24px line of text inside it, because nothing focused the
+  field when the padding was clicked. It does now.
+
+### Recessed surfaces and washes
+
+A recessed surface is black at one of three depths: `--well` (a field, a code
+block), `--well-deep` (the focused field), `--scrim` (behind a dialog). A wash is
+one of six accent alphas: `--a-04 --a-08 --a-14 --a-24 --a-40 --a-64`. Both are
+enforced — rule 9 refuses `bg-black/NN` and any `accent/NN` off the ramp — because
+the interface had drifted to four black literals and nine accent alphas, and the
+theme picker's promise is only as true as the ramp is small.
 
 ## 4. Motion
 

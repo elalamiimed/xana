@@ -912,6 +912,33 @@ from every angle except the user's.
 
 ## Traps that have already bitten
 
+- **An ID inside `:not()` still counts toward specificity.** The focus rule was
+  `:focus-visible:not(#xana-composer)`, written that way to exempt one element,
+  and it evaluated to (1,1,0) — so its `border-radius: var(--r-sm)` beat
+  `.btn`'s pill and every `rounded-*` utility in the app. Every focused pill
+  snapped from a pill to an 8px rectangle, and no screenshot could show it
+  because it only existed while the element had focus. Modern browsers draw an
+  outline along the element's own radius, so the declaration was doing nothing
+  but damage. **A selector written to exempt one element is a selector with the
+  specificity of the thing it names**, and a property that does not belong in a
+  focus rule does not belong there even when it looks harmless.
+- **A hit area nobody can measure is a hit area nobody can verify.** The first
+  version of the 44px floor grew the microphone's target with `::before`, which
+  leaves `getBoundingClientRect()` at the drawn 28px: it works for a thumb and it
+  is invisible to every check, every screenshot and every review. The floor is
+  real height now (`.chip`, `.tap`, `.icon-tap`, `.btn`, `.field`, `.select`,
+  plus `.switch` and `.slider` growing to it), and `verify:browser` measures
+  every control on the phone viewport and names the ones that fail. The same pass
+  found the composer: a 54px pill that behaved like the 24px line of text inside
+  it, because nothing focused the field when the padding was clicked.
+- **Twenty inline recipes for one control is not style, it is drift.** The cave's
+  small buttons had four radii, three paddings and a selected state that was
+  `/10`, `/15` or a `/60` border depending on the room, and the app had four
+  black literals for a recessed surface and nine accent alphas where the ramp
+  documents six. None of it is visible one control at a time; all of it is
+  visible in a screenshot of two rooms side by side. The fix is one class per
+  role (`.chip`, `.chip-round`, `.label`, `.body-text`, `--well`) and a gate that
+  refuses the next new number.
 - **`Intl` throws where `toLocale*` lied, and a label must never do that.** Moving
   a formatter from `new Date(key).toLocaleDateString(undefined, {…})` to
   `Intl.DateTimeFormat` with a `timeZone` looks like the same call with one option
@@ -1181,6 +1208,8 @@ from every angle except the user's.
 | New theme | `THEME_PRESETS` in `settings/themes.ts` | Two channel triplets. Tune by eye, not by hue rotation |
 | New presence state | `PRESENCE_STYLE` in `orb/scene.ts` | Every field is a target the renderer eases toward |
 | New motion | A token in `globals.css`, multiplied by `var(--motion)` | It has to stop under `prefers-reduced-motion` |
+| A new small control | `.chip` / `.chip-round` in `globals.css`, plus `chip-accent` or `chip-danger` if it needs a tone | Never a fresh `px-2 py-1` recipe: rule 9/10/11 and the tap audit in `verify:browser` are the floor, and `data-mark` is how a genuinely different treatment declares itself |
+| A new wash or a recessed surface | The six-step accent ramp and `--well` / `--well-deep` / `--scrim` | Rule 9 refuses `bg-black/NN` and any `accent/NN` off the ramp, so this is enforced rather than remembered |
 | New voice timing | `src/lib/voice/pause.ts`, then the four call sites | One number, four places: both engines in the composer and both in the wake listener. `verify:pause` reads those sources, so a fifth path cannot quietly invent its own window |
 | A new date, clock or day key | `src/lib/core/zone.ts` (client safe, no imports) for both halves, or `core/time.ts` on the server | Never `new Date(...).toLocale*`, `.getHours()` or `.getDay()`: the host clock is not the app's clock, and the browser's is not either. Seven paths still read the host — `cave/ops.ts` (event instants and the window query), `core/nlp.ts` ("tomorrow at 3pm"), `cave/TasksRoom.tsx`, `cave/GoalCard.tsx`, `cave/MemoryRoom.tsx`, `cave/TrashRoom.tsx`, and `derived/{energy,nudges,habits,patterns}.ts` — each a one-line swap onto the zone helpers |
 | New voice setting | `VoiceSettings` in `settings/types.ts`, then the store's three places (default, normaliser, patch) | Miss the third and the slider saves a value the app never reads |

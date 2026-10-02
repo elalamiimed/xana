@@ -438,7 +438,11 @@ export default function AmbientCards({
         <button
           type="button"
           onClick={onOpenSettings}
-          className="timestamp mt-3 rounded-[var(--r-sm)] text-left transition-colors duration-[var(--t-fast)] hover:text-dim"
+          /* A control, not a caption: it opens Settings, so it is held to the
+             same tap floor as everything else. Before the floor existed this
+             line was 18px tall — an 11px sentence with no padding, which is a
+             target the size of the text itself. */
+          className="tap timestamp mt-3 rounded-[var(--r-sm)] text-left transition-colors duration-[var(--t-fast)] hover:text-dim"
         >
           {modelActive
             ? `${modelName || "A model"} is configured and answering · settings`

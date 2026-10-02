@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useId, useMemo, useState } from "react";
 
 import { DEFAULT_PERSONA } from "@/lib/settings/types";
 import type { ModelProvider, SettingsPatch, SettingsView } from "@/lib/settings/types";
@@ -116,6 +116,9 @@ function ModelActionBar({
 
 export default function ModelPanel({ view, controller }: ModelPanelProps) {
   const { model, voice, identity } = view;
+
+  /** One id for the hand-built Base URL field, so its label and hint resolve. */
+  const baseUrlId = useId();
 
   const [enabled, setEnabled] = useState(model.enabled);
   const [shape, setShape] = useState<ModelProvider>(model.provider);
@@ -334,21 +337,22 @@ export default function ModelPanel({ view, controller }: ModelPanelProps) {
       >
         <div className="flex flex-wrap gap-2">
           {PROVIDERS.map((preset) => (
+            /* The system's `.chip-round`. This row was a fourth private
+               recipe for "small control": its own pill radius, its own
+               pressed colours, its own hover, and about 30px tall at 390px
+               where a thumb is aiming. `.chip` carries all of it now, so a
+               chosen provider looks like a chosen theme and a chosen room. */
             <button
               key={preset.id}
               type="button"
               onClick={() => applyProvider(preset.id)}
               aria-pressed={activePreset === preset.id}
               title={preset.note}
-              className={`rounded-full border px-3 py-1.5 text-[12px] font-normal transition-colors duration-[var(--t-fast)] ${
-                activePreset === preset.id
-                  ? "border-accent/40 bg-accent/10 text-text"
-                  : "border-hairline text-dim hover:border-hairline-2 hover:bg-surface-2 hover:text-text"
-              }`}
+              className="chip chip-round"
             >
               {preset.label}
               {preset.keyless ? (
-                <span aria-hidden="true" className="ml-1.5 text-[11px] text-faint">
+                <span aria-hidden="true" className="text-[11px] text-faint">
                   local
                 </span>
               ) : null}
@@ -409,6 +413,13 @@ export default function ModelPanel({ view, controller }: ModelPanelProps) {
 
         <Field
           label="Base URL"
+          /* The id is what ties the label and the hint to the input. This
+             field was the one in the panel built by hand rather than through
+             `TextField`, and it was paying for that: `Field` only renders the
+             hint's `id` when it is given `htmlFor`, so the sentence about the
+             three URL shapes reached nobody, and the label was never
+             associated with the box. */
+          htmlFor={baseUrlId}
           hint={
             normalised
               ? "Tidied to the canonical form. All three shapes a provider documents work here —with or without /v1, and a full endpoint URL pasted by mistake is corrected too."
@@ -417,24 +428,37 @@ export default function ModelPanel({ view, controller }: ModelPanelProps) {
           error={baseProblem}
         >
           <input
+            id={baseUrlId}
             type="url"
             value={baseUrl}
             spellCheck={false}
             autoComplete="off"
             placeholder={activeProvider?.baseUrl || "https://api.deepseek.com/v1"}
+            aria-describedby={`${baseUrlId}-hint`}
+            aria-invalid={baseProblem ? true : undefined}
+            /* `.field` is unlayered, so `border-danger/40` as a utility loses
+               to its hairline no matter what order the classes are written
+               in; the inline declaration is the one way to paint the invalid
+               border without a new shared class for a state only this input
+               has. Same recipe as `.chip-danger`. */
+            style={
+              baseProblem
+                ? { borderColor: "color-mix(in oklab, var(--danger) 40%, transparent)" }
+                : undefined
+            }
             onChange={(event) => {
               setBaseUrl(event.target.value);
               setProbe(null);
               setNormalised(false);
             }}
             onBlur={commitBaseUrl}
-            className="field font-mono text-[13px]"
+            className="field font-mono"
           />
         </Field>
 
         {/* Where the request will actually go. This is the single most
             useful line on the page when a test fails. */}
-        <div className="rounded-[var(--r-md)] border border-hairline bg-black/25 px-3 py-2">
+        <div className="rounded-[var(--r-md)] border border-hairline bg-well px-3 py-2">
           <span className="label">Requests go to</span>
           {/* `wrap-anywhere` because a base URL has no spaces: without it the
               path widens the panel rather than wrapping inside it, and this is
@@ -458,7 +482,7 @@ export default function ModelPanel({ view, controller }: ModelPanelProps) {
           about this screen is "the key did not save", and the honest cause
           is that nothing said whether it had.
         */}
-        <div className="rounded-[var(--r-lg)] border border-hairline bg-black/20 p-4">
+        <div className="rounded-[var(--r-lg)] border border-hairline bg-well p-4">
           <label htmlFor="xana-api-key" className="block text-[13px] font-light text-text">
             {keyPresent ? "Replace the stored key" : "Your API key"}
           </label>
@@ -489,7 +513,7 @@ export default function ModelPanel({ view, controller }: ModelPanelProps) {
               setProbe(null);
               setSaved(null);
             }}
-            className="field mt-2 font-mono text-[13px]"
+            className="field mt-2 font-mono"
           />
 
           {/* Status, in words rather than a colour. The case that matters is

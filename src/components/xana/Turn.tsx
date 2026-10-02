@@ -50,7 +50,7 @@ export default function Turn({ message, showMeta = false }: TurnProps) {
   if (message.role === "user") {
     return (
       <div className="flex justify-end">
-        <p className="max-w-[80%] text-right text-[15px] leading-relaxed font-light tracking-[0.01em] text-dim">
+        <p className="body-text max-w-[80%] text-right text-dim">
           {message.text}
         </p>
       </div>
@@ -67,7 +67,7 @@ export default function Turn({ message, showMeta = false }: TurnProps) {
 
   return (
     <div className="space-y-4">
-      <p className="max-w-[92%] text-[15px] leading-relaxed font-light tracking-[0.01em] text-text">
+      <p className="body-text max-w-[92%]">
         {message.text}
       </p>
 

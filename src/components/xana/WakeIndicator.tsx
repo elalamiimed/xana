@@ -126,7 +126,7 @@ export default function WakeIndicator({
       <span
         aria-hidden="true"
         className={`block h-1.5 w-1.5 shrink-0 rounded-full transition-colors duration-[var(--t-fast)] motion-reduce:animate-none ${
-          listening ? "bg-accent" : "bg-accent/48"
+          listening ? "bg-accent" : "bg-accent/40"
         }`}
         style={
           listening

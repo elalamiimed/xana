@@ -210,7 +210,7 @@ export function Header({ lifeState, presence, onOpenSettings, onOpenCave }: Head
         <button
           type="button"
           onClick={onOpenCave}
-          className="flex items-center gap-2 rounded-full border border-hairline px-3 py-1.5 text-[12px] font-normal text-dim transition-colors duration-[var(--t-fast)] hover:border-hairline-2 hover:bg-surface-2 hover:text-text"
+          className="tap flex items-center gap-2 rounded-full border border-hairline px-3 py-1.5 text-[12px] font-normal text-dim transition-colors duration-[var(--t-fast)] hover:border-hairline-2 hover:bg-surface-2 hover:text-text"
         >
           <svg width="13" height="13" viewBox="0 0 14 14" fill="none" aria-hidden="true">
             <path
@@ -235,7 +235,7 @@ export function Header({ lifeState, presence, onOpenSettings, onOpenCave }: Head
                 ? `Settings. ${waiting} ${waiting === 1 ? "connection is" : "connections are"} waiting for permission.`
                 : "Settings"
           }
-          className="group relative flex items-center gap-2 rounded-full border border-hairline px-3 py-1.5 text-[12px] font-normal text-dim transition-colors duration-[var(--t-fast)] hover:border-hairline-2 hover:bg-surface-2 hover:text-text"
+          className="tap group relative flex items-center gap-2 rounded-full border border-hairline px-3 py-1.5 text-[12px] font-normal text-dim transition-colors duration-[var(--t-fast)] hover:border-hairline-2 hover:bg-surface-2 hover:text-text"
         >
           <svg width="13" height="13" viewBox="0 0 14 14" fill="none" aria-hidden="true">
             <circle cx="7" cy="7" r="2.4" stroke="currentColor" strokeWidth="1.1" />
@@ -256,7 +256,7 @@ export function Header({ lifeState, presence, onOpenSettings, onOpenCave }: Head
             // A hairline mark, not a warning: something can be switched on.
             <span
               aria-hidden="true"
-              className="h-1 w-1 rounded-full bg-accent/60"
+              className="h-1 w-1 rounded-full bg-accent/64"
             />
           ) : null}
         </button>

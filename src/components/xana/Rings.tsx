@@ -1,5 +1,7 @@
 "use client";
 
+import { useEffect, useState } from "react";
+
 /**
  * The one small visualisation primitive (DESIGN.md §8): no axes, no grids, no
  * legends. A hairline ring or a 3px bar, and a number. Used for goal progress
@@ -12,17 +14,6 @@
 const RING_SIZE = 34;
 const RING_STROKE = 2;
 const TRACK_OPACITY = 0.14;
-
-/**
- * The ring's sweep, in milliseconds.
- *
- * A literal rather than `var(--t-slow)`: SVG's `animate` element takes
- * `dur` as an XML attribute, not a CSS property, and attributes cannot
- * resolve custom properties. 520ms is the same value `--t-slow` carries at
- * a normal motion setting, which is what matters here — the ring is a
- * readout, and holding it still under reduced motion is correct anyway.
- */
-const SWEEP_MS = 520;
 
 function clamp01(value: number): number {
   if (!Number.isFinite(value)) return 0;
@@ -47,6 +38,33 @@ export function Ring({ value, label }: RingProps) {
   const radius = (RING_SIZE - RING_STROKE) / 2;
   const circumference = 2 * Math.PI * radius;
   const filled = clamp01(value) * circumference;
+  /**
+   * The sweep, as a dash offset.
+   *
+   * This was SVG `<animate dur="520ms">`, and it was wrong three ways. A
+   * `dur` is an XML attribute, so it can never read `var(--t-slow)` and the
+   * motion slider never moved it. No `prefers-reduced-motion` rule can reach
+   * an `<animate>` element, so the comment beside it claiming the ring was
+   * held still under reduced motion was false. And a frozen SMIL animation
+   * does not re-run when the value changes, so a ring at 40% that became 70%
+   * only redrew on the next remount.
+   *
+   * `stroke-dashoffset` is a CSS property, so the same 520ms sweep is a
+   * transition of `var(--t-slow)`: the motion slider scales it, the
+   * reduced-motion block at the foot of globals.css zeroes it to 1ms, and
+   * `motion-reduce:transition-none` states that outright rather than
+   * implying it. A value change after mount animates too, which is what a
+   * readout wants.
+   *
+   * The element mounts empty and moves to its target on the next frame, so
+   * the arc still grows into place rather than appearing at full length.
+   */
+  const [offset, setOffset] = useState(circumference);
+
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => setOffset(circumference - filled));
+    return () => cancelAnimationFrame(frame);
+  }, [circumference, filled]);
 
   return (
     <svg
@@ -74,21 +92,15 @@ export function Ring({ value, label }: RingProps) {
         stroke="var(--accent)"
         strokeWidth={RING_STROKE}
         strokeLinecap="round"
-        strokeDasharray={`${filled} ${circumference}`}
+        // A dash as long as the whole circle: at offset 0 every pixel of the
+        // path is drawn, and an offset of `C - filled` draws exactly `filled`.
+        strokeDasharray={`${circumference} ${circumference}`}
+        strokeDashoffset={offset}
+        className="motion-reduce:transition-none"
+        style={{ transition: "stroke-dashoffset var(--t-slow) var(--ease)" }}
         // Start the arc at twelve o'clock rather than three.
         transform={`rotate(-90 ${RING_SIZE / 2} ${RING_SIZE / 2})`}
-      >
-        {/* The arc grows into place rather than appearing at full length:
-            a ring that snaps to 62% reads as a different ring each time,
-            where a ring that travels there reads as a number changing. */}
-        <animate
-          attributeName="stroke-dasharray"
-          from={`0 ${circumference}`}
-          to={`${filled} ${circumference}`}
-          dur={`${SWEEP_MS}ms`}
-          fill="freeze"
-        />
-      </circle>
+      />
     </svg>
   );
 }

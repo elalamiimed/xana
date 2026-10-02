@@ -1050,6 +1050,17 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
           event.preventDefault();
           submit("text");
         }}
+        /* The pill is one target.
+         *
+         * It looks like one — a 54px rounded field with a hairline round it —
+         * and it behaved like the 24px line of text inside it: a tap near the
+         * left edge, or on the padding above or below the caret, did nothing at
+         * all. Nothing about that is visible in a screenshot, which is why it
+         * survived every visual pass. A click that lands on the pill itself
+         * focuses the field; a click on anything inside it keeps its own job. */
+        onClick={(event) => {
+          if (event.target === event.currentTarget) textarea.current?.focus();
+        }}
         className="relative flex w-full items-end gap-2 rounded-full border border-hairline bg-surface px-5 py-3 transition-colors duration-[var(--t-fast)] focus-within:border-accent/64"
       >
       <label htmlFor="xana-composer" className="sr-only">
@@ -1104,15 +1115,15 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
               ? "Stop listening"
               : "Ask by voice — with an empty box she answers what you say; with text in it, she adds to it"
           }
-          /* The glyph is 14px inside a 28px button, which is the right
-             drawing and the wrong target: this is the one control in the app
-             a thumb has to find without looking. Below the tablet breakpoint
-             an invisible pseudo-element grows the target to 44x44 — the floor
-             the audit playbook names — while the drawing stays the size it
-             was. Desktop keeps the tight box: there the pointer is precise,
-             and a target that reached into the 8px gutter beside it would eat
-             clicks meant for the end of a line of text. */
-          className={`relative mb-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full transition-colors duration-[var(--t-fast)] before:absolute before:content-[''] max-md:before:-inset-2 hover:bg-surface-2 ${
+          /* The glyph is 14px and the drawn button is 28px, which is the right
+             drawing and the wrong target on a phone: this is the one control in
+             the app a thumb has to find without looking. Below the tablet
+             breakpoint the button *is* 44px — a real box, not an invisible one
+             grown by a pseudo-element, because a target nobody can measure is a
+             target nobody can verify. Desktop keeps the tight 28px box: there
+             the pointer is precise, and a wider target would eat clicks meant
+             for the end of a line of text. */
+          className={`relative mb-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full transition-colors duration-[var(--t-fast)] hover:bg-surface-2 max-md:h-11 max-md:w-11 ${
             dictating ? "text-accent" : "text-faint hover:text-dim"
           }`}
         >

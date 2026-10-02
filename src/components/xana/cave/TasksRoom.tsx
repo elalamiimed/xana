@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
 import type { Task } from "@/lib/cave/types";
 
@@ -120,6 +120,8 @@ export default function TasksRoom({ controller }: TasksRoomProps) {
   const [draft, setDraft] = useState({ title: "", due: "", project: "", priority: "3" });
   const [editError, setEditError] = useState("");
   const [addError, setAddError] = useState("");
+  /** The field the empty state points at, so its one action has a target. */
+  const titleRef = useRef<HTMLInputElement | null>(null);
 
   const tasks = controller.tasks;
 
@@ -234,7 +236,7 @@ export default function TasksRoom({ controller }: TasksRoomProps) {
   };
 
   return (
-    <div>
+    <div className="mx-auto w-full max-w-[var(--content-max)]">
       {/* ---------------- add one ---------------- */}
       <div className="border-b border-hairline px-6 py-5">
         <h3 className="text-[15px] font-normal text-text">Add a task</h3>
@@ -253,6 +255,7 @@ export default function TasksRoom({ controller }: TasksRoomProps) {
           <label className="min-w-[220px] flex-1">
             <span className="label">task</span>
             <input
+              ref={titleRef}
               value={title}
               onChange={(event) => setTitle(event.target.value)}
               placeholder="What needs doing?"
@@ -403,7 +406,7 @@ export default function TasksRoom({ controller }: TasksRoomProps) {
                         key={option.label}
                         type="button"
                         onClick={() => nudgeDue(option.days)}
-                        className="rounded-[var(--r-sm)] border border-hairline px-2 py-1 text-[12px] font-normal text-dim transition-colors duration-[var(--t-fast)] hover:bg-surface-2 hover:text-text"
+                        className="chip"
                       >
                         {option.label}
                       </button>
@@ -411,7 +414,7 @@ export default function TasksRoom({ controller }: TasksRoomProps) {
                     <button
                       type="button"
                       onClick={() => nudgeDue(null)}
-                      className="rounded-[var(--r-sm)] border border-hairline px-2 py-1 text-[12px] font-normal text-faint transition-colors duration-[var(--t-fast)] hover:bg-surface-2 hover:text-dim"
+                      className="chip"
                     >
                       clear date
                     </button>
@@ -433,6 +436,10 @@ export default function TasksRoom({ controller }: TasksRoomProps) {
                   doing only. So the control is "complete", not a checkbox:
                   a checkbox that ticks and instantly disappears is a control
                   that looks broken and did exactly what it said. */}
+              {/* The dot stays 16px; the box around it is what a thumb hits,
+                  and it is drawn to the left of the text rather than centred
+                  in a 44px box so the rows keep one left edge at every
+                  width. */}
               <button
                 type="button"
                 onClick={() =>
@@ -440,17 +447,19 @@ export default function TasksRoom({ controller }: TasksRoomProps) {
                 }
                 aria-label={`Mark ${task.title} done`}
                 title="Mark done"
-                className="mt-[3px] grid h-4 w-4 shrink-0 place-items-center rounded-full border border-hairline-2 text-transparent transition-colors duration-[var(--t-fast)] hover:border-good hover:text-good"
+                className="icon-tap -ml-2 flex shrink-0 items-start justify-start text-transparent transition-colors duration-[var(--t-fast)] hover:text-good"
               >
-                <svg width="9" height="9" viewBox="0 0 9 9" fill="none" aria-hidden="true">
-                  <path
-                    d="M1 4.6 3.4 7 8 1.6"
-                    stroke="currentColor"
-                    strokeWidth="1.4"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
+                <span className="mt-[3px] grid h-4 w-4 place-items-center rounded-full border border-hairline-2">
+                  <svg width="9" height="9" viewBox="0 0 9 9" fill="none" aria-hidden="true">
+                    <path
+                      d="M1 4.6 3.4 7 8 1.6"
+                      stroke="currentColor"
+                      strokeWidth="1.4"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </span>
               </button>
 
               <div className="min-w-0 flex-1">
@@ -482,14 +491,14 @@ export default function TasksRoom({ controller }: TasksRoomProps) {
                       void controller.run("task.delete", { id: task.id }, task.id);
                       setConfirming(null);
                     }}
-                    className="rounded-[var(--r-sm)] px-2 py-1 text-[12px] font-normal text-danger hover:bg-surface-2"
+                    className="chip chip-danger"
                   >
                     delete for good
                   </button>
                   <button
                     type="button"
                     onClick={() => setConfirming(null)}
-                    className="rounded-[var(--r-sm)] px-2 py-1 text-[12px] font-normal text-dim hover:bg-surface-2"
+                    className="chip"
                   >
                     keep
                   </button>
@@ -503,7 +512,7 @@ export default function TasksRoom({ controller }: TasksRoomProps) {
                     type="button"
                     onClick={() => openEditor(task)}
                     aria-label={`Edit ${task.title}`}
-                    className="rounded-[var(--r-sm)] px-2 py-1 text-[12px] font-normal text-faint hover:bg-surface-2 hover:text-text"
+                    className="chip"
                   >
                     edit
                   </button>
@@ -511,7 +520,7 @@ export default function TasksRoom({ controller }: TasksRoomProps) {
                     type="button"
                     onClick={() => setConfirming(task.id)}
                     aria-label={`Delete ${task.title}`}
-                    className="rounded-[var(--r-sm)] px-2 py-1 text-[12px] font-normal text-faint hover:bg-surface-2 hover:text-danger"
+                    className="chip chip-danger"
                   >
                     delete
                   </button>
@@ -524,11 +533,23 @@ export default function TasksRoom({ controller }: TasksRoomProps) {
         {tasks.length === 0 ? (
           <li className="px-6 py-10 text-center">
             <p className="text-[13px] font-light text-dim">
-              {emptyNote(
-                controller.loading,
-                "Nothing open. Add one above, or tell her about it in the chat.",
-              )}
+              {emptyNote(controller.loading, "Nothing open.")}
             </p>
+            {/* An empty state that teaches gives the one action that fills it,
+                and the action is the field above rather than a sentence about
+                it. It is held back until the read has answered, because
+                offering to start a list is a claim about a list nobody has
+                looked at yet. The chat path is still named at the top of the
+                room, next to the form, where it belongs. */}
+            {controller.loading ? null : (
+              <button
+                type="button"
+                onClick={() => titleRef.current?.focus()}
+                className="chip mt-3"
+              >
+                write one down
+              </button>
+            )}
           </li>
         ) : null}
       </ul>

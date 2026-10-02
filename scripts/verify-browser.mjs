@@ -182,6 +182,66 @@ async function screenshot(devtools, sessionId, name) {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/**
+ * Every control a thumb presses, measured.
+ *
+ * The floor is 44px, and it is measured on `getBoundingClientRect` rather than
+ * asserted in prose because the two ways of failing are invisible in a
+ * screenshot: a control drawn small is a control a thumb misses, and a control
+ * drawn small with an invisible pseudo-element around it passes every visual
+ * review while remaining unhittable for anyone who is not looking.
+ *
+ * Measured on the phone viewport only, which is the condition `.chip`, `.tap`,
+ * `.icon-tap`, `.switch` and `.slider` all switch on. Three deliberate
+ * exclusions and substitutions, all named: a `<textarea>`'s target is the pill
+ * around it (the composer focuses the field when the pill itself is clicked),
+ * a control with no box at all is not a target, and a checkbox or radio is
+ * measured on its `<label>`, which is the thing a thumb actually hits.
+ */
+async function tapAudit(devtools, sessionId, surface) {
+  return evaluate(
+    devtools,
+    sessionId,
+    `(() => {
+      const MIN = 44;
+      const selector = 'button, a[href], select, [role="button"], [role="tab"], [role="switch"], [role="radio"], input';
+      const small = [];
+      let measured = 0;
+      for (const el of document.querySelectorAll(selector)) {
+        /* A checkbox or a radio is measured on its label.
+         *
+         * The label is the target: it is what a thumb aims at, what the
+         * browser hit-tests, and the only half of the pair anyone can make
+         * bigger without redrawing a native control. Measuring the 14px input
+         * would report a defect the label has already fixed. */
+        const label = el.closest('label');
+        const control =
+          el.tagName.toLowerCase() === 'input' && (el.type === 'checkbox' || el.type === 'radio') && label
+            ? label
+            : el;
+        const rect = control.getBoundingClientRect();
+        if (rect.width < 1 || rect.height < 1) continue;
+        const style = getComputedStyle(control);
+        if (style.visibility === 'hidden') continue;
+        if (rect.bottom < 0 || rect.top > window.innerHeight) continue;
+        if (control.tagName.toLowerCase() === 'textarea') continue;
+        measured += 1;
+        if (rect.height + 0.5 < MIN) {
+          small.push({
+            name: (control.getAttribute('aria-label') || control.textContent || control.tagName).trim().replace(/\\s+/g, ' ').slice(0, 32),
+            height: Math.round(rect.height),
+          });
+        }
+      }
+      return { surface: ${JSON.stringify(surface)}, measured, small };
+    })()`,
+  );
+}
+
+const describeTaps = (report) =>
+  `${report?.measured ?? 0} measured, ${report?.small?.length ?? "?"} under 44px: ` +
+  (report?.small ?? []).map((s) => `${s.name} ${s.height}px`).join(", ");
+
 /* ------------------------------------------------------------------ */
 /* Main                                                               */
 /* ------------------------------------------------------------------ */
@@ -533,7 +593,13 @@ async function main() {
             .filter((t) => t.getBoundingClientRect().width > 0)
             .map((t) => t.textContent.trim()),
           focusInside: d.contains(document.activeElement),
-          swatches: d.querySelectorAll('[role="radiogroup"] button').length,
+          // The preset row is a group of toggle buttons, not a radio group:
+          // the theme can be "custom", which is a state a radio group cannot
+          // hold. Matched on aria-pressed inside the open panel rather than on
+          // a role, so the assertion survives the refactor either way. (No
+          // backticks in here: this whole block is a template literal, and a
+          // backtick in a comment closes it early. That has bitten once.)
+          swatches: d.querySelectorAll('[role="tabpanel"] button[aria-pressed], [role="radiogroup"] button').length,
         };
       })()`,
     );
@@ -561,7 +627,12 @@ async function main() {
       sessionId,
       `(async () => {
         const before = getComputedStyle(document.documentElement).getPropertyValue('--accent-rgb').trim();
-        const swatches = [...document.querySelectorAll('[role="radiogroup"] button')].filter(
+        // The preset row is a group of toggle buttons, not a radio group: the
+        // theme can be "custom", which is a state a radio group cannot hold.
+        // Matched on aria-pressed inside the open panel, so this check does not
+        // depend on the role the panel happens to use. (No backticks: this
+        // block is a template literal.)
+        const swatches = [...document.querySelectorAll('[role="tabpanel"] button[aria-pressed], [role="radiogroup"] button')].filter(
           (b) => b.getBoundingClientRect().width > 0,
         );
         const other = swatches.find((b) => b.getAttribute('aria-pressed') !== 'true');
@@ -924,6 +995,24 @@ async function main() {
     } else {
       check("an empty memory room says so", memoryRoom.includes("Nothing remembered yet"));
     }
+    const shotCaveMemory = await screenshot(devtools, sessionId, "15-cave-memory");
+    console.log(`  info  ${shotCaveMemory}`);
+
+    /* Every room gets its own picture.
+     *
+     * Two rooms had never been photographed on this machine, so the only
+     * evidence that they render at all was a sentence in a check. A room that
+     * nobody has looked at is a room where a broken column, a clipped label or
+     * a stray "undefined" survives indefinitely, and the fix for that is one
+     * line here per room rather than a resolution to remember. */
+    const scheduleRoom = await enterRoom("Schedule");
+    check(
+      "the schedule room renders its day",
+      scheduleRoom.length > 40 && !scheduleRoom.includes("undefined"),
+      scheduleRoom.slice(0, 120),
+    );
+    const shotCaveSchedule = await screenshot(devtools, sessionId, "16-cave-schedule");
+    console.log(`  info  ${shotCaveSchedule}`);
 
     const trashRoom = await enterRoom("Trash");
     if (caveExpected.trash.length > 0) {
@@ -1360,6 +1449,65 @@ async function main() {
     );
     const shot6 = await screenshot(devtools, sessionId, "07-phone-settings");
     console.log(`  info  ${shot6}`);
+
+    /* ---------------- touching ---------------- */
+    section("Touching · every control, at 390 wide");
+
+    /* The settings sheet is open at this point, so it is measured first. Then
+       the page, then every room in the cave: those are the three surfaces a
+       thumb actually meets, and the floor is the same on all three. */
+    const settingsTaps = await tapAudit(devtools, sessionId, "settings");
+    check(
+      "every control in settings is a real touch target",
+      settingsTaps?.small.length === 0,
+      describeTaps(settingsTaps),
+    );
+
+    await evaluate(
+      devtools,
+      sessionId,
+      `(async () => {
+        for (const target of [document, document.body, window]) {
+          target.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        }
+        await new Promise((r) => setTimeout(r, 500));
+      })()`,
+      true,
+    );
+
+    const frontTaps = await tapAudit(devtools, sessionId, "the front page");
+    check(
+      "every control on the front page is a real touch target",
+      frontTaps?.small.length === 0,
+      describeTaps(frontTaps),
+    );
+
+    const phoneCave = await openCave();
+    if (phoneCave?.open) {
+      await sleep(700);
+      for (const room of ["Goals", "Tasks", "Schedule", "Log", "Memory", "Trash"]) {
+        await enterRoom(room);
+        const report = await tapAudit(devtools, sessionId, `the ${room} room`);
+        check(
+          `every control in the ${room} room is a real touch target`,
+          report?.small.length === 0,
+          describeTaps(report),
+        );
+      }
+      await evaluate(
+        devtools,
+        sessionId,
+        `(async () => {
+          for (const target of [document, document.body, window]) {
+            target.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+          }
+          await new Promise((r) => setTimeout(r, 400));
+        })()`,
+        true,
+      );
+    } else {
+      check("the cave opens on a phone", false, JSON.stringify(phoneCave));
+    }
 
     /* ---------------- console ---------------- */
     section("The console");

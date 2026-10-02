@@ -167,4 +167,65 @@ if (!cssHref) {
   ]) {
     console.log(`  ${css.includes(declaration) ? "ok   " : "MISS "} ${label}`);
   }
+
+  /**
+   * Every accent utility in the source, looked up in the served stylesheet.
+   *
+   * This is the check for a class that compiles to nothing. Tailwind v4 drops
+   * an opacity with a leading zero, so `bg-accent/04` and `bg-accent/08` are
+   * silently absent from the page while the source reads as though the wash is
+   * there — which is exactly what happened to the goals board's empty lane, and
+   * what no screenshot can show, because a missing 8% wash looks like a wash
+   * that is subtle. `check:design` refuses the spelling; this refuses the
+   * outcome, and it covers every accent utility rather than the two steps.
+   */
+  const accentUtilities = await collectAccentUtilities();
+  const missing = accentUtilities.filter((entry) => !css.includes(entry.needle));
+  console.log(`\n  accent utilities in the source (${accentUtilities.length}):`);
+  if (missing.length === 0) {
+    console.log("  ok    every one of them reached the stylesheet");
+  } else {
+    for (const entry of missing) {
+      console.log(`  MISS  ${entry.needle.replace(/\\/g, "")} — ${entry.where}`);
+    }
+    process.exitCode = 1;
+  }
+}
+
+/**
+ * Every `…-accent/NN` (and `-accent-2/NN`) utility written under `src/`,
+ * as the escaped class name Tailwind emits.
+ *
+ * The escape matters: Tailwind writes `bg-accent\/8`, so the needle has to be
+ * the escaped spelling or the lookup finds nothing and reports a false miss.
+ * The location is kept so a failure names the file rather than only the class.
+ */
+async function collectAccentUtilities() {
+  const { readdirSync, statSync } = await import("node:fs");
+  const { join, relative, sep } = await import("node:path");
+  const root = join(process.cwd(), "src");
+
+  const files = [];
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir)) {
+      const full = join(dir, entry);
+      if (statSync(full).isDirectory()) walk(full);
+      else if (/\.(tsx|ts)$/.test(entry)) files.push(full);
+    }
+  };
+  walk(root);
+
+  const seen = new Map();
+  for (const file of files) {
+    const text = readFileSync(file, "utf8");
+    for (const match of text.matchAll(/\b((?:bg|border|text|from|to|ring|fill|stroke|decoration)-(?:accent|accent-2)\/(\d{1,3}))\b/g)) {
+      if (seen.has(match[1])) continue;
+      const escaped = match[1].replace("accent-2/", "accent-2\\/").replace(/accent\//, "accent\\/");
+      seen.set(match[1], {
+        needle: escaped,
+        where: `${relative(process.cwd(), file).split(sep).join("/")}`,
+      });
+    }
+  }
+  return [...seen.values()];
 }

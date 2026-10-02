@@ -118,7 +118,7 @@ export default function ScheduleRoom({ controller }: ScheduleRoomProps) {
   };
 
   return (
-    <div>
+    <div className="mx-auto w-full max-w-[var(--content-max)]">
       {/* ---------------- add one ---------------- */}
       <div className="border-b border-hairline px-6 py-5">
         <h3 className="text-[15px] font-normal text-text">Add to the schedule</h3>
@@ -240,14 +240,14 @@ export default function ScheduleRoom({ controller }: ScheduleRoomProps) {
                             void controller.run("event.delete", { id: event.id }, event.id);
                             setConfirming(null);
                           }}
-                          className="rounded-[var(--r-sm)] px-2 py-1 text-[12px] font-normal text-danger hover:bg-surface-2"
+                          className="chip chip-danger"
                         >
                           remove
                         </button>
                         <button
                           type="button"
                           onClick={() => setConfirming(null)}
-                          className="rounded-[var(--r-sm)] px-2 py-1 text-[12px] font-normal text-dim hover:bg-surface-2"
+                          className="chip"
                         >
                           keep
                         </button>
@@ -257,7 +257,7 @@ export default function ScheduleRoom({ controller }: ScheduleRoomProps) {
                         type="button"
                         onClick={() => setConfirming(event.id)}
                         aria-label={`Remove ${event.title}`}
-                        className="shrink-0 rounded-[var(--r-sm)] px-2 py-1 text-[12px] font-normal text-faint hover:bg-surface-2 hover:text-danger"
+                        className="chip chip-danger"
                       >
                         remove
                       </button>

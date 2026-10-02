@@ -147,6 +147,14 @@
   --a2-14: rgb(var(--accent-2-rgb) / 0.14);
   --a2-24: rgb(var(--accent-2-rgb) / 0.24);
 
+  /* ---- Wells. A recessed surface is black at three depths and nothing else:
+     a field, a code block or a nested well, and the scrim behind a dialog.
+     Six files used to write four different literals for these; rule 9 in
+     `check:design` now refuses a `bg-black/NN` so the next one cannot. ---- */
+  --well: rgb(0 0 0 / 0.28);
+  --well-deep: rgb(0 0 0 / 0.4);
+  --scrim: rgb(0 0 0 / 0.55);
+
   /* ---- Depth. Every shadow is an offset plus a real blur: a zero-offset
      coloured halo is a glow, and a glow is decoration, not elevation. The
      glow tokens exist separately below, for the one case where light
@@ -275,6 +283,9 @@
   --color-surface-3: var(--surface-3);
   --color-hairline: var(--hairline);
   --color-hairline-2: var(--hairline-2);
+  --color-well: var(--well);
+  --color-well-deep: var(--well-deep);
+  --color-scrim: var(--scrim);
 
   /* `color-mix` is what makes `bg-accent/12` work against a runtime
      channel triplet. Supported in every browser that runs the rest of
@@ -400,8 +411,13 @@ body {
 
 /* The 15px body size the whole interface is set in. One step up from the
    original 13–14px: the previous scale was legible on a 27" display and
-   cramped on a laptop, and this is a product people read, not a spec. */
-.body-text {
+   cramped on a laptop, and this is a product people read, not a spec.
+ *
+ * In `:where()` for the same reason `.chip`'s type defaults are: it is meant
+ * to be *composed* — `class="body-text text-dim"` is how a quieter paragraph
+ * is written — and an unlayered `color` here would beat the utility and
+ * silently render every dim paragraph in full white. */
+:where(.body-text) {
   font-size: 15px;
   line-height: 1.65;
   font-weight: 300;
@@ -512,7 +528,13 @@ body {
 :focus-visible:not(#xana-composer) {
   outline: 2px solid var(--a-64);
   outline-offset: 2px;
-  border-radius: var(--r-sm);
+  /* `border-radius` used to be set here, and it was the single most
+     destructive line in the stylesheet. An ID inside `:not()` counts toward
+     specificity, so this rule is (1,1,0) where `.btn` and `.chip-round` are
+     (0,1,0): every focused pill snapped to an 8px rectangle at the moment of
+     focus, and no utility could put it back. Modern browsers draw an outline
+     along the element's own `border-radius`, so the declaration was doing
+     nothing but damage. If a shape is wrong, it is wrong unfocused too. */
 }
 
 /* ==================================================================
@@ -608,12 +630,143 @@ body {
 }
 
 /* ==================================================================
+   The tap floor, and the two small controls built on it.
+
+   WHY THIS EXISTS
+
+   Every room had grown its own version of the same small button: a hairline,
+   `px-2 py-1`, 12px text, a hover that changed one of the two or three
+   properties the others changed. Twenty inline recipes, no two identical, and
+   a thumb could not reliably hit any of them: 24 to 28 pixels tall is about
+   half the 44 the audit playbook names, and the difference is not a style
+   preference on a phone.
+
+   So there are three things here and nothing else:
+
+     `.chip`       one small control, one visual language, for a row action,
+                   a filter, a meal or a mood. `.chip-round` is the same
+                   control drawn as a pill, which is what a tap target looks
+                   like when the row is a row of choices.
+     `.tap`        the floor alone, for a control that keeps its own look
+                   (the room strip, the mic, an icon button).
+     `.icon-tap`   the same floor with a minimum width, for a square icon
+                   button whose glyph is small but whose target must not be.
+
+   HEIGHT, NOT AREA, BECAUSE AREA IS NOT MEASURABLE
+
+   A pseudo-element that grows the hit area keeps `getBoundingClientRect()`
+   at the drawn size, so nothing can assert it and the next person cannot see
+   it either. The floor is real height instead: 28px on a pointer, 44px below
+   the tablet breakpoint, where "below the tablet breakpoint" is the same
+   condition `.field` already uses to decide when iOS will zoom. `verify:browser`
+   measures every control on the phone viewport against it.
+   ================================================================== */
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-2);
+  min-height: 28px;
+  padding: 4px 10px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-sm);
+  background-color: transparent;
+  cursor: pointer;
+  transition:
+    border-color var(--t-fast) var(--ease),
+    background-color var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease);
+}
+
+/* The type defaults sit in `:where()`, which contributes no specificity, so a
+   chip can carry the label treatment (`class="chip chip-round label"`) or any
+   other type class and keep it. Written as plain declarations, `.chip` would
+   win on source order alone and every uppercase chip in the cave would quietly
+   render at 12px with the wrong tracking. */
+:where(.chip) {
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: 0.02em;
+  color: var(--text-dim);
+}
+
+.chip-round {
+  border-radius: var(--r-full);
+  padding: 4px 12px;
+}
+
+.chip:hover:not(:disabled) {
+  border-color: var(--hairline-2);
+  background-color: var(--surface-2);
+  color: var(--text);
+}
+
+/* A chip whose action is the point of the card (`show me`, `start focus`).
+   The accent on hover is the only difference: it says "this one does
+   something" without adding a second colour to the row. */
+.chip-accent:hover:not(:disabled) {
+  border-color: var(--a-40);
+  color: var(--accent);
+}
+
+/* The chosen one, and there is exactly one way to say it. The rooms were
+   using /10, /15, /20 and a /60 border between them for the same state. */
+.chip[aria-pressed="true"],
+.chip[aria-selected="true"],
+.chip[data-on="true"] {
+  border-color: var(--a-40);
+  background-color: var(--a-08);
+  color: var(--text);
+}
+
+.chip:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.chip-danger:hover:not(:disabled) {
+  border-color: color-mix(in oklab, var(--danger) 40%, transparent);
+  background-color: color-mix(in oklab, var(--danger) 8%, transparent);
+  color: var(--danger);
+}
+
+.tap {
+  min-height: 28px;
+}
+
+.icon-tap {
+  min-width: 28px;
+  min-height: 28px;
+}
+
+@media (max-width: 767px) {
+  .chip,
+  .tap,
+  .btn,
+  /* The fields were the hole in this rule, and they are the tallest hole: at
+     16px with 9px of padding a text input lays out about 39px in Chromium, so
+     every form in the app was a few pixels under the floor while the buttons
+     beside it passed. Measured, not guessed: the browser pass reports the
+     height of every control it finds. */
+  .field,
+  .select {
+    min-height: 44px;
+  }
+
+  .icon-tap {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
+
+/* ==================================================================
    Form fields
    ================================================================== */
 
 .field {
   width: 100%;
-  background-color: rgb(0 0 0 / 0.28);
+  background-color: var(--well);
   border: 1px solid var(--hairline);
   border-radius: var(--r-md);
   padding: 9px 12px;
@@ -632,7 +785,15 @@ body {
 }
 
 /* Above the phone breakpoint the zoom risk is gone and 16px is a shade
-   large for a settings label, so it comes back down. */
+   large for a settings label, so it comes back down.
+
+   `.field` is unlayered, which means its own declarations win against every
+   Tailwind utility on the same element. That is deliberate for the size (the
+   floor is a safety rule, not a preference) and it has one consequence worth
+   knowing before writing a class list: `className="field text-[13px]"` renders
+   at 16px, because the utility loses. Three fields in the settings panel had
+   been carrying sizes and a `font-mono` that never applied. If a field needs a
+   different size, change it here or say why in a comment. */
 @media (min-width: 768px) {
   .field {
     font-size: 14px;
@@ -650,7 +811,7 @@ body {
 .field:focus {
   outline: none;
   border-color: var(--a-40);
-  background-color: rgb(0 0 0 / 0.4);
+  background-color: var(--well-deep);
   box-shadow: 0 0 0 3px var(--a-08);
 }
 
@@ -682,13 +843,22 @@ body {
   color: var(--text);
 }
 
-/* Range input for the motion-speed slider. */
+/* Range input for the motion-speed slider.
+ *
+ * The track is 3px and the CONTROL is not: a 3px-tall input is a 3px drag
+ * target, which is why a slider is the one control people miss on a phone and
+ * why the audit playbook's 44px floor exists. `background-clip: content-box`
+ * lets the box grow while the painted track stays 3px, so the target is real
+ * (29px with a pointer, 45px below the tablet breakpoint) and the drawing is
+ * unchanged. Nothing in the markup had to move. */
 .slider {
   appearance: none;
   width: 100%;
   height: 3px;
+  padding-block: 13px;
   border-radius: var(--r-full);
   background: var(--hairline);
+  background-clip: content-box;
   cursor: pointer;
 }
 
@@ -726,10 +896,13 @@ body {
   position: relative;
   width: 38px;
   height: 22px;
-  shrink: 0;
+  /* `shrink: 0` sat here and is not a property. The switch is the one child
+     of its row that must not squeeze, and it was relying on `flex-shrink`'s
+     initial value of 1 never being exercised. */
+  flex-shrink: 0;
   border-radius: var(--r-full);
   border: 1px solid var(--hairline);
-  background-color: rgb(0 0 0 / 0.35);
+  background-color: var(--well);
   cursor: pointer;
   transition:
     background-color var(--t-state) var(--ease),
@@ -739,6 +912,15 @@ body {
 .switch[aria-checked="true"] {
   background-color: var(--a-24);
   border-color: var(--a-40);
+}
+
+/* The switch was the only control in the app that answered a press and
+   nothing else: every button, chip, field and card warms its border on hover,
+   and this one sat still, which reads as "not interactive" right up until it
+   is clicked. Only the unchecked state needs it; when it is on, the accent
+   border is already the answer. */
+.switch:hover:not([aria-checked="true"]) {
+  border-color: var(--hairline-2);
 }
 
 .switch-knob {
@@ -758,6 +940,37 @@ body {
   transform: translateX(16px);
   background-color: var(--accent);
   box-shadow: var(--shadow-glow);
+}
+
+/* A thumb, not a pointer.
+ *
+ * Declared after the switch's own rules on purpose: these override the
+ * geometry, and an override that loses on source order is worse than none,
+ * because it reads as done. The same block carries the slider's taller box,
+ * since both are the controls a thumb has to find. */
+@media (max-width: 767px) {
+  /* The switch grows to the tap floor and the knob grows with it. It stays a
+     pill: a switch's affordance is the sliding knob, and a rounded rectangle
+     of the same height reads as a button nobody has pressed. */
+  .switch {
+    width: 56px;
+    height: 44px;
+  }
+
+  .switch-knob {
+    top: 9px;
+    left: 3px;
+    width: 24px;
+    height: 24px;
+  }
+
+  .switch[aria-checked="true"] .switch-knob {
+    transform: translateX(26px);
+  }
+
+  .slider {
+    padding-block: 21px;
+  }
 }
 
 /* ==================================================================

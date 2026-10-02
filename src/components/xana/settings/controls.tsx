@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, type ReactNode } from "react";
+import { useId, useRef, type KeyboardEvent, type ReactNode } from "react";
 
 /**
  * The form primitives the settings panel is built from.
@@ -144,7 +144,12 @@ export function TextArea({
         spellCheck={false}
         aria-describedby={hint ? `${id}-hint` : undefined}
         onChange={(event) => onChange(event.target.value)}
-        className="field resize-y font-mono text-[12px] leading-relaxed"
+        /* No `font-mono`. Mono is for code, data and measurement (craft-floor,
+           and the persona is the one field here that is prose); it was set on
+           this shared textarea, so the app's only multi-line prose input was
+           dressed as a terminal. `text-[12px]` was here too and never applied:
+           `.field` is unlayered and sets 16px, which beats any utility. */
+        className="field resize-y leading-relaxed"
       />
     </Field>
   );
@@ -208,7 +213,12 @@ export function Switch({
           {label}
         </label>
         {hint ? (
-          <p className="mt-1 max-w-[46ch] text-[12px] leading-relaxed font-normal text-faint">
+          /* Wired to the button the same way `Field` and `Slider` wire theirs.
+             The sentence beside a switch is not decoration here: it is where
+             "she stops listening while she is speaking" and "turning this off
+             withdraws the read permission too" live, and a screen reader was
+             reading the switch with none of it. */
+          <p id={`${id}-hint`} className="mt-1 max-w-[46ch] text-[12px] leading-relaxed font-normal text-faint">
             {hint}
           </p>
         ) : null}
@@ -219,6 +229,7 @@ export function Switch({
         role="switch"
         aria-checked={checked}
         aria-label={label}
+        aria-describedby={hint ? `${id}-hint` : undefined}
         disabled={disabled}
         onClick={() => onChange(!checked)}
         className="switch mt-0.5 disabled:opacity-40"
@@ -349,6 +360,15 @@ export function StatusLine({
  *
  * Deliberately not colour-only: the word carries the meaning and the tint
  * only reinforces it.
+ *
+ * `data-mark` because the tint is the point here. It is 11px at 500 like
+ * `.label`, but `.label` is an unlayered class and would repaint every pill
+ * `--text-faint`, taking `text-good` and `text-warn` with it. The gate names
+ * the toned status pill as the case `data-mark` exists for, so this declares
+ * the difference rather than looking like an oversight. It shares the
+ * `className` line on purpose: rule 11 reads one line at a time, so an
+ * attribute on the line above would not count and the pill would go back to
+ * reading as a violation.
  */
 export function Pill({
   tone,
@@ -365,61 +385,134 @@ export function Pill({
         : "border-hairline text-faint";
   return (
     <span
-      className={`inline-flex items-center rounded-full border px-2 py-[2px] text-[11px] font-medium tracking-[0.12em] uppercase ${ring}`}
+      className={`inline-flex items-center rounded-full border px-2 py-[2px] text-[11px] font-medium tracking-[0.12em] uppercase ${ring}`} data-mark="toned status pill"
     >
       {children}
     </span>
   );
 }
 
-/** A row of small tab buttons, used for the settings sections. */
+/**
+ * A row of small tab buttons, shared by the settings sections and My cave's
+ * room strip.
+ *
+ * ONE IMPLEMENTATION, ON `.chip`
+ *
+ * The two callers had the same control drawn twice, and both drew it as a
+ * bare text button with its own hover, its own radius and, below the tablet
+ * breakpoint, no floor at all. It is `.chip` now: the hairline box, the
+ * hover, the 44px phone floor and the selected state all come from the one
+ * small control, and `.chip[aria-selected="true"]` is the only thing that
+ * draws "this is the open one", so a chosen room and a chosen section cannot
+ * drift apart. `orientation` is not a style prop, it is the keyboard
+ * contract: a vertical list answers Up and Down, a horizontal strip answers
+ * Left and Right.
+ */
 export function Tabs<T extends string>({
   tabs,
   active,
   onChange,
   ariaLabel,
   orientation = "vertical",
+  panelId,
 }: {
   tabs: readonly { id: T; label: string; badge?: boolean }[];
   active: T;
   onChange: (id: T) => void;
   ariaLabel: string;
   orientation?: "vertical" | "horizontal";
+  /**
+   * The element these tabs control, when there is one.
+   *
+   * `aria-controls` has to name it, and the tabs cannot know its id: the panel
+   * is the caller's. The cave has no such element (its rooms are the whole
+   * body), so it passes nothing rather than pointing at an id that does not
+   * exist.
+   */
+  panelId?: string;
 }) {
+  /**
+   * A unique prefix for this list's tab ids.
+   *
+   * Both this component and the panel it drives are rendered *twice* in
+   * Settings, once for the desktop rail and once for the phone strip, and only
+   * one of them is visible. With fixed ids the document held `tab-appearance`
+   * twice, and anything pointing at it resolved to whichever came first, which
+   * on a phone is the hidden rail. `useId()` makes each instance's ids its
+   * own, which is the whole fix and needs nothing from the callers.
+   */
+  const instance = useId();
+  /** One ref per tab, so an arrow key can move focus with the selection. */
+  const buttons = useRef(new Map<T, HTMLButtonElement>());
+  const vertical = orientation === "vertical";
+
+  /**
+   * Arrow keys, Home and End.
+   *
+   * `tabIndex` is roving, which is the tab pattern and is only honest if the
+   * arrows move between the tabs. They were missing, so the four sections
+   * that were not already open could not be reached without a pointer.
+   * Selection follows focus because selecting a section is the whole action
+   * of pressing one; there is no second step to defer it to.
+   */
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    const forward = vertical ? "ArrowDown" : "ArrowRight";
+    const back = vertical ? "ArrowUp" : "ArrowLeft";
+    const index = tabs.findIndex((tab) => tab.id === active);
+    let next: number;
+    if (event.key === forward) next = index + 1 >= tabs.length ? 0 : index + 1;
+    else if (event.key === back) next = index <= 0 ? tabs.length - 1 : index - 1;
+    else if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = tabs.length - 1;
+    else return;
+
+    const target = tabs[next];
+    if (!target) return;
+    event.preventDefault();
+    onChange(target.id);
+    buttons.current.get(target.id)?.focus();
+  };
+
   return (
     <div
       role="tablist"
       aria-label={ariaLabel}
       aria-orientation={orientation}
-      className={
-        orientation === "vertical"
-          ? "flex flex-col gap-0.5"
-          : "flex gap-1 overflow-x-auto"
-      }
+      onKeyDown={onKeyDown}
+      className={vertical ? "flex flex-col gap-1" : "flex gap-1 overflow-x-auto"}
     >
       {tabs.map((tab) => {
         const selected = tab.id === active;
         return (
           <button
             key={tab.id}
+            ref={(node) => {
+              if (node) buttons.current.set(tab.id, node);
+              else buttons.current.delete(tab.id);
+            }}
             role="tab"
             type="button"
             aria-selected={selected}
-            aria-controls={`panel-${tab.id}`}
-            id={`tab-${tab.id}`}
+            aria-controls={panelId}
+            id={`tab-${instance}-${tab.id}`}
             tabIndex={selected ? 0 : -1}
             onClick={() => onChange(tab.id)}
-            className={`relative shrink-0 rounded-[var(--r-md)] px-3 py-2 text-left text-[13px] font-light whitespace-nowrap transition-colors duration-[var(--t-fast)] ${
-              selected
-                ? "bg-accent/10 text-text"
-                : "text-dim hover:bg-surface-2 hover:text-text"
-            }`}
+            /* The rail reads as a list of rows, so its labels start at the
+               left edge whatever width the nav has; the strip is a row of
+               content-sized chips whose labels are centred by `.chip`. */
+            className={`chip ${vertical ? "w-full" : "shrink-0"}`}
           >
-            {tab.label}
+            <span
+              className={
+                vertical ? "min-w-0 flex-1 truncate text-left" : "whitespace-nowrap"
+              }
+            >
+              {tab.label}
+            </span>
             {tab.badge ? (
               <span
                 aria-hidden="true"
-                className="ml-2 inline-block h-1 w-1 -translate-y-px rounded-full bg-accent align-middle"
+                className="inline-block h-1 w-1 shrink-0 rounded-full bg-accent"
               />
             ) : null}
           </button>

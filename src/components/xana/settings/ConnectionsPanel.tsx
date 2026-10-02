@@ -830,7 +830,7 @@ function HealthBridge({ plugin }: { plugin: PluginStatus }) {
             spaces, so only `overflow-wrap: anywhere` gives the browser a place
             to break. The scroll container stays as the second line of defence
             for a value with no break opportunity at all. */}
-        <code className="mt-1 block min-w-0 overflow-x-auto rounded-[var(--r-md)] border border-hairline bg-black/30 px-3 py-2 font-mono text-[12px] text-dim wrap-anywhere">
+        <code className="mt-1 block min-w-0 overflow-x-auto rounded-[var(--r-md)] border border-hairline bg-well px-3 py-2 font-mono text-[12px] text-dim wrap-anywhere">
           {/* A link, but never in this tab: the route answers POST, so a click
               here is a method-not-allowed page. Opening it beside the panel
               makes the address inspectable without navigating the app away,
@@ -861,7 +861,7 @@ function HealthBridge({ plugin }: { plugin: PluginStatus }) {
             spaces, so only `overflow-wrap: anywhere` gives the browser a place
             to break. The scroll container stays as the second line of defence
             for a value with no break opportunity at all. */}
-        <code className="mt-1 block min-w-0 overflow-x-auto rounded-[var(--r-md)] border border-hairline bg-black/30 px-3 py-2 font-mono text-[12px] text-dim wrap-anywhere">
+        <code className="mt-1 block min-w-0 overflow-x-auto rounded-[var(--r-md)] border border-hairline bg-well px-3 py-2 font-mono text-[12px] text-dim wrap-anywhere">
           {HEALTH_BODY_EXAMPLE}
         </code>
       </div>
@@ -1041,7 +1041,7 @@ function LegacyEnvSection({ view, onSave, saving }: LegacyEnvSectionProps) {
       className="border-b border-hairline px-6 py-6 last:border-b-0"
       onToggle={(event) => setOpen(event.currentTarget.open)}
     >
-      <summary className="flex cursor-pointer list-none items-start justify-between gap-4 [&::-webkit-details-marker]:hidden">
+      <summary className="group flex cursor-pointer list-none items-start justify-between gap-4 [&::-webkit-details-marker]:hidden">
         <span className="min-w-0">
           <span className="block text-[15px] font-normal tracking-[0.01em] text-text">
             Older XANA_* environment values
@@ -1052,17 +1052,20 @@ function LegacyEnvSection({ view, onSave, saving }: LegacyEnvSectionProps) {
         </span>
         {/* Rotated with an inline transform rather than a variant class: the
             duration is the motion token, so reduced motion collapses it with
-            everything else. */}
+            everything else. The colour is in the same transition because this
+            chevron is the disclosure's only hover answer — a pointer over the
+            row brightens the one glyph that says "this opens". */}
         <svg
           width="12"
           height="12"
           viewBox="0 0 12 12"
           fill="none"
           aria-hidden="true"
-          className="mt-1.5 shrink-0 text-faint"
+          className="mt-1.5 shrink-0 text-faint group-hover:text-text"
           style={{
             transform: open ? "rotate(180deg)" : "none",
-            transition: "transform var(--t-fast) var(--ease)",
+            transition:
+              "transform var(--t-fast) var(--ease), color var(--t-fast) var(--ease)",
           }}
         >
           <path
@@ -1127,7 +1130,7 @@ function LegacyEnvSection({ view, onSave, saving }: LegacyEnvSectionProps) {
                           type="password"
                           readOnly
                           value={secretView?.masked ?? ""}
-                          className="field font-mono text-[12px] text-dim"
+                          className="field font-mono"
                           aria-label={`${field.label}, already set`}
                         />
                       ) : (
@@ -1143,7 +1146,7 @@ function LegacyEnvSection({ view, onSave, saving }: LegacyEnvSectionProps) {
                               : (field.example ?? "")
                           }
                           onChange={(event) => setValue(field, event.target.value)}
-                          className="field font-mono text-[12px]"
+                          className="field font-mono"
                         />
                       )}
 

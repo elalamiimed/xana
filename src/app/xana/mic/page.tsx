@@ -359,7 +359,7 @@ export default function MicPage() {
       </p>
 
       <section className="mt-8">
-        <h2 className="text-[13px] font-normal tracking-[0.02em] text-accent uppercase">
+        <h2 className="text-[15px] font-normal text-text">
           What this browser can do
         </h2>
         <dl className="mt-3 space-y-2">
@@ -379,7 +379,7 @@ export default function MicPage() {
       </section>
 
       <section className="mt-10">
-        <h2 className="text-[13px] font-normal tracking-[0.02em] text-accent uppercase">
+        <h2 className="text-[15px] font-normal text-text">
           1. Is the microphone hearing anything?
         </h2>
         <p className="mt-2 max-w-[62ch] text-[13px] leading-relaxed font-light text-dim">
@@ -431,7 +431,7 @@ export default function MicPage() {
       </section>
 
       <section className="mt-10">
-        <h2 className="text-[13px] font-normal tracking-[0.02em] text-accent uppercase">
+        <h2 className="text-[15px] font-normal text-text">
           2. Can the browser turn speech into words?
         </h2>
         <p className="mt-2 max-w-[62ch] text-[13px] leading-relaxed font-light text-dim">
@@ -470,7 +470,7 @@ export default function MicPage() {
       </section>
 
       <section className="mt-10">
-        <h2 className="text-[13px] font-normal tracking-[0.02em] text-accent uppercase">
+        <h2 className="text-[15px] font-normal text-text">
           3. What to do with the answer
         </h2>
         <ul className="mt-2 max-w-[62ch] space-y-2 text-[13px] leading-relaxed font-light text-dim">
@@ -504,7 +504,7 @@ export default function MicPage() {
       </section>
 
       <section className="mt-10">
-        <h2 className="text-[13px] font-normal tracking-[0.02em] text-accent uppercase">
+        <h2 className="text-[15px] font-normal text-text">
           4. The recording of what just happened
         </h2>
         <p className="mt-2 max-w-[62ch] text-[13px] leading-relaxed font-light text-dim">

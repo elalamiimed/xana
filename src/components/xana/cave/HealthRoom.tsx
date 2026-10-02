@@ -161,7 +161,7 @@ export default function HealthRoom({ controller }: HealthRoomProps) {
   if (!health) {
     return (
       <section className="mx-auto mt-10 w-full max-w-[var(--content-max)] px-6">
-        <h3 className="text-[13px] font-normal tracking-[0.02em] text-accent uppercase">Log</h3>
+        <h3 className="label">Log</h3>
         <p className="mt-3 max-w-[62ch] text-[13px] leading-relaxed font-light text-dim">
           {emptyNote(controller.loading, "Nothing logged yet.")}
         </p>
@@ -175,7 +175,7 @@ export default function HealthRoom({ controller }: HealthRoomProps) {
   return (
     <section className="mx-auto mt-8 w-full max-w-[var(--content-max)] px-6 pb-10">
       <div className="flex flex-wrap items-baseline justify-between gap-3">
-        <h3 className="text-[13px] font-normal tracking-[0.02em] text-accent uppercase">Log</h3>
+        <h3 className="label">Log</h3>
         <p className="text-[12px] font-normal text-faint">
           {hasAnything
             ? `Last ${health.windowDays} days · what the energy forecast is built on.`
@@ -196,23 +196,29 @@ export default function HealthRoom({ controller }: HealthRoomProps) {
                 aria-pressed={active}
                 aria-label={dayFullLabel(date)}
                 title={dayFullLabel(date)}
-                className={`flex h-[58px] w-[62px] flex-col items-center justify-center gap-0.5 rounded-[var(--r-sm)] border transition-colors duration-[var(--t-fast)] ${
-                  active ? "border-accent/60 bg-surface-2 text-text" : "border-hairline text-dim hover:bg-surface-2"
-                }`}
+                // A chip, not a chip-shaped button: this is the same selected
+                // state as a mood or a meal two rows down, from `.chip`'s own
+                // `[aria-pressed="true"]` rule, rather than a second inline
+                // spelling of the same two alphas. The three stacked lines sit
+                // in an inner column because `.chip`'s own gap is part of its
+                // box and would not leave room for them in 58px.
+                className="chip h-[58px] w-[62px] flex-col"
               >
-                <span className="text-[12px] font-normal tracking-[0.02em] text-faint">
-                  {daySlotLabel(date, health.today)}
-                </span>
-                <span className="text-[13px] font-light text-text">{dayOfMonth(date)}</span>
-                {/* The one number worth a mark: sleep is what the forecast leans
-                    on, and a week of it is the reason to look at a strip rather
-                    than at a single day. */}
-                <span className="text-[12px] font-normal text-faint">
-                  {row?.sleepHours !== undefined
-                    ? `${Number.isInteger(row.sleepHours) ? row.sleepHours : row.sleepHours.toFixed(1)}h`
-                    : dayHasReading(row)
-                      ? "·"
-                      : ""}
+                <span className="flex flex-col items-center gap-0.5">
+                  <span className="text-[12px] font-normal tracking-[0.02em] text-faint">
+                    {daySlotLabel(date, health.today)}
+                  </span>
+                  <span className="text-[13px] font-light text-text">{dayOfMonth(date)}</span>
+                  {/* The one number worth a mark: sleep is what the forecast leans
+                      on, and a week of it is the reason to look at a strip rather
+                      than at a single day. */}
+                  <span className="text-[12px] font-normal text-faint">
+                    {row?.sleepHours !== undefined
+                      ? `${Number.isInteger(row.sleepHours) ? row.sleepHours : row.sleepHours.toFixed(1)}h`
+                      : dayHasReading(row)
+                        ? "·"
+                        : ""}
+                  </span>
                 </span>
               </button>
             </li>
@@ -347,9 +353,14 @@ function ClearButton({ onClick, busy, what }: { onClick: () => void; busy: boole
       disabled={busy}
       aria-label={`Clear ${what}`}
       title={`Clear ${what}`}
-      className="shrink-0 rounded-full px-1.5 text-[13px] leading-none text-faint transition-colors duration-[var(--t-fast)] hover:text-danger disabled:opacity-40"
+      className="icon-tap grid shrink-0 place-items-center rounded-full text-faint transition-colors duration-[var(--t-fast)] hover:text-danger disabled:opacity-40"
     >
-      ×
+      {/* Drawn rather than typed. It was a "×" character here and an SVG cross
+          on the goal card, which is two renderings of one idea and one of them
+          is a font glyph that changes shape with the reader's system font. */}
+      <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
+        <path d="M1 1l8 8M9 1L1 9" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+      </svg>
     </button>
   );
 }
@@ -411,7 +422,7 @@ function NumberRow({
             onCommit();
           }
         }}
-        className="field max-w-[104px] px-2 py-1 text-[13px]"
+        className="field max-w-[104px]"
       />
       <span className="text-[12px] font-normal text-faint">{unit}</span>
       {value !== undefined || (draft ?? "").trim() !== "" ? (
@@ -448,12 +459,13 @@ function RatingRow({
             onClick={() => onPick(level)}
             disabled={busy}
             aria-pressed={value === level}
+            // `data-on` paints the run up to the chosen number, which is how a
+            // 1-5 rating reads at a glance, without claiming those levels are
+            // the choice. The chosen state itself is `aria-pressed`, so it is
+            // word for word what a mood or a meal chip says.
+            data-on={value !== undefined && level <= value}
             aria-label={`${label} ${level} of 5`}
-            className={`h-6 w-6 rounded-full border text-[12px] font-normal transition-colors duration-[var(--t-fast)] ${
-              value !== undefined && level <= value
-                ? "border-accent/60 bg-accent/20 text-text"
-                : "border-hairline text-faint hover:bg-surface-2"
-            }`}
+            className="chip chip-round"
           >
             {level}
           </button>
@@ -498,11 +510,7 @@ function ChipRow({
               onClick={() => onPick(option.id)}
               disabled={busy}
               aria-pressed={on}
-              className={`rounded-full border px-2.5 py-1 text-[12px] font-normal transition-colors duration-[var(--t-fast)] ${
-                on
-                  ? "border-accent/60 bg-accent/15 text-text"
-                  : "border-hairline text-dim hover:bg-surface-2 hover:text-text"
-              }`}
+              className="chip chip-round"
             >
               {option.label}
             </button>

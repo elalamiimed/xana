@@ -166,12 +166,15 @@ export default function Settings({
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
       {/* The scrim. Kept light enough that the orb stays visible through
-          it on a wide screen — the theme preview depends on that. */}
+          it on a wide screen — the theme preview depends on that. It is
+          `--scrim` rather than a fourth black literal, and it is a button
+          with a name so a click outside is reachable to assistive tech
+          rather than being an invisible div. */}
       <button
         type="button"
         aria-label="Close settings"
         onClick={onClose}
-        className="scrim-in absolute inset-0 cursor-default bg-black/55 backdrop-blur-[2px]"
+        className="scrim-in absolute inset-0 cursor-default bg-scrim backdrop-blur-[2px]"
       />
 
       <div
@@ -199,7 +202,10 @@ export default function Settings({
             type="button"
             onClick={onClose}
             aria-label="Close settings"
-            className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-dim transition-colors duration-[var(--t-fast)] hover:bg-surface-2 hover:text-text"
+            /* `icon-tap` rather than a bigger glyph: the drawn button stays
+               32px on a pointer and the box a thumb has to find is 44px on a
+               phone, which is the one measurement a phone cares about. */
+            className="icon-tap grid h-8 w-8 shrink-0 place-items-center rounded-full text-dim transition-colors duration-[var(--t-fast)] hover:bg-surface-2 hover:text-text active:bg-surface-3 active:text-text"
           >
             <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
               <path
@@ -223,6 +229,7 @@ export default function Settings({
                 onChange={setTab}
                 ariaLabel="Settings sections"
                 orientation="vertical"
+                panelId="settings-panel"
               />
             </div>
             <div className="md:hidden">
@@ -232,14 +239,24 @@ export default function Settings({
                 onChange={setTab}
                 ariaLabel="Settings sections"
                 orientation="horizontal"
+                panelId="settings-panel"
               />
             </div>
           </nav>
 
+          {/* One panel, two tab lists.
+           *
+           * Its name comes from `aria-label` rather than from
+           * `aria-labelledby`, because the tab that labels it may be the
+           * hidden instance: both strips are in the DOM and only one is shown,
+           * so a label that pointed at a tab id would be a label that depends
+           * on which of two identical lists the browser found first. The
+           * section name is the same either way, and the tab ids are unique per
+           * instance now, so nothing here is duplicated. */}
           <div
-            id={`panel-${activeTab}`}
+            id="settings-panel"
             role="tabpanel"
-            aria-labelledby={`tab-${activeTab}`}
+            aria-label={`${TABS.find((tab) => tab.id === activeTab)?.label ?? "Settings"} settings`}
             tabIndex={-1}
             className="min-h-0 flex-1 overflow-y-auto"
           >
@@ -334,7 +351,7 @@ function AboutPanel({ settingsPath }: { settingsPath: string }) {
       </p>
       {/* A file path is a long unbroken string on a surface that has to
           survive 390px, so it wraps rather than widening the sheet. */}
-      <code className="mt-4 block min-w-0 overflow-x-auto rounded-[var(--r-md)] border border-hairline bg-black/30 px-3 py-2 font-mono text-[12px] text-dim wrap-anywhere">
+      <code className="mt-4 block min-w-0 overflow-x-auto rounded-[var(--r-md)] border border-hairline bg-well px-3 py-2 font-mono text-[12px] text-dim wrap-anywhere">
         {settingsPath}
       </code>
 

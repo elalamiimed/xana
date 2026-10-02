@@ -241,7 +241,7 @@ export default function Page() {
               shell.openSettings();
             }}
           />
-          <p className="mt-3 max-w-[46ch] text-center text-[15px] leading-relaxed font-light tracking-[0.01em] text-dim">
+          <p className="body-text mt-3 max-w-[46ch] text-center text-dim">
             {greet}
           </p>
         </section>

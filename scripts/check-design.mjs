@@ -68,6 +68,46 @@ function sourceFiles(dir) {
 
 const UI_FILES = sourceFiles(SRC).filter((file) => file.endsWith(".tsx"));
 
+/**
+ * The same file with its comments removed, one entry per line.
+ *
+ * A gate that reads raw text reports the file that *documents* a rule. Three of
+ * the rules below name banned tokens in their own explanations, and two of those
+ * comments are inside components, so the first version of rule 9 failed on the
+ * comment that said "`bg-accent/04` compiles to nothing" — the most annoying
+ * possible false positive, because the fix is to delete the explanation.
+ *
+ * Line numbers are preserved by returning a same-length array, and the `//` tail
+ * is only treated as a comment when whitespace precedes it, so a `https://` in a
+ * string survives. That last heuristic is a heuristic: it is right for this
+ * codebase's formatting and it errs toward scanning code rather than skipping it.
+ */
+function codeLines(file) {
+  const raw = readFileSync(file, "utf8").split(/\r?\n/);
+  let inBlock = false;
+  return raw.map((line) => {
+    let text = line;
+    if (inBlock) {
+      const end = text.indexOf("*/");
+      if (end === -1) return "";
+      text = text.slice(end + 2);
+      inBlock = false;
+    }
+    for (;;) {
+      const start = text.indexOf("/*");
+      if (start === -1) break;
+      const end = text.indexOf("*/", start + 2);
+      if (end === -1) {
+        text = text.slice(0, start);
+        inBlock = true;
+        break;
+      }
+      text = `${text.slice(0, start)} ${text.slice(end + 2)}`;
+    }
+    return text.replace(/\s\/\/.*$/, "");
+  });
+}
+
 /* ------------------------------------------------------------------ */
 /* Rule 1 — the type scale floor                                      */
 /* ------------------------------------------------------------------ */
@@ -351,9 +391,8 @@ function ruleNoLiteralColour() {
   for (const file of UI_FILES) {
     const rel = relative(ROOT, file).split(sep).join("/");
     if (LITERAL_COLOUR_ALLOWED.has(rel)) continue;
-    const lines = readFileSync(file, "utf8").split(/\r?\n/);
+    const lines = codeLines(file);
     lines.forEach((line, index) => {
-      if (/^\s*(\*|\/\/)/.test(line)) return;
       checked++;
       const literal = line.match(/#[0-9a-fA-F]{3,8}\b/);
       if (!literal) return;
@@ -438,6 +477,238 @@ function ruleCssTypeFloor() {
 }
 
 /* ------------------------------------------------------------------ */
+/* Rule 9 — the accent ramp, and the wells                            */
+/* ------------------------------------------------------------------ */
+
+/**
+ * A wash is one of six alphas, and a recessed surface is one of three wells.
+ *
+ * DESIGN.md §1 has said "use these, never invented opacities" since the ramp
+ * existed, and the interface had drifted to nine off-ramp alphas anyway: /5,
+ * /10, /15, /20, /30, /48 and /55 for the accent, each one a slightly different
+ * answer to the same question, and four different black literals for a
+ * recessed surface. The visual cost is small and the systemic cost is not: a
+ * chosen chip looks different in every room, and the theme picker's promise
+ * (change three integers and the interface re-derives) is only as true as the
+ * ramp is small.
+ *
+ * The wells are `--well`, `--well-deep` and `--scrim`. Anything else that
+ * reaches for black is a new depth level pretending not to be one.
+ */
+const ACCENT_RAMP = new Set(["4", "8", "14", "24", "40", "64"]);
+const ACCENT_2_RAMP = new Set(["8", "14", "24"]);
+
+/**
+ * Why the two lowest steps are spelled `/4` and `/8` and not `/04` and `/08`.
+ *
+ * Tailwind v4 drops an opacity with a leading zero: `bg-accent/04` and
+ * `bg-accent/08` compile to no rule at all, silently. A well was missing its
+ * wash in the goals board for exactly this reason and nothing could see it,
+ * because an absent utility looks identical to a utility whose effect is
+ * subtle. So this rule rejects the leading-zero spelling outright, and
+ * `check:bundle` separately asserts that every accent utility written in the
+ * source has a rule in the *served* stylesheet. The second one is the real
+ * gate; this one exists so the failure is named at the point it is written.
+ */
+function ruleRampAndWells() {
+  const rule = "colour — the ramp and the wells are the only washes";
+  for (const file of UI_FILES) {
+    const rel = relative(ROOT, file).split(sep).join("/");
+    if (LITERAL_COLOUR_ALLOWED.has(rel)) continue;
+    const lines = codeLines(file);
+    lines.forEach((line, index) => {
+      checked++;
+      for (const match of line.matchAll(/\b(accent-2|accent)\/(\d{1,3})\b/g)) {
+        if (/^0/.test(match[2])) {
+          fail(
+            rule,
+            file,
+            index + 1,
+            `${match[0]} has a leading zero, so Tailwind emits no rule for it — "${line.trim().slice(0, 64)}"`,
+            `Write ${match[1]}/${Number(match[2])}, or use the token form \`bg-[var(--a-${match[2].slice(1).padStart(2, "0")})]\`.`,
+          );
+          continue;
+        }
+        const ramp = match[1] === "accent" ? ACCENT_RAMP : ACCENT_2_RAMP;
+        if (ramp.has(match[2])) continue;
+        fail(
+          rule,
+          file,
+          index + 1,
+          `${match[0]} is not on the ramp — "${line.trim().slice(0, 72)}"`,
+          `The accent ramp is ${[...ACCENT_RAMP].map((a) => `accent/${a}`).join(", ")} (secondary: ${[...ACCENT_2_RAMP].map((a) => `accent-2/${a}`).join(", ")}). Pick the nearest step rather than a new number.`,
+        );
+      }
+      const black = line.match(/\b(?:bg|text|border|from|to)-black\/(\d{1,3})\b/);
+      if (black) {
+        fail(
+          rule,
+          file,
+          index + 1,
+          `${black[0]} is a black literal — "${line.trim().slice(0, 72)}"`,
+          "Use a well: `bg-well`, `bg-well-deep`, or `bg-scrim` behind a dialog.",
+        );
+      }
+    });
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Rule 10 — no stock motion                                          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Every duration is a token and every animation is the project's own.
+ *
+ * `duration-150` next to `duration-[var(--t-fast)]` is not a style choice, it
+ * is one control that forgot which system it is in, and `animate-pulse` is
+ * literally another product's loading state. Both were shipping.
+ *
+ * The two live meters are the one real exception and they are named rather
+ * than pattern-matched: a loudness meter needs a time constant shorter than
+ * any designed duration, or the bar trails the voice it is measuring.
+ */
+const METER_FILES = new Set([
+  "src/app/xana/mic/page.tsx",
+  "src/components/xana/Composer.tsx",
+]);
+
+function ruleStockMotion() {
+  const rule = "motion — durations are tokens, animations are the project's";
+  for (const file of UI_FILES) {
+    const rel = relative(ROOT, file).split(sep).join("/");
+    const lines = codeLines(file);
+    lines.forEach((line, index) => {
+      checked++;
+      const duration = line.match(/\bduration-(\d{2,4})\b/);
+      if (duration && !METER_FILES.has(rel)) {
+        fail(
+          rule,
+          file,
+          index + 1,
+          `duration-${duration[1]} — "${line.trim().slice(0, 72)}"`,
+          "Use `duration-[var(--t-fast)]`, `--t-state` or `--t-base`, so the motion slider still moves it.",
+        );
+      }
+      if (/\banimate-pulse\b/.test(line)) {
+        fail(
+          rule,
+          file,
+          index + 1,
+          `animate-pulse — "${line.trim().slice(0, 72)}"`,
+          "Tailwind's pulse is another product's loading state. Use `.skeleton`, or the two drifting bars.",
+        );
+      }
+      if (/\btransition-all\b/.test(line)) {
+        fail(
+          rule,
+          file,
+          index + 1,
+          `transition-all — "${line.trim().slice(0, 72)}"`,
+          "Name the properties: `transition-colors`, or an explicit list, so a layout change cannot animate by accident.",
+        );
+      }
+    });
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Rule 11 — one uppercase treatment                                  */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Uppercase text wears the label treatment, or says why it does not.
+ *
+ * The signature of this interface is 11px, weight 500, 0.15em, uppercase. It
+ * had been re-invented five times with a different size or tracking each time
+ * (13px at 0.02em for section headings, 11px at 0.12em for pills), so the same
+ * visual idea rendered four ways in one panel. Rule 11 makes the treatment a
+ * class you use rather than a recipe you retype.
+ *
+ * Two exemptions, both explicit: the wordmark, which is a mark rather than a
+ * label and carries its own 0.32em tracking, and anything carrying `data-mark`,
+ * which is how a genuinely different treatment (a toned status pill) declares
+ * itself instead of looking like an oversight.
+ */
+function ruleOneUppercaseTreatment() {
+  const rule = "type — uppercase wears the label treatment";
+  for (const file of UI_FILES) {
+    const lines = codeLines(file);
+    lines.forEach((line, index) => {
+      if (!/className=/.test(line)) return;
+      if (!/\buppercase\b/.test(line)) return;
+      checked++;
+      if (/\blabel\b/.test(line)) return;
+      if (/tracking-\[0\.32em\]/.test(line) || /data-mark/.test(line)) return;
+      fail(
+        rule,
+        file,
+        index + 1,
+        `"${line.trim().slice(0, 88)}"`,
+        "Add the `label` class, or add `data-mark` if this treatment is deliberately different.",
+      );
+    });
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Rule 12 — a class the stylesheet owns is not overridden inline     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * `.chip`, `.label` and `.field` are unlayered, so they beat every utility.
+ *
+ * That is deliberate — the tap floor and the type floor are safety rules, not
+ * preferences, and a utility must not be able to undo them — but it has a trap
+ * that costs an hour every time: `className="chip text-accent"` looks right,
+ * paints nothing, and leaves no trace anywhere. Three workarounds went into
+ * this pass for exactly that reason (a tone class, a `data-` state, an inner
+ * span for the tone on a pill), and the next person will not know the rule
+ * exists unless something tells them.
+ *
+ * So this refuses the combination: a utility that sets a property the class
+ * already sets. Only the properties those three classes actually declare are
+ * listed, and `rounded-full`/`px-2` inside a class list that also carries a
+ * *different* shared class is unaffected.
+ */
+const OWNED_PROPERTIES = {
+  chip: [/^rounded(-|$)/, /^px-/, /^py-/, /^p-/, /^text-\[?\d/, /^text-(?!left|right|center|wrap|ellipsis|nowrap)/, /^font-(thin|extralight|light|normal|medium|semibold|bold|extrabold|black)$/, /^tracking-/, /^uppercase$/, /^border$/],
+  label: [/^text-\[?\d/, /^text-(?!left|right|center|wrap|ellipsis|nowrap)/, /^font-(thin|extralight|light|normal|medium|semibold|bold|extrabold|black)$/, /^tracking-/, /^uppercase$/],
+  // `font-mono` is deliberately absent: `.field` sets a size and a weight, not
+  // a family, so a monospace field is one of the few utilities that does apply.
+  field: [/^rounded(-|$)/, /^px-/, /^py-/, /^p-/, /^text-\[?\d/, /^text-(?!left|right|center|wrap|ellipsis|nowrap)/, /^font-(thin|extralight|light|normal|medium|semibold|bold|extrabold|black)$/, /^bg-/, /^border$/, /^border-(?!t|b|l|r|danger)/],
+};
+
+function ruleClassOwnsItsProperties() {
+  const rule = "composition — a shared class is not overridden by a utility";
+  for (const file of UI_FILES) {
+    const rel = relative(ROOT, file).split(sep).join("/");
+    if (LITERAL_COLOUR_ALLOWED.has(rel)) continue;
+    const lines = codeLines(file);
+    lines.forEach((line, index) => {
+      const match = line.match(/className=(?:"([^"]*)"|\{`([^`]*)`\})/);
+      if (!match) return;
+      const classes = (match[1] ?? match[2] ?? "").split(/\s+/).filter(Boolean);
+      for (const [owner, patterns] of Object.entries(OWNED_PROPERTIES)) {
+        if (!classes.includes(owner)) continue;
+        for (const token of classes) {
+          if (token === owner) continue;
+          if (!patterns.some((pattern) => pattern.test(token))) continue;
+          checked++;
+          fail(
+            rule,
+            file,
+            index + 1,
+            `"${token}" on a .${owner} — "${line.trim().slice(0, 72)}"`,
+            `.${owner} is unlayered and owns that property, so the utility paints nothing. Use a variant the class offers (chip-accent, chip-danger, data-mark) or an inner element.`,
+          );
+        }
+      }
+    });
+  }
+}
+
+/* ------------------------------------------------------------------ */
 
 console.log("Design system — the craft floor, checked against the source");
 
@@ -448,6 +719,10 @@ ruleLongValueWrap();
 ruleCardSurface();
 ruleNoLiteralColour();
 ruleCssTypeFloor();
+ruleRampAndWells();
+ruleStockMotion();
+ruleOneUppercaseTreatment();
+ruleClassOwnsItsProperties();
 await ruleBrowserSurfaces();
 
 console.log(
