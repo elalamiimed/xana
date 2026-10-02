@@ -983,6 +983,168 @@ async function main() {
     const shotCaveTasks = await screenshot(devtools, sessionId, "08-cave-tasks");
     console.log(`  info  ${shotCaveTasks}`);
 
+    /* Editing a task from the room, with real clicks and a real keystroke.
+     *
+     * The chat could be told to edit and the store could be called directly, but
+     * what the user asked for was editing ACCESS: this control, in this row,
+     * doing what it says. It exists because a dictated task arrived with a
+     * garbled title, the chat claimed to have retitled it, and nothing in the
+     * interface could have. The probe task is created behind the cave's back and
+     * removed again, so the user's own list is exactly as it was found. */
+    const probeTask = await fetch(`${base}/api/cave`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ op: "task.create", title: "Probe task for the editor" }),
+    })
+      .then((res) => res.json())
+      .catch(() => null);
+    const probeTaskId = (probeTask?.tasks ?? []).find((t) => t.title === "Probe task for the editor")?.id;
+
+    // Re-open the cave so the new row is in the room: the board is read on open.
+    await evaluate(
+      devtools,
+      sessionId,
+      `(async () => {
+        for (const target of [document, document.body, window]) {
+          target.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        }
+        await new Promise((r) => setTimeout(r, 500));
+      })()`,
+      true,
+    );
+    await openCave();
+    await enterRoom("Tasks");
+
+    const editorOpened = await evaluate(
+      devtools,
+      sessionId,
+      `(async () => {
+        const chip = document.querySelector('button[aria-label="Edit Probe task for the editor"]');
+        if (!chip) return { chip: false };
+        chip.click();
+        await new Promise((r) => setTimeout(r, 500));
+        const form = document.querySelector('form[aria-label="Edit Probe task for the editor"]');
+        const field = form?.querySelector('input[aria-label="Task title"]');
+        return {
+          chip: true,
+          editor: Boolean(form && field),
+          focused: document.activeElement === field,
+          fields: form ? [...form.querySelectorAll('input, select, textarea')].map((i) => i.getAttribute('aria-label')) : [],
+        };
+      })()`,
+      true,
+    );
+    check("a task row offers an edit control", editorOpened?.chip === true, JSON.stringify(editorOpened));
+    check(
+      "it opens an editor with the caret in the first field",
+      editorOpened?.editor === true && editorOpened?.focused === true,
+      JSON.stringify(editorOpened),
+    );
+    check(
+      "and the editor carries the fields a task has",
+      ["Task title", "Due date", "Project", "Priority", "Estimate in minutes"].every((label) =>
+        (editorOpened?.fields ?? []).includes(label),
+      ),
+      JSON.stringify(editorOpened?.fields),
+    );
+
+    const shotEdit = await screenshot(devtools, sessionId, "17-cave-task-edit");
+    console.log(`  info  ${shotEdit}`);
+
+    /* Enter, as a real key press.
+     *
+     * `dispatchEvent(new KeyboardEvent("keydown", …))` runs React's handlers and
+     * does NOT run the browser's default action, because the event is untrusted.
+     * That is invisible for a handler that reads `event.key`, and fatal for
+     * implicit form submission: the editor's Save button is a `type="submit"`
+     * and the first version of this check reported "Enter does not save" while
+     * Enter was working perfectly in a browser. CDP's trusted input is the only
+     * way to press a key here, and the difference is worth the four lines. */
+    const setTitle = await evaluate(
+      devtools,
+      sessionId,
+      `(() => {
+        const field = document.querySelector('form[aria-label="Edit Probe task for the editor"] input[aria-label="Task title"]');
+        if (!field) return { field: false };
+        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+        setter.call(field, "Probe task renamed in the room");
+        field.dispatchEvent(new Event('input', { bubbles: true }));
+        field.focus();
+        return { field: true, value: field.value };
+      })()`,
+      true,
+    );
+    check("the editor takes a new title", setTitle?.value === "Probe task renamed in the room", JSON.stringify(setTitle));
+
+    await devtools.send(
+      "Input.dispatchKeyEvent",
+      {
+        type: "keyDown",
+        key: "Enter",
+        code: "Enter",
+        // `text` is what makes this a character, and Chromium runs implicit form
+        // submission down the character path: without it the key arrives as a
+        // raw code event, React sees it, and nothing submits. This cost a second
+        // false "Enter does not save" in the same check.
+        text: "\r",
+        unmodifiedText: "\r",
+        windowsVirtualKeyCode: 13,
+        nativeVirtualKeyCode: 13,
+      },
+      sessionId,
+    );
+    await devtools.send(
+      "Input.dispatchKeyEvent",
+      { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 },
+      sessionId,
+    );
+    await sleep(2500);
+
+    const editorSaved = await evaluate(
+      devtools,
+      sessionId,
+      `(() => {
+        const still = document.querySelector('form[aria-label^="Edit Probe"]');
+        return {
+          closed: !still,
+          refocused: document.activeElement?.getAttribute?.('aria-label') ?? null,
+          error: still ? (still.textContent || '').slice(0, 160) : null,
+        };
+      })()`,
+      true,
+    );
+    check("Enter saves the row", editorSaved?.closed === true, JSON.stringify(editorSaved).slice(0, 240));
+    check(
+      "and the caret goes back to the control that opened it",
+      editorSaved?.refocused === "Edit Probe task renamed in the room",
+      String(editorSaved?.refocused),
+    );
+
+    const afterEdit = await fetch(`${base}/api/cave`, { cache: "no-store" })
+      .then((res) => res.json())
+      .catch(() => null);
+    check(
+      "the database has the new title",
+      (afterEdit?.tasks ?? []).some((t) => t.title === "Probe task renamed in the room"),
+      (afterEdit?.tasks ?? []).map((t) => t.title).join(" | "),
+    );
+
+    if (probeTaskId) {
+      await fetch(`${base}/api/cave`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ op: "task.delete", id: probeTaskId }),
+      }).catch(() => null);
+    }
+    const afterCleanup = await fetch(`${base}/api/cave`, { cache: "no-store" })
+      .then((res) => res.json())
+      .catch(() => null);
+    check(
+      "the probe task is gone again",
+      !(afterCleanup?.tasks ?? []).some((t) => /Probe task renamed in the room/.test(t.title)),
+      (afterCleanup?.tasks ?? []).map((t) => t.title).join(" | "),
+    );
+
     const memories = caveExpected.memories?.items ?? [];
     const memoryRoom = await enterRoom("Memory");
     if (memories.length > 0) {

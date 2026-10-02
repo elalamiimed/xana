@@ -1,5 +1,5 @@
 /**
- * Editing a task that already exists.
+ * Editing a task that already exists, and an event too.
  *
  *   node --import ./scripts/ts-loader.mjs scripts/check-task-edit.ts
  *
@@ -10,6 +10,11 @@
  * overdue task being noise on tonight's briefing — meant deleting it and
  * retyping it, which throws away its id, its creation date and any history
  * hanging off it.
+ *
+ * The last section applies the same reading to an event, because the schedule
+ * room now offers the same edit and it inherits exactly the same risk. It lives
+ * here rather than in `verify:cave.mjs` so it can run offline against a temp
+ * database and without a new script entry.
  *
  * WHAT IS ACTUALLY BEING CHECKED
  *
@@ -39,6 +44,7 @@ writeFileSync(path.join(DATA_DIR, "settings.json"), "{}\n", { encoding: "utf8", 
 
 const { getStore, closeStore } = await import("../src/lib/core/store");
 const { runCaveOperation } = await import("../src/lib/cave/ops");
+const { dateKeyInZone, hourMinuteInZone, instantFromWallClock } = await import("../src/lib/core/zone");
 
 /* ------------------------------------------------------------------ */
 /* Harness                                                             */
@@ -67,15 +73,25 @@ function group(title: string, run: () => void): void {
   }
 }
 
-/** The op throws `CaveError`; this captures the message and status instead. */
-function attempt(input: Record<string, unknown>): { ok: boolean; message: string; status: number } {
+/**
+ * Run an operation, capturing the `CaveError` message and status instead of
+ * throwing, and keeping the payload so an assertion can read what came back.
+ */
+function attemptWith(
+  op: Parameters<typeof runCaveOperation>[0],
+  input: Record<string, unknown>,
+): { ok: boolean; message: string; status: number; payload: ReturnType<typeof runCaveOperation> | undefined } {
   try {
-    runCaveOperation("task.update", input);
-    return { ok: true, message: "", status: 200 };
+    return { ok: true, message: "", status: 200, payload: runCaveOperation(op, input) };
   } catch (err) {
     const e = err as { message?: string; status?: number };
-    return { ok: false, message: e.message ?? String(err), status: e.status ?? 500 };
+    return { ok: false, message: e.message ?? String(err), status: e.status ?? 500, payload: undefined };
   }
+}
+
+/** The op throws `CaveError`; this captures the message and status instead. */
+function attempt(input: Record<string, unknown>): { ok: boolean; message: string; status: number } {
+  return attemptWith("task.update", input);
 }
 
 const store = getStore();
@@ -105,15 +121,37 @@ group("Move a task to a new day", () => {
 });
 
 group("A partial edit leaves everything it did not mention alone", () => {
-  // The risky one. `due` is a real date here, and a title-only patch must not
-  // touch it.
+  // Give the task every field the editor can carry before renaming it. That is
+  // the whole point of the group: a field the patch does not mention is a field
+  // the save has no opinion about, and the way to prove it is to have something
+  // in each one and read the record back afterwards.
+  attempt({ id: task.id, project: "Aurora", priority: 1, estimateMinutes: 90 });
+  const before = store.taskById(task.id);
+  check(
+    "set up with a date, a project, a priority and an estimate",
+    before?.due === "2026-10-02" &&
+      before?.project === "Aurora" &&
+      before?.priority === 1 &&
+      before?.estimateMinutes === 90,
+    JSON.stringify({ due: before?.due, project: before?.project, priority: before?.priority, estimate: before?.estimateMinutes }),
+  );
+
+  // The risky one, and the exact accident that started this: the chat said a task
+  // had been renamed and nothing had happened. A rename is now a patch whose only
+  // key is `title`, so everything else has to be byte-identical afterwards.
   const result = attempt({ id: task.id, title: "Volunteering for Freshman Fiesta (renamed)" });
   check("the rename is accepted", result.ok, result.message);
 
   const after = store.taskById(task.id);
   check("the title changed", after?.title === "Volunteering for Freshman Fiesta (renamed)", String(after?.title));
-  check("the date did NOT change", after?.due === "2026-10-02", String(after?.due));
-  check("the priority did NOT change", after?.priority === 1, String(after?.priority));
+  check("the date did NOT change", after?.due === before?.due, `${after?.due} vs ${before?.due}`);
+  check("the project did NOT change", after?.project === before?.project, `${after?.project} vs ${before?.project}`);
+  check("the priority did NOT change", after?.priority === before?.priority, `${after?.priority} vs ${before?.priority}`);
+  check(
+    "the estimate did NOT change",
+    after?.estimateMinutes === before?.estimateMinutes,
+    `${after?.estimateMinutes} vs ${before?.estimateMinutes}`,
+  );
   check("the status did NOT change", after?.status === "open", String(after?.status));
   check("the source did NOT change", after?.source === "user", String(after?.source));
 
@@ -186,6 +224,10 @@ group("A date it cannot read is refused, and does NOT erase the deadline", () =>
 group("Edits that must not be applied", () => {
   check("an empty patch is refused", !attempt({ id: task.id }).ok);
   check("a blank title is refused", !attempt({ id: task.id, title: "   " }).ok);
+  // An empty field is how a cleared text input arrives, so the editor cannot be
+  // allowed to send it as a title: "rename it to" with nothing after it would
+  // erase the task's name.
+  check("an empty string title is refused", !attempt({ id: task.id, title: "" }).ok);
   check("an out-of-range priority is refused", !attempt({ id: task.id, priority: 9 }).ok);
   check("a nonsense energy is refused", !attempt({ id: task.id, energy: "lukewarm" }).ok);
 
@@ -203,6 +245,46 @@ group("Edits that must not be applied", () => {
   check("and still open", after?.status === "open", String(after?.status));
 });
 
+group("An estimate it cannot read is refused, and does NOT erase the estimate", () => {
+  const before = store.taskById(task.id)?.estimateMinutes;
+  check("set up with an estimate", before === 90, String(before));
+
+  // The same accident the date had. `cleanEstimate` answers `undefined` for
+  // junk, and mapping that straight into the patch turned a typo in the estimate
+  // field into a deleted estimate rather than a refusal.
+  const junk = attempt({ id: task.id, estimateMinutes: "about an hour" });
+  check("junk is refused", !junk.ok, JSON.stringify(junk));
+  check("the refusal is a 400", junk.status === 400, String(junk.status));
+  check(
+    "AND the existing estimate survived",
+    store.taskById(task.id)?.estimateMinutes === 90,
+    String(store.taskById(task.id)?.estimateMinutes),
+  );
+
+  const zero = attempt({ id: task.id, estimateMinutes: 0 });
+  check("zero is refused", !zero.ok);
+  check("and did not erase it either", store.taskById(task.id)?.estimateMinutes === 90);
+});
+
+group("Clearing an estimate is an intention, not an accident", () => {
+  const viaNull = attempt({ id: task.id, estimateMinutes: null });
+  check(
+    "null clears it",
+    viaNull.ok && store.taskById(task.id)?.estimateMinutes === undefined,
+    String(store.taskById(task.id)?.estimateMinutes),
+  );
+
+  attempt({ id: task.id, estimateMinutes: 90 });
+  const viaEmpty = attempt({ id: task.id, estimateMinutes: "" });
+  check(
+    "an emptied field clears it too",
+    viaEmpty.ok && store.taskById(task.id)?.estimateMinutes === undefined,
+    String(store.taskById(task.id)?.estimateMinutes),
+  );
+
+  attempt({ id: task.id, estimateMinutes: 90 });
+});
+
 group("Editing is not confused with completing", () => {
   // Status has its own op because it carries `completed_at`. An edit must never
   // set that, or the "what did I finish" briefing would count a rename.
@@ -218,6 +300,107 @@ group("Editing is not confused with completing", () => {
   // And an edit must not resurrect a completed task.
   attempt({ id: task.id, due: "2026-11-01" });
   check("editing a completed task leaves it completed", store.taskById(task.id)?.status === "done");
+});
+
+/* ------------------------------------------------------------------ */
+/* The same patch discipline, on an event                              */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Why the event half lives in this file.
+ *
+ * "Move Thursday's seminar to Friday" is the edit the schedule room now offers,
+ * and the risk is identical to the task's: a patch that names one field must not
+ * disturb the others, and a day and a clock typed into a form must come back as
+ * the reading that was typed rather than as the host's reading of it. The rest
+ * of `verify:cave` drives the HTTP route against a live server; this file runs
+ * offline against a temp database and is already in the `check` chain as
+ * `verify:task-edit`, so the assertion has somewhere to run without a new entry
+ * in `package.json` (which this task must not touch).
+ */
+group("An event edit moves only what it names", () => {
+  /** A wall clock in the app's zone as an instant, so this holds if the zone moves. */
+  const at = (year: number, month: number, day: number, hour: number, minute: number) =>
+    instantFromWallClock({ year, month, day, hour, minute }).toISOString();
+
+  const event = store.createEvent({
+    title: "Algorithms lecture",
+    start: at(2026, 10, 5, 14, 0),
+    end: at(2026, 10, 5, 15, 0),
+    location: "Room 4",
+    source: "user",
+    xanaAuthored: false,
+  });
+
+  const renamed = attemptWith("event.update", { id: event.id, title: "Algorithms seminar" });
+  check("a rename is accepted", renamed.ok, renamed.message);
+  const afterRename = store.eventById(event.id);
+  check("the title changed", afterRename?.title === "Algorithms seminar", String(afterRename?.title));
+  check("the start did NOT move", afterRename?.start === event.start, `${afterRename?.start} vs ${event.start}`);
+  check("the end did NOT move", afterRename?.end === event.end, `${afterRename?.end} vs ${event.end}`);
+  check("the place did NOT change", afterRename?.location === "Room 4", String(afterRename?.location));
+
+  const moved = attemptWith("event.update", { id: event.id, date: "2026-10-08", time: "09:30", minutes: 45 });
+  check("moving it is accepted", moved.ok, moved.message);
+  const afterMove = store.eventById(event.id);
+  check(
+    "it lands on the day that was typed",
+    dateKeyInZone(new Date(afterMove?.start ?? 0)) === "2026-10-08",
+    String(afterMove?.start),
+  );
+  check(
+    "at the clock that was typed",
+    hourMinuteInZone(new Date(afterMove?.start ?? 0)) === "09:30",
+    String(afterMove?.start),
+  );
+  check(
+    "with the length that was typed",
+    new Date(afterMove?.end ?? 0).getTime() - new Date(afterMove?.start ?? 0).getTime() === 45 * 60_000,
+    `${afterMove?.start} to ${afterMove?.end}`,
+  );
+  check("and the title survived the move", afterMove?.title === "Algorithms seminar", String(afterMove?.title));
+
+  // A time on its own is the ordinary "push it back an hour" edit, and it must
+  // not need the day restated.
+  attemptWith("event.update", { id: event.id, time: "16:15" });
+  const afterTime = store.eventById(event.id);
+  check(
+    "a time alone keeps the day",
+    dateKeyInZone(new Date(afterTime?.start ?? 0)) === "2026-10-08",
+    String(afterTime?.start),
+  );
+  check(
+    "and keeps the length",
+    new Date(afterTime?.end ?? 0).getTime() - new Date(afterTime?.start ?? 0).getTime() === 45 * 60_000,
+  );
+  check(
+    "and moves the clock",
+    hourMinuteInZone(new Date(afterTime?.start ?? 0)) === "16:15",
+    String(afterTime?.start),
+  );
+
+  const cleared = attemptWith("event.update", { id: event.id, location: "" });
+  check(
+    "an emptied place clears it",
+    cleared.ok && store.eventById(event.id)?.location === undefined,
+    String(store.eventById(event.id)?.location),
+  );
+
+  check("a blank title is refused", !attemptWith("event.update", { id: event.id, title: "   " }).ok);
+  check(
+    "a date it cannot read is refused",
+    !attemptWith("event.update", { id: event.id, date: "next tuesday" }).ok,
+  );
+  check("a time it cannot read is refused", !attemptWith("event.update", { id: event.id, time: "half four" }).ok);
+  check("nothing to change is refused", !attemptWith("event.update", { id: event.id }).ok);
+
+  const missingEvent = attemptWith("event.update", { id: "evt_does_not_exist", title: "Nope" });
+  check("an unknown event is a 404", missingEvent.status === 404, String(missingEvent.status));
+  check(
+    "after all the refusals the event is intact",
+    store.eventById(event.id)?.title === "Algorithms seminar",
+    String(store.eventById(event.id)?.title),
+  );
 });
 
 /* ------------------------------------------------------------------ */

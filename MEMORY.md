@@ -912,6 +912,37 @@ from every angle except the user's.
 
 ## Traps that have already bitten
 
+- **A missing door is not answered with silence. It is answered with a sentence
+  that is not true.** On 2026-10-02 the user dictated a meeting, a garbled task
+  was saved ("or whatever which one it's concerned."), they asked for it to be
+  retitled, and the app said **"Done. The task is now titled …"**. Nothing had
+  changed: there was no path anywhere in the app that could rename a task, so no
+  action ran, and the model — asked to answer in a helpful voice with nothing
+  telling it that performing actions is not its job — filled the gap. The user
+  found out by looking, came back with "I told you to update it, but you did not",
+  and the transcript of that exchange is now the fixture `verify:edit-voice`
+  asserts against. Three lessons, and the third is the one that generalizes:
+  implement the verb (`update_task`, and `task.update` already existed in the cave,
+  which is what made the gap look like it did not exist); tell the model *and*
+  check the answer, because a prompt is advice and advice is not a mechanism
+  (`lib/mind/claims.ts`); and remember that the failure mode of a missing
+  capability in an assistant is not "she refuses" — it is "she lies".
+- **Writing to the store directly leaves the life state stale.** `XanaStore` is
+  only half the world: the adapters cache their slices, and `invalidateContext()`
+  is what drops both layers. The action path calls it on every write, so anything
+  that goes through `executeAction` is fine — but a script or a test that calls
+  `store.deleteTask` directly gets a life state that still contains the deleted
+  row, which is how an hour went into blaming a handler that was working: the
+  handler asked "which one?" about a task that no longer existed. Same shape as
+  the WAL trap: the file is not the truth while something else is caching.
+- **Tailwind silently drops a leading-zero opacity.** `bg-accent/04` and
+  `bg-accent/08` compile to no rule at all — the spelling is accepted by every
+  gate that reads source, and the goals board's empty-lane wash was simply absent
+  for as long as it had been written that way. The two lowest ramp steps are
+  `accent/4` and `accent/8`, `check:design` refuses the leading-zero spelling, and
+  `check:bundle` asserts that every accent utility written in the source has a
+  rule in the served stylesheet. A class that compiles to nothing is invisible in
+  every screenshot, because a missing 8% wash looks like a wash that is subtle.
 - **An ID inside `:not()` still counts toward specificity.** The focus rule was
   `:focus-visible:not(#xana-composer)`, written that way to exempt one element,
   and it evaluated to (1,1,0) — so its `border-radius: var(--r-sm)` beat

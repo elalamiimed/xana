@@ -124,13 +124,19 @@ export async function think(
       modality: request.modality,
     });
 
+    const guarded = guardUnmadeClaim(spoken, { text, acted });
+
     const message: Message = {
       ...toMessage(local, "llm", started),
-      text: spoken.trim() || local.text,
+      text: guarded.text.trim() || local.text,
     };
+    if (guarded.replaced) {
+      console.warn(`[xana] model claimed a change that did not happen; replaced with the honest line: ${spoken.slice(0, 120)}`);
+    }
     store.logMessage("xana", message.text, sessionId, {
       engine: "llm",
       effect: local.outcome?.effect,
+      ...(guarded.replaced ? { guarded: "unmade-claim" } : {}),
     });
     return { message, lifeState: refreshed };
   } catch (err) {
@@ -160,6 +166,12 @@ export async function think(
     return { message, lifeState: refreshed };
   }
 }
+
+/**
+ * The claim guard lives in ./claims so it can be driven without a model: a
+ * network call is not something a test can assert an honesty rule against.
+ */
+import { actionRule, guardUnmadeClaim } from "./claims";
 
 /**
  * A one-line reason a model call failed, in the same vocabulary the
@@ -423,6 +435,18 @@ async function speakWithModel(input: SpeakInput): Promise<string> {
         .join("\n")}`,
     );
   }
+
+  /**
+   * The rule that would have prevented the lie this pass exists to fix.
+   *
+   * On 2026-10-02 the user asked for a garbled task to be retitled. No action
+   * could run, so no ACTION RESULT was sent — and the model, asked to answer in
+   * her voice with a helpful persona, answered "Done. The task is now titled
+   * …". It had no way to know that was false, because nothing told it that
+   * performing actions is not its job. The wording lives in `./claims` beside
+   * the check that enforces it, so the two cannot drift.
+   */
+  parts.push(actionRule(Boolean(input.local.outcome)));
 
   if (input.modality === "voice") {
     parts.push("MODALITY: voice. Keep the reply under 30 words. No lists, no markdown.");

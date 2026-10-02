@@ -1,8 +1,16 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { Task } from "@/lib/cave/types";
+import {
+  addDaysInZone,
+  dateKeyInZone,
+  daysBetweenInZone,
+  fromDateKeyInZone,
+  monthDayInZone,
+  weekdayIndexInZone,
+} from "@/lib/core/zone";
 
 import { emptyNote } from "./empty-note";
 import type { CaveController } from "./useCave";
@@ -35,6 +43,27 @@ import type { CaveController } from "./useCave";
  * to dismiss afterwards. The date shortcuts ("today", "tomorrow", "+1w") exist
  * because the reason people reschedule is almost never "the 14th", it is
  * "not today" — and a native date picker makes you find that on a calendar.
+ *
+ * WHAT A SAVE IS ALLOWED TO TOUCH
+ *
+ * Only the fields the user actually moved. The patch carries those and nothing
+ * else, so a rename cannot clear a due date and a date cannot blank an estimate:
+ * a field the save never mentions is a field the save has no opinion about. A
+ * field that was emptied is a change and goes as `null`, which the store reads as
+ * "clear it" rather than as silence. If nothing moved there is no write at all,
+ * because "saved" over an unchanged row is the kind of claim this screen exists
+ * to stop making.
+ *
+ * The dates are the app's days (see `@/lib/core/zone`), not the browser's. A
+ * machine in another zone used to resolve "tomorrow" against its own midnight,
+ * which is how a task saved for tomorrow lands on the wrong day in the briefing.
+ *
+ * THE KEYBOARD CONTRACT
+ *
+ * Opening the editor puts the caret in the first field, Enter saves, Escape
+ * cancels and hands focus back to the chip that opened it. A failed save leaves
+ * the editor open with the reason beside it and the draft untouched, so nothing
+ * typed is lost to a refusal.
  */
 
 const PRIORITY_LABEL: Record<number, string> = {
@@ -47,21 +76,20 @@ const PRIORITY_LABEL: Record<number, string> = {
 /** "today" / "3d late" / "in 5d" / a date — said the way a person would. */
 function dueLabel(due: string | undefined): { text: string; late: boolean } | null {
   if (!due) return null;
-  const when = new Date(`${due.slice(0, 10)}T00:00:00`);
+  const when = fromDateKeyInZone(due.slice(0, 10));
   if (Number.isNaN(when.getTime())) return null;
 
-  const now = new Date();
-  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-  const days = Math.round((when.getTime() - startOfToday) / 86_400_000);
+  // Both sides of the subtraction are the app's calendar days, so "today" here
+  // is the same today the briefing and the schedule use. Read from the browser
+  // instead, a machine an hour either side of midnight disagrees with them.
+  const days = daysBetweenInZone(new Date(), when);
+  if (Number.isNaN(days)) return null;
 
   if (days < 0) return { text: `${Math.abs(days)}d late`, late: true };
   if (days === 0) return { text: "today", late: false };
   if (days === 1) return { text: "tomorrow", late: false };
   if (days < 7) return { text: `in ${days}d`, late: false };
-  return {
-    text: when.toLocaleDateString(undefined, { month: "short", day: "numeric" }),
-    late: false,
-  };
+  return { text: monthDayInZone(when), late: false };
 }
 
 /**
@@ -70,15 +98,16 @@ function dueLabel(due: string | undefined): { text: string; late: boolean } | nu
  * Deliberately tiny and deliberately not clever: it understands the four things
  * someone actually says when they reschedule, and returns null for everything
  * else so the caller can leave the stored date alone rather than guess.
+ *
+ * The arithmetic is calendar arithmetic in the app's zone. "Tomorrow" means the
+ * next day on the user's own calendar, which is not the same as now plus 24
+ * hours and is not the browser's day either.
  */
 function quickDate(input: string, now = new Date()): string | null {
   const text = input.trim().toLowerCase();
   if (!text) return null;
 
-  const shift = (days: number) => {
-    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + days);
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-  };
+  const shift = (days: number) => dateKeyInZone(addDaysInZone(now, days));
 
   if (text === "today") return shift(0);
   if (text === "tomorrow") return shift(1);
@@ -92,11 +121,13 @@ function quickDate(input: string, now = new Date()): string | null {
     if (Number.isFinite(amount)) return shift(unit === "w" ? amount * 7 : amount);
   }
 
-  // A weekday name means the next one of those, which is what people mean.
-  const days = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+  // A weekday name means the next one of those, which is what people mean. The
+  // list starts on Monday because that is the order the zone module counts
+  // weekdays in; three letters is the shortest unambiguous prefix either way.
+  const days = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
   const named = days.findIndex((day) => day.startsWith(text) && text.length >= 3);
   if (named >= 0) {
-    const today = now.getDay();
+    const today = weekdayIndexInZone(now);
     const ahead = (named - today + 7) % 7 || 7;
     return shift(ahead);
   }
@@ -117,13 +148,41 @@ export default function TasksRoom({ controller }: TasksRoomProps) {
   const [confirming, setConfirming] = useState<string | null>(null);
   /** The task currently being edited in place, by id. */
   const [editing, setEditing] = useState<string | null>(null);
-  const [draft, setDraft] = useState({ title: "", due: "", project: "", priority: "3" });
+  const [draft, setDraft] = useState({
+    title: "",
+    due: "",
+    project: "",
+    priority: "3",
+    estimate: "",
+  });
   const [editError, setEditError] = useState("");
   const [addError, setAddError] = useState("");
   /** The field the empty state points at, so its one action has a target. */
   const titleRef = useRef<HTMLInputElement | null>(null);
+  /** The first field of the open editor, so opening it lands the caret there. */
+  const editTitleRef = useRef<HTMLInputElement | null>(null);
+  /** Every row's edit chip, so cancelling can hand focus back to the one that opened it. */
+  const editChips = useRef(new Map<string, HTMLButtonElement | null>());
+  /** The row whose chip should take focus once its editor closes. */
+  const refocus = useRef<string | null>(null);
 
   const tasks = controller.tasks;
+
+  // Opening moves the caret into the editor; closing gives it back to the chip
+  // that opened it. Without the second half, Escape drops a keyboard user at the
+  // top of the document and the row they were working on is a Tab hunt away.
+  // Both run after the commit, so the target exists by the time they ask.
+  useEffect(() => {
+    if (editing) editTitleRef.current?.focus();
+  }, [editing]);
+
+  useEffect(() => {
+    if (editing !== null) return;
+    const id = refocus.current;
+    if (!id) return;
+    refocus.current = null;
+    editChips.current.get(id)?.focus();
+  }, [editing]);
 
   /** The projects already in use, so the field offers what exists. */
   const projects = useMemo(() => {
@@ -174,49 +233,96 @@ export default function TasksRoom({ controller }: TasksRoomProps) {
       due: task.due ? task.due.slice(0, 10) : "",
       project: task.project ?? "",
       priority: String(task.priority),
+      estimate: task.estimateMinutes ? String(task.estimateMinutes) : "",
     });
+  };
+
+  /** Close the editor and give the caret back to the chip that opened it. */
+  const closeEditor = (id: string) => {
+    refocus.current = id;
+    setEditing(null);
+    setEditError("");
+  };
+
+  /**
+   * What actually changed, as a patch.
+   *
+   * Only the fields the user moved, because every field the patch mentions is a
+   * field the store will overwrite. That is the whole reason a rename cannot
+   * clear a due date: the date is not in the patch, so it is not something this
+   * save can have an opinion about. A field that was emptied is a change and
+   * goes as `null`, which the store reads as "clear it" rather than as silence.
+   *
+   * Returns a sentence instead of a patch when a typed value cannot be read. It
+   * is deliberately not resolved by guessing: "next tuesday" is refused here for
+   * the same reason the store refuses it, so a typo can never become a deletion.
+   */
+  const changedFields = (task: Task): Record<string, unknown> | string => {
+    const patch: Record<string, unknown> = {};
+
+    const title = draft.title.trim();
+    if (title !== task.title) patch.title = title;
+
+    const typed = draft.due.trim();
+    let nextDue: string | null = null;
+    if (typed) {
+      const resolved = /^\d{4}-\d{2}-\d{2}$/.test(typed) ? typed : quickDate(typed);
+      if (!resolved) {
+        return "I cannot read that date. Try “tomorrow”, “friday”, “+3d” or a calendar date.";
+      }
+      nextDue = resolved;
+    }
+    if (nextDue !== (task.due ? task.due.slice(0, 10) : null)) patch.due = nextDue;
+
+    const project = draft.project.trim() || null;
+    if (project !== (task.project ?? null)) patch.project = project;
+
+    const priority = Number(draft.priority);
+    if (priority !== task.priority) patch.priority = priority;
+
+    const estimateText = draft.estimate.trim();
+    let nextEstimate: number | null = null;
+    if (estimateText) {
+      nextEstimate = Number(estimateText);
+      // Checked here rather than left to the store, because the store clamps and
+      // the other one of these (the date) taught this file what clamping costs.
+      if (!Number.isInteger(nextEstimate) || nextEstimate < 1 || nextEstimate > 1440) {
+        return "An estimate is a whole number of minutes, 1 to 1440.";
+      }
+    }
+    if (nextEstimate !== (task.estimateMinutes ?? null)) patch.estimateMinutes = nextEstimate;
+
+    return patch;
   };
 
   /**
    * Save the row.
    *
-   * Every field is sent as an explicit value rather than only the ones that
-   * changed, because the form always shows the whole task — a date the user
-   * cleared must arrive as `null`, not be omitted, or clearing it would silently
-   * fail. The server distinguishes "absent" from "empty" for exactly this.
+   * The patch is built from what moved, so the request is a description of the
+   * edit rather than a replacement of the record. If nothing moved there is no
+   * request at all: the editor closes, because reporting a save over an unchanged
+   * row is a claim about work that did not happen.
    */
-  const saveEdit = async (id: string) => {
-    const text = draft.title.trim();
-    if (!text) {
+  const saveEdit = async (task: Task) => {
+    if (!draft.title.trim()) {
       setEditError("A task needs a title.");
+      return;
+    }
+
+    const changed = changedFields(task);
+    if (typeof changed === "string") {
+      setEditError(changed);
       return;
     }
     setEditError("");
 
-    const typed = draft.due.trim();
-    let nextDue: string | null = draft.due;
-    if (typed && !/^\d{4}-\d{2}-\d{2}$/.test(typed)) {
-      // A shorthand the calendar field cannot express, resolved locally.
-      const resolved = quickDate(typed);
-      if (!resolved) {
-        setEditError("I cannot read that date. Try “tomorrow”, “friday”, “+3d” or a calendar date.");
-        return;
-      }
-      nextDue = resolved;
+    if (Object.keys(changed).length === 0) {
+      closeEditor(task.id);
+      return;
     }
 
-    const ok = await controller.run(
-      "task.update",
-      {
-        id,
-        title: text,
-        due: nextDue === "" ? null : nextDue,
-        project: draft.project.trim() || null,
-        priority: Number(draft.priority),
-      },
-      id,
-    );
-    if (ok) setEditing(null);
+    const ok = await controller.run("task.update", { id: task.id, ...changed }, task.id);
+    if (ok) closeEditor(task.id);
     else setEditError(controller.error ?? "That edit did not save.");
   };
 
@@ -226,13 +332,15 @@ export default function TasksRoom({ controller }: TasksRoomProps) {
       setDraft((d) => ({ ...d, due: "" }));
       return;
     }
-    const base = draft.due ? new Date(`${draft.due}T00:00:00`) : new Date();
+    // The base is whatever the field currently reads, shorthand included, so
+    // "+3 days" from a typed "tomorrow" moves tomorrow rather than today. A
+    // field holding something unreadable falls back to today, which is the day
+    // the shortcut is named against.
+    const typed = draft.due.trim();
+    const resolved = typed ? (/^\d{4}-\d{2}-\d{2}$/.test(typed) ? typed : quickDate(typed)) : null;
+    const base = resolved ? fromDateKeyInZone(resolved) : new Date();
     const from = Number.isNaN(base.getTime()) ? new Date() : base;
-    const next = new Date(from.getFullYear(), from.getMonth(), from.getDate() + days);
-    setDraft((d) => ({
-      ...d,
-      due: `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, "0")}-${String(next.getDate()).padStart(2, "0")}`,
-    }));
+    setDraft((d) => ({ ...d, due: dateKeyInZone(addDaysInZone(from, days)) }));
   };
 
   return (
@@ -327,16 +435,27 @@ export default function TasksRoom({ controller }: TasksRoomProps) {
           if (editing === task.id) {
             return (
               <li key={task.id} className="bg-surface-2/40 px-6 py-4">
+                {/* Escape cancels from anywhere in the editor, and Enter is the
+                    form's own submit in every text field. The handler sits on
+                    the form rather than on each input so the two keys cannot
+                    drift apart as fields are added. */}
                 <form
                   onSubmit={(event) => {
                     event.preventDefault();
-                    void saveEdit(task.id);
+                    void saveEdit(task);
                   }}
+                  onKeyDown={(event) => {
+                    if (event.key !== "Escape") return;
+                    event.preventDefault();
+                    closeEditor(task.id);
+                  }}
+                  aria-label={`Edit ${task.title}`}
                   className="flex flex-wrap items-end gap-3"
                 >
                   <label className="min-w-[220px] flex-1">
                     <span className="label">task</span>
                     <input
+                      ref={editTitleRef}
                       value={draft.title}
                       onChange={(event) => setDraft((d) => ({ ...d, title: event.target.value }))}
                       aria-label="Task title"
@@ -383,11 +502,38 @@ export default function TasksRoom({ controller }: TasksRoomProps) {
                     </select>
                   </label>
 
+                  <label>
+                    <span className="label">estimate</span>
+                    {/* Step 1, not 5. A number input enforces its own `step`
+                        against the value it holds, and a step mismatch blocks
+                        the whole form before React sees the submit: a task
+                        estimated at 7 minutes could not be renamed until the
+                        estimate was "fixed" in a field nobody touched. */}
+                    <input
+                      type="number"
+                      min={1}
+                      max={1440}
+                      step={1}
+                      value={draft.estimate}
+                      onChange={(event) => setDraft((d) => ({ ...d, estimate: event.target.value }))}
+                      placeholder="minutes"
+                      aria-label="Estimate in minutes"
+                      className="field mt-1.5 w-[130px]"
+                    />
+                  </label>
+
                   <div className="flex items-center gap-2">
-                    <button type="submit" className="btn btn-primary">
+                    {/* A row that is already saving cannot be asked to save
+                        again, which is what a second Enter would do before the
+                        first answer landed. */}
+                    <button
+                      type="submit"
+                      disabled={controller.pending.has(task.id)}
+                      className="btn btn-primary"
+                    >
                       Save
                     </button>
-                    <button type="button" onClick={() => setEditing(null)} className="btn">
+                    <button type="button" onClick={() => closeEditor(task.id)} className="btn">
                       Cancel
                     </button>
                   </div>
@@ -507,8 +653,12 @@ export default function TasksRoom({ controller }: TasksRoomProps) {
                 <div className="flex shrink-0 items-center gap-1">
                   {/* Edit sits before delete and is the quieter of the two,
                       because the destructive one should never be the easier
-                      target to hit by accident. */}
+                      target to hit by accident. Its node is kept so cancelling
+                      the editor can put the caret back on it. */}
                   <button
+                    ref={(node) => {
+                      editChips.current.set(task.id, node);
+                    }}
                     type="button"
                     onClick={() => openEditor(task)}
                     aria-label={`Edit ${task.title}`}

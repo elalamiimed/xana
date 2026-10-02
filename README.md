@@ -215,6 +215,18 @@ that goes stale.
 - **Fallback, not failure.** If the model times out mid-turn she answers
   locally rather than erroring.
 
+**And she may not say she did something she did not do.** That rule has two
+halves, because the first one alone is not a mechanism. The prompt tells the
+model that actions are executed elsewhere and reported back as an `ACTION
+RESULT`, that with no such block nothing has changed, and that claiming a change
+anyway is forbidden. Then `src/lib/mind/claims.ts` checks the reply: if no action
+ran, the user asked for a change, and the answer claims one in the first person,
+the claim is replaced with a sentence that says nothing changed and gives a
+wording that works. `npm run verify:edit-voice` drives the exact exchange that
+produced this rule — a dictated meeting, a garbled task title, "Yes, please", and
+a reply that said *"Done. The task is now titled …"* while the database still
+said otherwise. The prompt is advice; the check is the guarantee.
+
 ### The live state
 
 Everything reads through one cached assembly. `/api/state` serves the cheap
@@ -356,8 +368,19 @@ You can also write a memory by hand, marked as yours so it outranks what she
 infers from conversation.
 
 **The tasks room.** The open list, with a form to add one and inline editing on
-every row: title, date, project and priority. Editing in place rather than in a
-dialog, because the thing being changed is one field on one line.
+every row: title, date, project, priority and an estimate. Editing in place
+rather than in a dialog, because the thing being changed is one field on one
+line. Only the fields you actually changed are sent, so fixing a typo in a title
+cannot quietly clear the deadline — and the same holds by voice: *"rename the
+Aurora task to Deck review"*, *"push its due date to Friday"*, *"make it priority
+1"*, *"give it 45 minutes"*. When you say *"it"* she uses the only open task, or
+asks which one you mean when there is more than one, because a guess renames the
+wrong row and you would have no way to tell.
+
+That voice path did not exist until it had to. A dictated task arrived titled
+*"or whatever which one it's concerned."*, the request to retitle it had nowhere
+to go, and the reply said it was done. The cave could always edit a task; the
+chat could not, and nothing said so.
 
 The date field takes shorthand — `tomorrow`, `friday`, `+3d`, `+1w` — as well as
 a calendar date, because the reason people reschedule is almost never "the 14th",
@@ -939,6 +962,17 @@ node scripts/probe-status-rows.mjs 40         # is the one-row-per-connection ru
   embedding survives its JSON round trip. The seven-day window is driven with an
   injected clock, and six conversational sentences ("forget it", "drop it",
   "cancel that") are asserted NOT to empty the list.
+- `npm run verify:edit-voice` — changing something by voice, and never claiming a
+  change that did not happen. The fixtures are two sentences from the user's own
+  transcript: a garbled task title and "Yes, please", against a reply that said
+  *"Done."* The intent half asserts that *"rename it to X"* writes through the
+  executor and that the store agrees; that a named target beats the only-one
+  rule; that two candidates and no name produce a question rather than a guess;
+  and that a title-only patch leaves the deadline, project and estimate exactly
+  as they were. The honesty half drives the guard directly, including the two
+  cases it must NOT fire on — a reply describing an action that did run, and a
+  reply about a past action the user took themselves — because a guard that
+  rewrites good answers is worse than no guard.
 - `npm run verify:cave-load` — that My cave asks for its data when it opens. The
   failure it guards is not a wrong answer but a question nobody asked: the hook
   published a `reload()`, took an `open` flag it never read, and the rooms

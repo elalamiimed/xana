@@ -13,6 +13,7 @@
 import { NextResponse } from "next/server";
 
 import {
+  CAVE_OPERATIONS,
   CaveError,
   isCaveOperation,
   listCaveEvents,
@@ -69,37 +70,12 @@ export async function POST(request: Request) {
     return NextResponse.json(
       {
         error: "Unknown operation.",
-        // Naming the valid set is more useful than "invalid", and this route
-        // is one a script may drive.
-        valid: [
-          "goal.create",
-          "goal.update",
-          "goal.delete",
-          "goal.move",
-          "goal.touch",
-          "milestone.create",
-          "milestone.setDone",
-          "milestone.update",
-          "milestone.delete",
-          "task.create",
-          "task.setStatus",
-          "task.delete",
-          "event.create",
-          "event.delete",
-          "memory.list",
-          "memory.create",
-          "memory.update",
-          "memory.pin",
-          "memory.forget",
-          "note.delete",
-          "health.log",
-          "health.clear",
-          "health.meal",
-          "trash.list",
-          "trash.restore",
-          "trash.purge",
-          "trash.empty",
-        ],
+        // Naming the valid set is more useful than "invalid", and this route is
+        // one a script may drive. The list is DERIVED from the operations map:
+        // hand-maintained, it had already fallen behind by `task.update` and
+        // `event.update`, so the sentence that exists to help was the one
+        // telling a script its perfectly good operation did not exist.
+        valid: CAVE_OPERATIONS,
       },
       { status: 400 },
     );

@@ -1195,6 +1195,55 @@ export class XanaStore {
     return this.moveToTrash("event", id);
   }
 
+  /**
+   * Change an event that already exists.
+   *
+   * The counterpart to `updateTask`, and it exists for the same reason: the
+   * schedule can now be written by hand, and anything a person types by hand
+   * they must be able to correct. A class that moves is the ordinary case, not
+   * an exception — a calendar entry you can only delete and retype is one you
+   * stop keeping.
+   *
+   * Only the fields present in the patch are touched, so a title change cannot
+   * silently move the event's time. `allDay` is included because an event
+   * edited from "2pm to 3pm" to "all day" is a real edit, not a new event.
+   */
+  updateEvent(
+    id: string,
+    patch: Partial<Pick<CalendarEvent, "title" | "start" | "end" | "location" | "allDay">>,
+  ): CalendarEvent | undefined {
+    const existing = this.eventById(id);
+    if (!existing) return undefined;
+
+    const next: CalendarEvent = {
+      ...existing,
+      title: patch.title ?? existing.title,
+      start: patch.start ?? existing.start,
+      end: patch.end ?? existing.end,
+      // `in`-style semantics, as with a task's due date: an explicit `undefined`
+      // is "leave it alone", an explicit empty string is "there is no location".
+      location: patch.location === undefined ? existing.location : (patch.location || undefined),
+      allDay: patch.allDay ?? existing.allDay,
+    };
+
+    this.db
+      .prepare(
+        `UPDATE events
+            SET title = @title, start = @start, end = @end, location = @location, all_day = @allDay
+          WHERE id = @id`,
+      )
+      .run({
+        id,
+        title: next.title,
+        start: next.start,
+        end: next.end,
+        location: next.location ?? null,
+        allDay: next.allDay ? 1 : 0,
+      });
+
+    return this.eventById(id);
+  }
+
   eventsBetween(fromIso: string, toIso: string): CalendarEvent[] {    return (      this.db
         .prepare(`SELECT * FROM events WHERE start < ? AND end > ? ORDER BY start ASC`)
         .all(toIso, fromIso) as Row[]

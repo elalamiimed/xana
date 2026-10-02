@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { CalendarEvent } from "@/lib/cave/types";
 import {
@@ -30,6 +30,19 @@ import type { CaveController } from "./useCave";
  * This room shows today and tomorrow rather than a month, because those are
  * the only two days the briefing asks about — a month view would be a
  * calendar, and this is not trying to be one.
+ *
+ * WHY A HAND-WRITTEN ENTRY CAN NOW BE EDITED
+ *
+ * Add and remove were the only two things here, so a lecture that moved to
+ * Thursday had to be deleted and retyped: a new id, and a gap in the day it
+ * moved out of. The row edits in place for the same reason the tasks room does,
+ * and only rows marked `source: "user"` get the control. A synced entry is
+ * somebody else's record: editing it here would look permanent and then be
+ * overwritten by the next sync, which is a worse lie than having no control.
+ *
+ * The day and the clock in the editor are the app's readings of the instants
+ * (see `@/lib/core/zone`), so the field shows the hour the room printed beside
+ * it rather than the hour in whatever zone the browser is set to.
  */
 
 /** The app's `YYYY-MM-DD` for an instant, which is what a date input wants. */
@@ -87,6 +100,34 @@ export default function ScheduleRoom({ controller }: ScheduleRoomProps) {
   const [minutes, setMinutes] = useState("60");
   const [location, setLocation] = useState("");
   const [confirming, setConfirming] = useState<string | null>(null);
+  /** The event currently being edited in place, by id. */
+  const [editing, setEditing] = useState<string | null>(null);
+  const [draft, setDraft] = useState({
+    title: "",
+    date: "",
+    time: "09:00",
+    minutes: "60",
+    location: "",
+  });
+  const [editError, setEditError] = useState("");
+  /** The first field of the open editor, so opening it lands the caret there. */
+  const editTitleRef = useRef<HTMLInputElement | null>(null);
+  /** Every row's edit chip, so cancelling can hand focus back to the one that opened it. */
+  const editChips = useRef(new Map<string, HTMLButtonElement | null>());
+  /** The row whose chip should take focus once its editor closes. */
+  const refocus = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (editing) editTitleRef.current?.focus();
+  }, [editing]);
+
+  useEffect(() => {
+    if (editing !== null) return;
+    const id = refocus.current;
+    if (!id) return;
+    refocus.current = null;
+    editChips.current.get(id)?.focus();
+  }, [editing]);
 
   /** Grouped by day, in order, so the list reads like a schedule. */
   const byDay = useMemo(() => {
@@ -115,6 +156,95 @@ export default function ScheduleRoom({ controller }: ScheduleRoomProps) {
     // thing to a morning usually means adding the next one to the same morning.
     setTitle("");
     setLocation("");
+  };
+
+  const openEditor = (event: CalendarEvent) => {
+    setConfirming(null);
+    setEditError("");
+    setEditing(event.id);
+    setDraft({
+      title: event.title,
+      date: dayKey(event.start),
+      time: timeKey(event.start),
+      minutes: String(durationMinutes(event) || 60),
+      location: event.location ?? "",
+    });
+  };
+
+  /** Close the editor and give the caret back to the chip that opened it. */
+  const closeEditor = (id: string) => {
+    refocus.current = id;
+    setEditing(null);
+    setEditError("");
+  };
+
+  /**
+   * What actually changed, as a patch.
+   *
+   * The day, the clock and the length travel together and only when one of them
+   * moved, because to the person editing they are one field: "move it to four"
+   * changes when it starts and when it ends, and the operation takes the three
+   * readings as a set. The title and the place are separate, so renaming an
+   * event cannot shift its hour.
+   *
+   * Every typed value is checked here rather than left to the server, so a
+   * half-typed field comes back as a sentence beside the editor instead of as a
+   * silent reinterpretation of what was meant.
+   */
+  const changedFields = (event: CalendarEvent): Record<string, unknown> | string => {
+    const patch: Record<string, unknown> = {};
+
+    const nextTitle = draft.title.trim();
+    if (nextTitle !== event.title) patch.title = nextTitle;
+
+    const day = draft.date;
+    const clock = draft.time;
+    const length = Number(draft.minutes);
+    // `|| 60` matches what the editor opened with, so an entry whose stored end
+    // is not after its start (a corrupt row, not one this room can create) does
+    // not read as "the length changed" and quietly rewrite its own times on a
+    // rename. The editor shows 60 for that row, and 60 is what it compares to.
+    const held = durationMinutes(event) || 60;
+    if (day !== dayKey(event.start) || clock !== timeKey(event.start) || length !== held) {
+      if (!day) return "An event needs a date.";
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return "That is not a date I can read.";
+      if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(clock)) return "That is not a time I can read.";
+      if (!Number.isInteger(length) || length < 1 || length > 720) {
+        return "A length is a whole number of minutes, 1 to 720.";
+      }
+      patch.date = day;
+      patch.time = clock;
+      patch.minutes = length;
+    }
+
+    const nextLocation = draft.location.trim();
+    if (nextLocation !== (event.location ?? "")) patch.location = nextLocation;
+
+    return patch;
+  };
+
+  const saveEdit = async (event: CalendarEvent) => {
+    if (!draft.title.trim()) {
+      setEditError("An event needs a title.");
+      return;
+    }
+
+    const changed = changedFields(event);
+    if (typeof changed === "string") {
+      setEditError(changed);
+      return;
+    }
+    setEditError("");
+
+    // Nothing moved, so there is nothing to save and nothing to claim.
+    if (Object.keys(changed).length === 0) {
+      closeEditor(event.id);
+      return;
+    }
+
+    const ok = await controller.run("event.update", { id: event.id, ...changed }, event.id);
+    if (ok) closeEditor(event.id);
+    else setEditError(controller.error ?? "That change did not save.");
   };
 
   return (
@@ -209,66 +339,200 @@ export default function ScheduleRoom({ controller }: ScheduleRoomProps) {
               </span>
             </div>
             <ul className="divide-y divide-hairline">
-              {events.map((event) => (
-                <li key={event.id} className="flex items-start gap-3 px-6 py-3">
-                  <span className="mt-[3px] w-[72px] shrink-0 text-[13px] font-light tabular-nums text-dim">
-                    {event.allDay ? "all day" : humanTime(event.start)}
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-[14px] leading-snug font-light text-text">{event.title}</p>
-                    <div className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-1">
-                      {!event.allDay ? (
-                        <span className="timestamp">{durationMinutes(event)}m</span>
-                      ) : null}
-                      {event.location ? (
-                        <span className="text-[13px] font-light text-dim">{event.location}</span>
-                      ) : null}
-                      {/* Where it came from matters: a hand-written entry can be
-                          deleted here, a synced one will come back. */}
-                      {event.source !== "user" ? (
-                        <span className="timestamp">from {event.source}</span>
-                      ) : null}
-                    </div>
-                  </div>
-
-                  {event.source === "user" ? (
-                    confirming === event.id ? (
-                      <div className="flex shrink-0 items-center gap-1">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            void controller.run("event.delete", { id: event.id }, event.id);
-                            setConfirming(null);
-                          }}
-                          className="chip chip-danger"
-                        >
-                          remove
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setConfirming(null)}
-                          className="chip"
-                        >
-                          keep
-                        </button>
-                      </div>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => setConfirming(event.id)}
-                        aria-label={`Remove ${event.title}`}
-                        className="chip chip-danger"
+              {events.map((event) => {
+                if (editing === event.id) {
+                  return (
+                    <li key={event.id} className="bg-surface-2/40 px-6 py-4">
+                      {/* Escape cancels and Enter saves from any text field, the
+                          same contract as the task editor one room over. */}
+                      <form
+                        onSubmit={(submitEvent) => {
+                          submitEvent.preventDefault();
+                          void saveEdit(event);
+                        }}
+                        onKeyDown={(keyEvent) => {
+                          if (keyEvent.key !== "Escape") return;
+                          keyEvent.preventDefault();
+                          closeEditor(event.id);
+                        }}
+                        aria-label={`Edit ${event.title}`}
+                        className="flex flex-wrap items-end gap-3"
                       >
-                        remove
-                      </button>
-                    )
-                  ) : (
-                    // No remove control for a synced entry: deleting it here
-                    // would look permanent and then reappear on the next sync.
-                    <span className="shrink-0 timestamp">synced</span>
-                  )}
-                </li>
-              ))}
+                        <label className="min-w-[200px] flex-1">
+                          <span className="label">what</span>
+                          <input
+                            ref={editTitleRef}
+                            value={draft.title}
+                            onChange={(changeEvent) =>
+                              setDraft((d) => ({ ...d, title: changeEvent.target.value }))
+                            }
+                            aria-label="Event title"
+                            className="field mt-1.5"
+                          />
+                        </label>
+
+                        <label>
+                          <span className="label">date</span>
+                          <input
+                            type="date"
+                            value={draft.date}
+                            onChange={(changeEvent) =>
+                              setDraft((d) => ({ ...d, date: changeEvent.target.value }))
+                            }
+                            aria-label="Date"
+                            className="field mt-1.5 w-[160px]"
+                          />
+                        </label>
+
+                        <label>
+                          <span className="label">time</span>
+                          <input
+                            type="time"
+                            value={draft.time}
+                            onChange={(changeEvent) =>
+                              setDraft((d) => ({ ...d, time: changeEvent.target.value }))
+                            }
+                            aria-label="Start time"
+                            className="field mt-1.5 w-[130px]"
+                          />
+                        </label>
+
+                        <label>
+                          <span className="label">minutes</span>
+                          {/* Step 1 here while the add form uses 5. A number
+                              input validates its own `step` against the value it
+                              holds, and a mismatch blocks the entire form before
+                              React sees the submit, so an event of 47 minutes
+                              could not even be renamed until its length was
+                              rounded in a field the user never opened. */}
+                          <input
+                            type="number"
+                            min={1}
+                            max={720}
+                            step={1}
+                            value={draft.minutes}
+                            onChange={(changeEvent) =>
+                              setDraft((d) => ({ ...d, minutes: changeEvent.target.value }))
+                            }
+                            aria-label="Duration in minutes"
+                            className="field mt-1.5 w-[110px]"
+                          />
+                        </label>
+
+                        <label>
+                          <span className="label">where</span>
+                          <input
+                            value={draft.location}
+                            onChange={(changeEvent) =>
+                              setDraft((d) => ({ ...d, location: changeEvent.target.value }))
+                            }
+                            placeholder="optional"
+                            aria-label="Location"
+                            className="field mt-1.5 w-[150px]"
+                          />
+                        </label>
+
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="submit"
+                            disabled={controller.pending.has(event.id)}
+                            className="btn btn-primary"
+                          >
+                            Save
+                          </button>
+                          <button type="button" onClick={() => closeEditor(event.id)} className="btn">
+                            Cancel
+                          </button>
+                        </div>
+
+                        {editError ? (
+                          <p aria-live="polite" className="w-full text-[12px] leading-relaxed text-danger">
+                            {editError}
+                          </p>
+                        ) : null}
+                      </form>
+                    </li>
+                  );
+                }
+
+                  return (
+                    <li key={event.id} className="flex items-start gap-3 px-6 py-3">
+                      <span className="mt-[3px] w-[72px] shrink-0 text-[13px] font-light tabular-nums text-dim">
+                        {event.allDay ? "all day" : humanTime(event.start)}
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[14px] leading-snug font-light text-text">{event.title}</p>
+                        <div className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                          {!event.allDay ? (
+                            <span className="timestamp">{durationMinutes(event)}m</span>
+                          ) : null}
+                          {event.location ? (
+                            <span className="text-[13px] font-light text-dim">{event.location}</span>
+                          ) : null}
+                          {/* Where it came from matters: a hand-written entry can be
+                              deleted here, a synced one will come back. */}
+                          {event.source !== "user" ? (
+                            <span className="timestamp">from {event.source}</span>
+                          ) : null}
+                        </div>
+                      </div>
+
+                      {event.source === "user" ? (
+                        confirming === event.id ? (
+                          <div className="flex shrink-0 items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                void controller.run("event.delete", { id: event.id }, event.id);
+                                setConfirming(null);
+                              }}
+                              className="chip chip-danger"
+                            >
+                              remove
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setConfirming(null)}
+                              className="chip"
+                            >
+                              keep
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="flex shrink-0 items-center gap-1">
+                            {/* Edit sits before remove and is the quieter of the
+                                two, because the destructive one should never be the
+                                easier target to hit by accident. Its node is kept so
+                                cancelling the editor can put the caret back on it. */}
+                            <button
+                              ref={(node) => {
+                                editChips.current.set(event.id, node);
+                              }}
+                              type="button"
+                              onClick={() => openEditor(event)}
+                              aria-label={`Edit ${event.title}`}
+                              className="chip"
+                            >
+                              edit
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setConfirming(event.id)}
+                              aria-label={`Remove ${event.title}`}
+                              className="chip chip-danger"
+                            >
+                              remove
+                            </button>
+                          </div>
+                        )
+                      ) : (
+                        // No remove control for a synced entry: deleting it here
+                        // would look permanent and then reappear on the next sync.
+                        <span className="shrink-0 timestamp">synced</span>
+                      )}
+                    </li>
+                  );
+              })}
             </ul>
           </section>
         ))}

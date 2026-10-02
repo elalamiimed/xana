@@ -52,6 +52,9 @@ export function executeAction(intent: ActionIntent, opts: ExecuteOptions = {}): 
       case "complete_task":
         return finish(completeTask(intent.taskId, store));
 
+      case "update_task":
+        return finish(updateTask(intent, store));
+
       case "create_event":
         return finish(createEvent(intent, store));
 
@@ -181,6 +184,81 @@ function completeTask(taskId: string, store: XanaStore): ActionOutcome {
     ok: true,
     effect: "task.completed",
     message: `"${task.title}" — done.`,
+    ids: [task.id],
+    refresh: ["tasks", "context"],
+  };
+}
+
+/**
+ * Change a task that already exists.
+ *
+ * Built as a patch: only the fields the intent actually carries are sent to the
+ * store, so "rename it to X" leaves the due date, project and estimate exactly
+ * as they were. The message names what changed rather than repeating the whole
+ * task, because the user asked for one thing and reading four back is noise.
+ *
+ * `due: null` and `project: null` are meaningful and different from absent: they
+ * clear the field. That distinction is why the intent's optional fields are
+ * `string | null` rather than plain optional, and it is the one thing to keep
+ * straight if this is ever refactored.
+ */
+function updateTask(
+  intent: Extract<ActionIntent, { type: "update_task" }>,
+  store: XanaStore,
+): ActionOutcome {
+  const existing = store.taskById(intent.taskId);
+  if (!existing) {
+    return { ok: false, effect: "task.missing", message: "I can't find that one. It may already be gone." };
+  }
+
+  /**
+   * A title that arrives empty is a transcription failure, not an instruction.
+   *
+   * "rename it to" with nothing after it is how a voice turn looks when the
+   * recogniser dropped the rest of the sentence, and applying it would erase the
+   * task's name — the same class of accident as the garbled title this whole
+   * path exists to fix.
+   */
+  if ("title" in intent) {
+    const title = intent.title?.trim() ?? "";
+    if (title.length < 2) {
+      return {
+        ok: false,
+        effect: "task.unchanged",
+        message: "I did not catch the new name, so nothing changed. Say it as \"rename it to …\".",
+      };
+    }
+  }
+
+  const patch: Parameters<XanaStore["updateTask"]>[1] = {};
+  if (typeof intent.title === "string") patch.title = intent.title.trim().slice(0, 200);
+  if (intent.due !== undefined) patch.due = intent.due;
+  if (intent.project !== undefined) patch.project = intent.project;
+  if (intent.priority !== undefined) patch.priority = intent.priority;
+  if (intent.estimateMinutes !== undefined) patch.estimateMinutes = intent.estimateMinutes;
+
+  if (Object.keys(patch).length === 0) {
+    return { ok: false, effect: "task.unchanged", message: "Nothing to change in that one." };
+  }
+
+  const task = store.updateTask(intent.taskId, patch);
+  if (!task) {
+    return { ok: false, effect: "task.missing", message: "That did not take. The task may be gone." };
+  }
+
+  const changed: string[] = [];
+  if (patch.title !== undefined) changed.push(`renamed to "${task.title}"`);
+  if (patch.due !== undefined) changed.push(task.due ? `due ${formatDay(task.due)}` : "due date cleared");
+  if (patch.project !== undefined) changed.push(task.project ? `in ${task.project}` : "project cleared");
+  if (patch.priority !== undefined) changed.push(`priority ${task.priority}`);
+  if (patch.estimateMinutes !== undefined) {
+    changed.push(task.estimateMinutes ? `${task.estimateMinutes} minutes` : "estimate cleared");
+  }
+
+  return {
+    ok: true,
+    effect: "task.updated",
+    message: `"${existing.title}" — ${changed.join(", ")}.`,
     ids: [task.id],
     refresh: ["tasks", "context"],
   };

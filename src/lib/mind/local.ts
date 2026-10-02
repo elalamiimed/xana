@@ -321,6 +321,143 @@ const handleComplete: Handler = ({ text, lifeState, sessionId }) => {
   return { text: "", outcome };
 };
 
+/* ------------------------------------------------------------------ */
+/* Changing something that already exists                              */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The update verb, and why it is the one that mattered most.
+ *
+ * A task arrived with a garbled title — "or whatever which one it's concerned."
+ * after a dictation — the user asked for it to be retitled, and there was no
+ * path in the app that could rename a task. The request fell through to the
+ * model, and the model answered "Done. The task is now titled …" without
+ * anything happening. The user found out by looking.
+ *
+ * So the gap was not a missing feature, it was a missing *door*: without one,
+ * the only thing left to answer with was a sentence. This is the door for tasks.
+ *
+ * WHY THE REFERENT IS THE HARD PART
+ *
+ * "rename it to X" contains no noun. It is resolved the way a person would:
+ * something named in the sentence first, otherwise the only open task. With two
+ * tasks open and no name, the handler asks which rather than guessing — a guess
+ * renames the wrong task, and that is worse than doing nothing, because the
+ * user's only clue is a title they did not write.
+ *
+ * A sentence that names no task AND matches no pattern returns `undefined`
+ * rather than a reply, so a later handler still gets its turn: "move the meeting
+ * to Friday" is about an event, not about a task's due date.
+ */
+/** The fields a spoken edit can carry. `null` clears a field; absent leaves it. */
+type TaskPatch = {
+  title?: string;
+  due?: string | null;
+  project?: string | null;
+  priority?: 1 | 2 | 3 | 4;
+  estimateMinutes?: number | null;
+};
+
+function taskPatchFrom(text: string): { patch: TaskPatch; targetPart: string } | undefined {
+  const rename = /^(?:please\s+)?(?:rename|retitle|re-title|call)\s+(?:the\s+)?(.+?)\s+(?:task\s+)?(?:to|as)\s+(.+)$/i.exec(text);
+  if (rename) return { patch: { title: rename[2].trim() }, targetPart: rename[1] };
+
+  const call = /^(?:please\s+)?call\s+(?:it|that|this)\s+(.+)$/i.exec(text);
+  if (call) return { patch: { title: call[1].trim() }, targetPart: "it" };
+
+  /**
+   * "rename it to" with nothing after it.
+   *
+   * How a voice turn looks when the recogniser dropped the second half of the
+   * sentence. It matches no pattern above, so without this branch the request
+   * falls through to a generic "I didn't follow that" and the user learns
+   * nothing; with it, the executor refuses by name and says what to repeat.
+   */
+  if (/^(?:please\s+)?(?:rename|retitle|re-title|call)\s+(?:it|that|this)\s+(?:to|as)\s*$/i.test(text)) {
+    return { patch: { title: "" }, targetPart: "it" };
+  }
+
+  const due = /^(?:please\s+)?(?:change|set|move|push|reschedule)\b(.*?)\b(?:due|deadline)\b.*?\b(?:to|for)\s+(.+)$/i.exec(text);
+  if (due) {
+    const when = parseWhen(due[2]);
+    if (when) return { patch: { due: when.date.toISOString() }, targetPart: due[1] };
+  }
+
+  // "clear the due date", "it has no deadline"
+  if (/^(?:please\s+)?(?:clear|remove|drop)\b(.*?)\b(?:due|deadline)\b/i.test(text)) {
+    const m = /^(?:please\s+)?(?:clear|remove|drop)\b(.*?)\b(?:due|deadline)\b/i.exec(text);
+    if (m) return { patch: { due: null }, targetPart: m[1] };
+  }
+
+  const numbered = /\bpriority\s+(?:to\s+)?([1-4])\b/i.exec(text);
+  if (numbered) {
+    return { patch: { priority: Number(numbered[1]) as 1 | 2 | 3 | 4 }, targetPart: text.split(/\bpriority\b/i)[0] ?? "" };
+  }
+  if (/^(?:please\s+)?(?:make|mark|set)\b.*\b(?:urgent|asap|critical|top priority)\b/i.test(text)) {
+    return { patch: { priority: 1 }, targetPart: text.replace(/\b(?:urgent|asap|critical|top priority)\b.*$/i, "") };
+  }
+  if (/^(?:please\s+)?(?:make|mark|set)\b.*\blow\s+priority\b/i.test(text)) {
+    return { patch: { priority: 4 }, targetPart: text.replace(/\blow\s+priority\b.*$/i, "") };
+  }
+
+  const project = /^(?:please\s+)?(?:put|add|move)\s+(?:it|this|that)\s+(?:in|into|to)\s+(?:the\s+)?(.+?)\s+(?:project|list)\b/i.exec(text);
+  if (project) return { patch: { project: project[1].trim() }, targetPart: "it" };
+
+  const estimate = /^(?:please\s+)?(?:give\s+it|estimate|it\s+takes?|that\s+takes?)\b[^0-9]{0,24}(\d+)\s*(hours?|hrs?|h|minutes?|mins?|m)\b/i.exec(text);
+  if (estimate) {
+    const n = Number(estimate[1]);
+    const hours = /^h/i.test(estimate[2]);
+    return { patch: { estimateMinutes: hours ? n * 60 : n }, targetPart: "it" };
+  }
+
+  return undefined;
+}
+
+/** The words in a sentence that are about the change, not about the task. */
+function taskNameIn(targetPart: string): string {
+  return targetPart
+    .replace(/^(?:please\s+|can you\s+|could you\s+)/i, "")
+    .replace(/\b(?:rename|retitle|re-title|call|change|set|move|push|reschedule|make|mark|clear|remove|drop|put|add|give)\b/gi, " ")
+    .replace(/\b(?:the|my|its|it|this|that|task|to-?do|due|date|deadline|priority|project|list|estimate|minutes?|mins?|hours?|hrs?)\b/gi, " ")
+    .replace(/[^\p{L}\p{N}\s'-]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+const handleUpdateTask: Handler = ({ text, lifeState, sessionId }) => {
+  const t = text.trim().replace(/[.!]+$/, "");
+  const request = taskPatchFrom(t);
+  if (!request) return undefined;
+
+  const name = taskNameIn(request.targetPart);
+  const named = name.length >= 3 ? bestTaskMatch(name, lifeState) : undefined;
+
+  const openTasks = [...lifeState.tasks.overdue, ...lifeState.tasks.focus].filter(
+    (task, index, all) => all.findIndex((other) => other.id === task.id) === index,
+  );
+  const only = openTasks.length === 1 ? openTasks[0] : undefined;
+  const target = named ?? only;
+
+  if (!target) {
+    if (name.length >= 3) {
+      return {
+        text: `Nothing open matches "${name}". Give me the wording on the list and I'll change it.`,
+        outcome: { ok: false, effect: "task.missing", message: "" },
+      };
+    }
+    const names = openTasks.slice(0, 3).map((task) => `"${task.title}"`).join(", ");
+    return {
+      text: openTasks.length > 1
+        ? `Which one? You have ${lifeState.tasks.openCount} open${names ? `, including ${names}` : ""}. Name it and I'll change it.`
+        : "I could not tell which task you mean. Tell me its wording and I'll change it.",
+      outcome: { ok: false, effect: "task.missing", message: "" },
+    };
+  }
+
+  const outcome = executeAction({ type: "update_task", taskId: target.id, ...request.patch }, { sessionId });
+  return { text: "", outcome };
+};
+
 /** "log meditation", "did my run", "meditation done" */
 const handleHabit: Handler = ({ text, lifeState, sessionId }) => {
   const m = /^(?:log|did|done with|tick off|check off)\s+(?:my\s+)?(.+?)(?:\s+(?:today|just now|done))?$/i.exec(text);
@@ -945,6 +1082,10 @@ const HANDLERS: Handler[] = [
   handleLogEnergy,
   handleLogMeal,
   handleComplete,
+  // Before the handlers that create things: "rename the Aurora task to X" and
+  // "add a task to review the Aurora deck" both contain a task name and a verb,
+  // and only one of them is about a task that already exists.
+  handleUpdateTask,
   handleEvent,
   handleTask,
   handleBrief,

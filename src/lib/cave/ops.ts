@@ -21,6 +21,13 @@
 
 import { getStore } from "@/lib/core/store";
 import { addDays, nowIso, toDateKey } from "@/lib/core/time";
+import {
+  addDaysInZone,
+  dateKeyInZone,
+  hourMinuteInZone,
+  instantFromWallClock,
+  startOfDayInZone,
+} from "@/lib/core/zone";
 import { computeGoalProgress, goalsWithProgress } from "@/lib/derived/goals";
 import { invalidateContext } from "@/lib/context/gateway";
 import type {
@@ -683,7 +690,24 @@ export function updateTask(input: Record<string, unknown>): CavePayload {
     patch.priority = priority;
   }
   if ("estimateMinutes" in input) {
-    patch.estimateMinutes = input.estimateMinutes === null ? null : (cleanEstimate(input.estimateMinutes) ?? null);
+    /**
+     * The same three intentions the date has, and the same reason for them.
+     *
+     * An empty value clears the estimate; a number sets it; anything else is
+     * refused. The third case is not hypothetical: `cleanEstimate` answers
+     * `undefined` for junk, and mapping that straight into the patch turned a
+     * typo in the estimate field into a deleted estimate, which is how the date
+     * field used to behave before it was fixed.
+     */
+    if (input.estimateMinutes === null || input.estimateMinutes === "") {
+      patch.estimateMinutes = null;
+    } else {
+      const minutes = cleanEstimate(input.estimateMinutes);
+      if (minutes === undefined) {
+        throw new CaveError("An estimate is a number of minutes, or clear it to remove it.");
+      }
+      patch.estimateMinutes = minutes;
+    }
   }
   if ("energy" in input) {
     const energy = input.energy === null || input.energy === "" ? null : String(input.energy).trim();
@@ -729,22 +753,58 @@ export function deleteTask(input: Record<string, unknown>): CavePayload {
  * questions about right now, and a calendar that only ever showed today would
  * be empty every evening — exactly when someone wants to know what tomorrow
  * looks like.
+ *
+ * The two days are the app's days, not the host's. `ScheduleRoom` groups the
+ * same events under the same day headings using the zone's date keys, so a
+ * window built from the machine's midnight would put an evening event under one
+ * heading on the server and another in the browser. Both ends are half-open
+ * instants for the same reason: a day begins at the zone's midnight.
  */
 export function listCaveEvents(): CalendarEvent[] {
   const now = new Date();
-  const from = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-  const to = new Date(from);
-  to.setDate(to.getDate() + 2);
-  return getStore().eventsBetween(new Date(from).toISOString(), to.toISOString());
+  const from = startOfDayInZone(now);
+  const to = startOfDayInZone(addDaysInZone(now, 2));
+  return getStore().eventsBetween(from.toISOString(), to.toISOString());
 }
 
-/** `YYYY-MM-DDTHH:MM` from a date field and a time field, in local time. */
+/**
+ * `YYYY-MM-DDTHH:MM` from a date field and a time field, in the app's zone.
+ *
+ * This used to build `new Date(\`${day}T${clock}:00\`)`, which reads the wall
+ * clock in whatever zone the process happens to run in and then stores the
+ * result as an instant. On a host that is not Beijing, "09:00" in the form
+ * became 09:00 there, so the event showed up at a different hour in the room
+ * that wrote it. The zone module resolves the wall clock instead.
+ *
+ * The two range checks are the reason this is not a one-line change: `Date.UTC`
+ * normalises an out-of-range field rather than refusing it, so `2026-13-45`
+ * would quietly become a real day in 2027 and `25:00` would roll into the next
+ * morning. Both have to be refused here, and refusing them is what the old
+ * `new Date(...)` did by accident.
+ */
 function cleanMoment(date: unknown, time: unknown): string | null {
   if (typeof date !== "string" || date.trim().length === 0) return null;
   const day = /^(\d{4})-(\d{2})-(\d{2})/.exec(date.trim());
   if (!day) return null;
+
   const clock = typeof time === "string" && /^\d{2}:\d{2}$/.test(time.trim()) ? time.trim() : "09:00";
-  const at = new Date(`${day[1]}-${day[2]}-${day[3]}T${clock}:00`);
+  const year = Number(day[1]);
+  const month = Number(day[2]);
+  const dayOfMonth = Number(day[3]);
+  const hour = Number(clock.slice(0, 2));
+  const minute = Number(clock.slice(3, 5));
+
+  if (hour > 23 || minute > 59) return null;
+  const probe = new Date(Date.UTC(year, month - 1, dayOfMonth));
+  if (
+    probe.getUTCFullYear() !== year ||
+    probe.getUTCMonth() !== month - 1 ||
+    probe.getUTCDate() !== dayOfMonth
+  ) {
+    return null;
+  }
+
+  const at = instantFromWallClock({ year, month, day: dayOfMonth, hour, minute });
   if (Number.isNaN(at.getTime())) return null;
   return at.toISOString();
 }
@@ -787,6 +847,79 @@ export function createEvent(input: Record<string, unknown>): CavePayload {
     source: "user",
     xanaAuthored: false,
   });
+
+  invalidateContext();
+  return { event, events: listCaveEvents() };
+}
+
+/** `HH:MM` 24 hour, or null when the value is not a time. */
+function cleanClock(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const match = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(value.trim());
+  return match ? `${match[1]}:${match[2]}` : null;
+}
+
+/**
+ * Change an event that already exists.
+ *
+ * The counterpart to `updateTask`, and the reason it exists is the same one: a
+ * lecture that moves is the ordinary case, and an entry you can only delete and
+ * retype is an entry you stop keeping. Until now the schedule room could add and
+ * remove and nothing else, so "move Thursday's seminar to Friday" was a remove
+ * plus a retype, with a new id and no history.
+ *
+ * Only the fields present in the input are touched. A rename must not move the
+ * time, which is exactly the accident the task editor's diff discipline is
+ * there to prevent, and which `store.updateEvent` refuses from its side too.
+ *
+ * The date, the time and the length are read as one field, because that is what
+ * they are to the person editing: "move it to four" changes when it starts and
+ * when it ends, and the caller should be able to send the time alone without
+ * having to restate the day. Whatever the caller does not send is taken from the
+ * event as it stands, in the app's zone rather than the host's.
+ */
+export function updateEvent(input: Record<string, unknown>): CavePayload {
+  const id = bareId(input.id, "event");
+  const current = getStore().eventById(id);
+  if (!current) throw new CaveError("That event no longer exists.", 404);
+
+  const patch: Parameters<ReturnType<typeof getStore>["updateEvent"]>[1] = {};
+
+  if ("title" in input) {
+    const title = cleanText(input.title, 200);
+    if (!title) throw new CaveError("An event needs a title.");
+    patch.title = title;
+  }
+  if ("location" in input) {
+    // An emptied place is an intention, not a missing field: the store reads an
+    // empty string as "there is no location" and an absent key as "leave it".
+    patch.location = cleanText(input.location, 120) ?? "";
+  }
+
+  if ("date" in input || "time" in input || "minutes" in input) {
+    const base = new Date(current.start);
+    const day = "date" in input ? cleanDate(input.date) : dateKeyInZone(base);
+    if (!day) throw new CaveError("That is not a date I can read. Use YYYY-MM-DD.");
+    const clock = "time" in input ? cleanClock(input.time) : hourMinuteInZone(base);
+    if (!clock) throw new CaveError("That is not a time I can read. Use HH:MM.");
+
+    const start = cleanMoment(day, clock);
+    if (!start) throw new CaveError("That is not a date I can read. Use YYYY-MM-DD.");
+
+    // An end that is not after its start is not a duration, so a nonsense
+    // existing pair falls back to the hour a new event would have got.
+    const held = Math.round((new Date(current.end).getTime() - base.getTime()) / 60_000);
+    const fallback = held > 0 ? held : 60;
+    const minutes = "minutes" in input ? cleanMinutes(input.minutes, fallback) : fallback;
+
+    patch.start = start;
+    patch.end = new Date(new Date(start).getTime() + minutes * 60_000).toISOString();
+  }
+
+  if (Object.keys(patch).length === 0) throw new CaveError("Nothing to change.");
+
+  const event = getStore().updateEvent(id, patch);
+  if (!event) throw new CaveError("That event no longer exists.", 404);
 
   invalidateContext();
   return { event, events: listCaveEvents() };
@@ -1086,6 +1219,7 @@ const OPERATIONS = {
   "task.setStatus": setTaskStatus,
   "task.delete": deleteTask,
   "event.create": createEvent,
+  "event.update": updateEvent,
   "event.delete": deleteEvent,
   "memory.list": listMemories,
   "memory.create": createMemory,
@@ -1103,6 +1237,18 @@ const OPERATIONS = {
 } as const;
 
 export type CaveOperation = keyof typeof OPERATIONS;
+
+/**
+ * Every operation name, for the one place that has to print them.
+ *
+ * The route's 400 body names the valid set so a script that mistypes an
+ * operation is told what it could have said. That list was hand-maintained and
+ * had already fallen behind twice — `task.update` and `event.update` were both
+ * missing while being perfectly valid — which makes the error message a liar at
+ * exactly the moment somebody is trusting it. Derived here instead, so adding an
+ * operation cannot forget to add it to the list.
+ */
+export const CAVE_OPERATIONS = Object.keys(OPERATIONS) as CaveOperation[];
 
 export function isCaveOperation(value: unknown): value is CaveOperation {
   return typeof value === "string" && value in OPERATIONS;

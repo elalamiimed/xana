@@ -696,6 +696,23 @@ export interface TrashItem {
 export type ActionIntent =
   | { type: "create_task"; title: string; due?: string; project?: string; people?: string[]; priority?: 1 | 2 | 3 | 4; estimateMinutes?: number }
   | { type: "complete_task"; taskId: string }
+  /**
+   * Change something about a task that already exists.
+   *
+   * The missing verb, and its absence is what produced a lie: the chat was asked
+   * to retitle a garbled task, there was no path that could, and the model said
+   * "Done." rather than admitting it. Only the fields present are touched, so
+   * "rename it" cannot silently clear a due date.
+   */
+  | {
+      type: "update_task";
+      taskId: string;
+      title?: string;
+      due?: string | null;
+      project?: string | null;
+      priority?: 1 | 2 | 3 | 4;
+      estimateMinutes?: number | null;
+    }
   | { type: "create_event"; title: string; start: string; end: string; location?: string }
   | { type: "create_note"; title: string; body: string; tags?: string[] }
   | { type: "create_reminder"; text: string; remindAt: string; hasTime?: boolean }
