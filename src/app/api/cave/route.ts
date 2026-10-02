@@ -19,6 +19,7 @@ import {
   listCaveGoals,
   listCaveTasks,
   listMemories,
+  listTrash,
   runCaveOperation,
 } from "@/lib/cave/ops";
 
@@ -36,6 +37,10 @@ export async function GET(request: Request) {
       tasks: listCaveTasks(),
       events: listCaveEvents(),
       memories,
+      // The bin is small, bounded by a week and purged as it is read, so it
+      // travels with the snapshot rather than needing a second request the
+      // first time someone opens the room.
+      trash: listTrash(),
     });
   } catch (err) {
     return failure(err);
@@ -82,6 +87,10 @@ export async function POST(request: Request) {
           "memory.update",
           "memory.pin",
           "memory.forget",
+          "trash.list",
+          "trash.restore",
+          "trash.purge",
+          "trash.empty",
         ],
       },
       { status: 400 },

@@ -24,9 +24,11 @@ import type { CaveController } from "./useCave";
  *    exempts from decay.
  *  - **Edit** — "this is nearly right." Re-embeds on save, so the corrected
  *    wording is what recall searches, not the words that were removed.
- *  - **Forget** — "this should not be known." A hard delete, twice confirmed.
- *    Deliberately not a soft delete: a superseded record would still be in
- *    `allMemories` and still reachable by a high-scoring recall.
+ *  - **Forget** — "this should not be known." Twice confirmed, and then the row
+ *    leaves memory entirely rather than getting a flag: a superseded record
+ *    would still be in `allMemories` and still reachable by a high-scoring
+ *    recall. It goes to the trash rather than nowhere, so the confirmation can
+ *    be about the mistake instead of about the loss.
  */
 
 const KIND_TONE: Record<string, string> = {
@@ -306,7 +308,7 @@ export default function MemoryRoom({ controller }: MemoryRoomProps) {
                           }}
                           className="rounded-[var(--r-sm)] px-2 py-1 text-[11px] font-normal text-danger hover:bg-surface-2"
                         >
-                          forget for good
+                          forget
                         </button>
                         <button
                           type="button"

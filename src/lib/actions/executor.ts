@@ -11,6 +11,7 @@
  */
 
 import type { ActionIntent, ActionOutcome, Task } from "../core/types";
+import { TRASH_DAYS } from "../core/types";
 import { getStore, type XanaStore } from "../core/store";
 import { invalidateContext } from "../context/gateway";
 import {
@@ -90,6 +91,21 @@ export function executeAction(intent: ActionIntent, opts: ExecuteOptions = {}): 
       case "brief_me":
         // Handled by the mind, which has the life state in hand.
         return { ok: true, effect: "briefing.requested", message: "", refresh: ["context"] };
+
+      case "delete_task":
+        return finish(deleteTask(intent.taskId, store));
+
+      case "clear_tasks":
+        return finish(clearTasks(intent.scope ?? "open", store));
+
+      case "delete_event":
+        return finish(deleteEvent(intent.eventId, store));
+
+      case "delete_goal":
+        return finish(deleteGoal(intent.goalId, store));
+
+      case "forget_memory":
+        return finish(forgetMemory(intent.memoryId, store));
 
       case "none":
         return { ok: true, effect: "none", message: "" };
@@ -564,6 +580,114 @@ function reflect(period: "weekly" | "monthly", store: XanaStore): ActionOutcome 
     message: `Here's the ${period} picture.`,
     ids: [saved.id],
     refresh: ["context"],
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* Taking things back out                                              */
+/* ------------------------------------------------------------------ */
+
+/**
+ * How a deletion is announced.
+ *
+ * Every one of these says where the thing went and how long it has, because
+ * that is the difference between a destructive act and a reversible one — and
+ * the user cannot tell which they just performed unless she says so. It is one
+ * clause, not a paragraph: the reassurance belongs in the sentence, not after
+ * it.
+ */
+const TRASH_CLAUSE = `in the trash for ${TRASH_DAYS} days`;
+
+function deleteTask(taskId: string, store: XanaStore): ActionOutcome {
+  const task = store.taskById(taskId);
+  if (!task) {
+    return { ok: false, effect: "task.missing", message: "That one is not on the list — it may already be gone." };
+  }
+  if (!store.deleteTask(taskId)) {
+    return { ok: false, effect: "task.missing", message: "I couldn't remove that one." };
+  }
+  return {
+    ok: true,
+    effect: "task.deleted",
+    message: `"${task.title}" — gone. It's ${TRASH_CLAUSE} if that was wrong.`,
+    ids: [taskId],
+    refresh: ["tasks", "context"],
+  };
+}
+
+/**
+ * The whole list, in one move.
+ *
+ * Read first, then removed one at a time, so the reply can count them and the
+ * bin holds each separately. A single `DELETE ... WHERE` would be faster and
+ * would also make "actually, not that one" impossible to answer.
+ */
+function clearTasks(scope: "open" | "all", store: XanaStore): ActionOutcome {
+  const tasks = store.listTasks(scope === "all" ? {} : { status: ["open", "doing"] });
+  if (tasks.length === 0) {
+    return {
+      ok: true,
+      effect: "tasks.cleared",
+      message: scope === "all" ? "There is nothing on the list to remove." : "Nothing is open — there is nothing to clear.",
+      refresh: ["tasks", "context"],
+    };
+  }
+
+  const removed = store.deleteTasks(tasks.map((task) => task.id));
+  const noun = removed.length === 1 ? "task" : "tasks";
+  return {
+    ok: true,
+    effect: "tasks.cleared",
+    message: `Removed ${removed.length} open ${noun}. They're ${TRASH_CLAUSE} if that was a mistake.`,
+    ids: removed,
+    refresh: ["tasks", "context"],
+  };
+}
+
+function deleteEvent(eventId: string, store: XanaStore): ActionOutcome {
+  const event = store.eventById(eventId);
+  if (!event) {
+    return { ok: false, effect: "event.missing", message: "That isn't on the calendar any more." };
+  }
+  store.deleteEvent(eventId);
+  const when = `${formatDay(event.start)} at ${formatTime(event.start)}`;
+  return {
+    ok: true,
+    effect: "event.deleted",
+    message: `"${event.title}" (${when}) — cancelled. It's ${TRASH_CLAUSE}.`,
+    ids: [eventId],
+    refresh: ["calendar", "context"],
+  };
+}
+
+function deleteGoal(goalId: string, store: XanaStore): ActionOutcome {
+  const goal = store.goalById(goalId);
+  if (!goal) {
+    return { ok: false, effect: "goal.missing", message: "That goal isn't on the board any more." };
+  }
+  store.deleteGoal(goalId);
+  const milestones = goal.milestones.length > 0 ? ` and its ${goal.milestones.length} milestone${goal.milestones.length === 1 ? "" : "s"}` : "";
+  return {
+    ok: true,
+    effect: "goal.deleted",
+    message: `"${goal.title}"${milestones} — off the board, ${TRASH_CLAUSE}.`,
+    ids: [goalId],
+    refresh: ["goals", "context"],
+  };
+}
+
+function forgetMemory(memoryId: string, store: XanaStore): ActionOutcome {
+  const memory = store.memoryById(memoryId);
+  if (!memory) {
+    return { ok: false, effect: "memory.missing", message: "I don't have that in memory." };
+  }
+  store.forgetMemory(memoryId);
+  return {
+    ok: true,
+    effect: "memory.forgotten",
+    message: `Forgotten — "${memory.title}". It's ${TRASH_CLAUSE} if you want it back.`,
+    ids: [memoryId],
+    refresh: ["memory", "context"],
   };
 }
 

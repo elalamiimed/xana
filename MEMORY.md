@@ -700,6 +700,65 @@ that is an access denial several seconds into a download that otherwise works �
 the failure looks like the network, and it is the cache path. `HF_HOME` inside
 the project and `HF_HUB_DISABLE_XET=1` is what fixed it.
 
+### 26. A delete you cannot undo is a delete nobody uses
+
+The request: *"i'd like xana to be able to remove and add elements freely inside
+the project when i ask her too, and if it fucks up sometime, i would like to keep
+a trash bin so i can recover from trash bin later. a validity period in trash bin
+of 7 days."*
+
+Adding worked. Removing did not exist at all — no delete intent, no delete
+handler, and the model's answer to "remove everything of the list" was a
+paragraph about why it could not. So the feature is really two features, and the
+second one is the reason the first is safe to ship.
+
+**A ROW THAT IS DELETED MOVES; IT DOES NOT GET A FLAG**
+
+The obvious soft delete is a `deleted_at` column and a filter on every read. That
+is a rule which has to be applied correctly, forever, in twenty-five queries —
+and the briefing, the derived layers, the adapters, the cave and the seed script
+all read these tables. The first query somebody forgets puts a deleted task back
+in the briefing, and nothing about the code looks wrong.
+
+So a deleted row is **moved** into a `trash` table, whole, as JSON. Every existing
+read is correct by construction, including ones written next year, and the bin is
+one query. The cost is the round trip, and it has exactly one sharp edge:
+`JSON.stringify` turns a Buffer into `{type: "Buffer", data: [...]}`, so a
+restored memory's embedding would be stored as the string `[object Object]` — a
+memory that is present, readable, and invisible to recall. `rehydrate` exists for
+that one value, and `verify:trash` asserts that a restored memory is still
+findable, because that is a bug no reviewer would see.
+
+**THE SENTENCE IS THE FEATURE**
+
+*"Removed 6 open tasks. They're in the trash for 7 days if that was a mistake."*
+A destructive action and a reversible one are indistinguishable to the person
+performing them unless the app says which one just happened, so every deletion
+says where the thing went and how long it has.
+
+**AND THE HARD PART IS WHAT MUST NOT FIRE**
+
+A bulk delete is the most dangerous thing in this codebase, and its risk is not
+the delete — it is the sentence that looks like one. "Forget it", "drop it",
+"cancel that", "forget about my tasks for now and let's talk about this
+loneliness thing" (a real message in this project's own history) all begin with a
+verb the removal handler owns. So:
+
+  - the bulk form fires on *everything*, *all*, *the list*, *tasks* — never on a
+    bare pronoun;
+  - a phrase that names something is resolved against tasks, then the calendar,
+    then the board, then memory, and removes exactly one thing;
+  - a failure to resolve falls through to the rest of the mind when the phrase is
+    long, and is reported when it is short. "Remove the dentist thing" that finds
+    nothing deserves an answer; a sentence that merely starts with "forget" does
+    not deserve to be argued with.
+
+Six of those sentences are asserted in `verify:trash` against a task that must
+survive them. That group is the one to extend first when this handler grows.
+
+The general shape: **when a feature becomes destructive, the tests move from what
+it does to what it refuses to do.**
+
 ---
 
 ## Traps that have already bitten

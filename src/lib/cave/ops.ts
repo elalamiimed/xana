@@ -23,7 +23,8 @@ import { getStore } from "@/lib/core/store";
 import { nowIso, toDateKey } from "@/lib/core/time";
 import { computeGoalProgress, goalsWithProgress } from "@/lib/derived/goals";
 import { invalidateContext } from "@/lib/context/gateway";
-import type { CalendarEvent, Goal, GoalStatus, Milestone, Task, TaskStatus } from "@/lib/core/types";
+import type { CalendarEvent, Goal, GoalStatus, Milestone, Task, TaskStatus, TrashItem, TrashKind } from "@/lib/core/types";
+import { TRASH_KINDS } from "@/lib/core/types";
 
 /* ------------------------------------------------------------------ */
 /* Shapes                                                             */
@@ -55,6 +56,8 @@ export interface CavePayload {
   event?: CalendarEvent;
   memories?: unknown;
   removed?: string;
+  /** The bin, whenever an operation touched it. */
+  trash?: TrashItem[];
 }
 
 export class CaveError extends Error {
@@ -756,6 +759,78 @@ export function deleteEvent(input: Record<string, unknown>): CavePayload {
 }
 
 /* ------------------------------------------------------------------ */
+/* The trash                                                           */
+/* ------------------------------------------------------------------ */
+
+/**
+ * What is in the bin.
+ *
+ * A read, but never a cached one: the bin purges itself as it is read, so what
+ * this returns is what is really still recoverable — not a list that includes
+ * something the deadline has already taken.
+ */
+export function listTrash(): TrashItem[] {
+  return getStore().listTrash();
+}
+
+/**
+ * The same read, as an operation.
+ *
+ * The room refreshes itself after a restore without refetching the whole cave,
+ * and every operation answers in the same shape — see `CavePayload`.
+ */
+export function trashPayload(): CavePayload {
+  return { trash: listTrash() };
+}
+
+/**
+ * Put something back.
+ *
+ * Restores exactly what was removed, which is why the store keeps the whole row
+ * rather than a summary of it: a task comes back with its due date, and a memory
+ * comes back still findable by recall.
+ */
+export function restoreFromTrash(input: Record<string, unknown>): CavePayload {
+  const { kind, id } = trashRef(input);
+  const restored = getStore().restoreFromTrash(kind, id);
+  if (!restored) throw new CaveError("That is no longer in the trash.", 404);
+
+  invalidateContext();
+  return { trash: listTrash() };
+}
+
+/**
+ * Delete something for good, ahead of the deadline.
+ *
+ * The only irreversible verb in the app, so it says so in the name and in the
+ * interface: "Delete for good" is a different button from "Restore" and looks
+ * like it.
+ */
+export function purgeFromTrash(input: Record<string, unknown>): CavePayload {
+  const { kind, id } = trashRef(input);
+  if (!getStore().purgeOne(kind, id)) throw new CaveError("That is no longer in the trash.", 404);
+  invalidateContext();
+  return { trash: listTrash() };
+}
+
+/** Empty the bin, on purpose and with both hands. */
+export function emptyTrash(): CavePayload {
+  getStore().emptyTrash();
+  invalidateContext();
+  return { trash: [] };
+}
+
+function trashRef(input: Record<string, unknown>): { kind: TrashKind; id: string } {
+  const kind = input.kind;
+  const id = typeof input.id === "string" ? input.id : "";
+  if (typeof kind !== "string" || !TRASH_KINDS.includes(kind as TrashKind)) {
+    throw new CaveError("Unknown kind for the trash.");
+  }
+  if (!id) throw new CaveError("Which one?");
+  return { kind: kind as TrashKind, id };
+}
+
+/* ------------------------------------------------------------------ */
 /* Dispatch                                                           */
 /* ------------------------------------------------------------------ */
 
@@ -780,6 +855,10 @@ const OPERATIONS = {
   "memory.update": updateMemory,
   "memory.pin": pinMemory,
   "memory.forget": forgetMemory,
+  "trash.list": trashPayload,
+  "trash.restore": restoreFromTrash,
+  "trash.purge": purgeFromTrash,
+  "trash.empty": emptyTrash,
 } as const;
 
 export type CaveOperation = keyof typeof OPERATIONS;

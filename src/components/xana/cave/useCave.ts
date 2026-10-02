@@ -17,7 +17,7 @@
 
 import { useCallback, useRef, useState } from "react";
 
-import type { CaveGoal, CaveSnapshot, MemoryPage } from "@/lib/cave/types";
+import type { CaveGoal, CaveSnapshot, MemoryPage, TrashItem } from "@/lib/cave/types";
 import type { CalendarEvent, Task } from "@/lib/core/types";
 
 export class CaveRequestError extends Error {
@@ -56,6 +56,8 @@ export interface CaveController {
   /** Today and tomorrow, for the schedule room. */
   events: CalendarEvent[];
   memories: MemoryPage | null;
+  /** What is in the bin, as the server last reported it. */
+  trash: TrashItem[];
   /** False until the first read settles. */
   loading: boolean;
   /** Ids with an operation in flight, so a card can show its own spinner. */
@@ -79,6 +81,7 @@ export function useCave(open: boolean): CaveController {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [memories, setMemories] = useState<MemoryPage | null>(null);
+  const [trash, setTrash] = useState<TrashItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [pending, setPending] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
@@ -88,6 +91,7 @@ export function useCave(open: boolean): CaveController {
     if (Array.isArray(payload.goals)) setGoals(payload.goals);
     if (Array.isArray(payload.tasks)) setTasks(payload.tasks);
     if (Array.isArray(payload.events)) setEvents(payload.events);
+    if (Array.isArray(payload.trash)) setTrash(payload.trash);
     const page = payload.memories as MemoryPage | undefined;
     if (page && Array.isArray(page.items)) {
       // An operation returns only the records it touched, so the fuller
@@ -146,6 +150,7 @@ export function useCave(open: boolean): CaveController {
     tasks,
     events,
     memories,
+    trash,
     loading: loading && !loaded.current,
     pending,
     error,

@@ -24,11 +24,21 @@ const VALID_TYPES = new Set<ActionIntent["type"]>([
   "create_goal",
   "complete_milestone",
   "log_habit",
+  "log_energy",
+  "log_meal",
   "remember",
   "start_focus",
   "protect_block",
   "reflect",
   "brief_me",
+  // Removal. Accepted here as well as in conversation: the one-tap controls and
+  // the cave use this route, and a delete that only works when spoken would be
+  // the only write-back in the app with two implementations.
+  "delete_task",
+  "clear_tasks",
+  "delete_event",
+  "delete_goal",
+  "forget_memory",
   "none",
 ]);
 

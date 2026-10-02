@@ -303,9 +303,23 @@ the three questions a user actually has:
   cutoff entirely. A pin is a guarantee, not a nudge to the ranking.
 - **Edit** — *this is nearly right.* The embedding is rebuilt on save, so the
   corrected wording is what recall searches, not the words you removed.
-- **Forget** — *this should not be known.* A hard delete, twice confirmed. A
-  soft delete would leave it reachable by a later high-scoring recall, which is
-  not what forgetting means.
+- **Forget** — *this should not be known.* The row leaves memory entirely, so a
+  later recall cannot find it — a soft-delete flag would leave it in the vector
+  index and reachable by a high-scoring search, which is not what forgetting
+  means. It goes to the **trash** rather than nowhere, so a misheard "forget
+  that" is undoable for a week without weakening any of the above.
+
+**The trash room.** Everything removed — tasks, events, goals, milestones, notes,
+memories — lands here and stays for **seven days**, with a **Restore** button on
+each row and a **days left** countdown. Restoring puts the record back exactly as
+it was: a task with its due date, a memory with its embedding still intact, a goal
+with its milestones.
+
+The bin is what makes asking her to remove things safe. She is told "remove
+everything" and does it, in one move, and the reply says where it went — because a
+deletion you cannot take back is one people stop using, and a list nobody prunes
+is a list nobody reads. `Delete for good` exists per row for the cases where you
+mean it; it is the only irreversible control in the app, and it is the quiet one.
 
 You can also write a memory by hand, marked as yours so it outranks what she
 infers from conversation.
@@ -332,6 +346,26 @@ the model separately, because they mean different things: a match is relevant to
 the question, a pin is background that may be entirely unrelated. Merging them
 into one list invites an answer about your budget that mentions where the spare
 key is.
+
+### Removing things, by asking
+
+She removes as well as adds. **"Remove everything"**, **"clear the list"**,
+**"delete the dentist thing"**, **"cancel the four o'clock"**, **"forget what I
+said about the move"** all work, in her own words, from the same chat box that
+creates things.
+
+The bulk form is deliberately narrow. It fires on *everything*, *all*, *the
+list*, *tasks* — and **not** on a bare pronoun, because "forget it" and "drop it"
+are how people end a subject rather than how they ask for the task list to be
+emptied. A sentence that merely begins with a removal verb and then carries on
+("forget about my tasks for now, let's talk about something else") is handed back
+to the rest of the mind, which is where it belonged.
+
+Everything removed goes to the trash for seven days, and the confirmation says
+so: *"Removed 6 open tasks. They're in the trash for 7 days if that was a
+mistake."* That sentence is the feature — a destructive action and a reversible
+one are indistinguishable to the person performing them unless the app says which
+just happened.
 
 
 Types for all of them live in `src/lib/api/contract.ts` and
@@ -779,8 +813,16 @@ node scripts/probe-status-rows.mjs 40         # is the one-row-per-connection ru
   arranged on demand in a real browser and exactly what caused the bug. It also
   pins the interim-to-final promotion, a final result repeated by the browser, and
   the sparse result lists.
-- `npm run verify:transcriber` — that the app starts the Python service rather
-  than asking you to. The decision is a pure function of five facts and is driven
+- `npm run verify:trash` — that removing something really removes it, and that
+  taking it back really takes it back. The assertions go through the *read*
+  methods — the task list, the calendar window, recall, the counts — rather than
+  against the bin, because a bin that keeps a copy while the original is still
+  being read is not a bin. Includes the one that would be invisible in review: a
+  restored memory must still be findable by recall, which only holds because the
+  embedding survives its JSON round trip. The seven-day window is driven with an
+  injected clock, and six conversational sentences ("forget it", "drop it",
+  "cancel that") are asserted NOT to empty the list.
+- `npm run verify:transcriber` — that the app starts the Python service rather  than asking you to. The decision is a pure function of five facts and is driven
   across all 32 combinations, because every way it can be wrong is invisible from
   outside: starting a second copy of a service that is still loading its model,
   respawning on every one of the browser's three-second retries, telling someone

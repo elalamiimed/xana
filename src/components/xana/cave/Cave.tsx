@@ -9,6 +9,8 @@ import CaveBoard from "./CaveBoard";
 import MemoryRoom from "./MemoryRoom";
 import ScheduleRoom from "./ScheduleRoom";
 import TasksRoom from "./TasksRoom";
+import TrashRoom from "./TrashRoom";
+import { TRASH_DAYS } from "@/lib/core/types";
 import { useCave } from "./useCave";
 
 /**
@@ -27,7 +29,7 @@ import { useCave } from "./useCave";
  * actually type: a trailing date, and a leading horizon word.
  */
 
-export type CaveRoom = "goals" | "tasks" | "schedule" | "memory";
+export type CaveRoom = "goals" | "tasks" | "schedule" | "memory" | "trash";
 
 export interface CaveProps {
   open: boolean;
@@ -41,6 +43,7 @@ const ROOMS: readonly { id: CaveRoom; label: string }[] = [
   { id: "tasks", label: "Tasks" },
   { id: "schedule", label: "Schedule" },
   { id: "memory", label: "Memory" },
+  { id: "trash", label: "Trash" },
 ] as const;
 
 /** Words that set a horizon when typed at the start of a goal. */
@@ -128,6 +131,13 @@ export default function Cave({ open, onClose, initialRoom = "goals" }: CaveProps
 
   /** A one-line summary of the room, so it says something on arrival. */
   const summary = useMemo(() => {
+    if (room === "trash") {
+      const count = controller.trash.length;
+      if (count === 0) return "Nothing in the bin.";
+      const soonest = controller.trash.reduce((min, item) => Math.min(min, item.daysLeft), TRASH_DAYS);
+      return `${count} item${count === 1 ? "" : "s"}; the next goes in ${soonest} day${soonest === 1 ? "" : "s"}.`;
+    }
+
     if (room === "schedule") {
       const today = controller.events.filter(
         (e) => new Date(e.start).toDateString() === new Date().toDateString(),
@@ -162,7 +172,7 @@ export default function Cave({ open, onClose, initialRoom = "goals" }: CaveProps
       parts.push(`nearest deadline ${soonest.progress.daysRemaining} days out`);
     }
     return `${parts.join(", ")}.`;
-  }, [controller.goals, controller.tasks, controller.events, room]);
+  }, [controller.goals, controller.tasks, controller.events, controller.trash, room]);
 
   const addGoal = useCallback(async () => {
     const raw = quickAdd.trim();
@@ -296,6 +306,8 @@ export default function Cave({ open, onClose, initialRoom = "goals" }: CaveProps
           <TasksRoom controller={controller} />
         ) : room === "schedule" ? (
           <ScheduleRoom controller={controller} />
+        ) : room === "trash" ? (
+          <TrashRoom controller={controller} />
         ) : (
           <MemoryRoom controller={controller} />
         )}
@@ -310,7 +322,9 @@ export default function Cave({ open, onClose, initialRoom = "goals" }: CaveProps
               ? "Open tasks only — completing one removes it from this list. Everything here is stored locally in data/xana.db."
               : room === "schedule"
                 ? "Today and tomorrow. What Next, Focus and Open read from."
-                : "Forgetting is permanent, and she will not recall it again."}
+                : room === "trash"
+                  ? `Removed things wait here for ${TRASH_DAYS} days. Restoring puts one back exactly as it was; nothing is gone until the deadline, or until you say so.`
+                  : "Removed memories are not recalled again — and they are in the trash for a week if you change your mind."}
         </p>
       </footer>
     </div>

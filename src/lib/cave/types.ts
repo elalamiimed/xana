@@ -15,9 +15,10 @@ import type {
   MemoryKind,
   MemoryRecord,
   Task,
+  TrashItem,
 } from "@/lib/core/types";
 
-export type { CalendarEvent, Goal, GoalProgress, GoalStatus, MemoryKind, MemoryRecord, Task };
+export type { CalendarEvent, Goal, GoalProgress, GoalStatus, MemoryKind, MemoryRecord, Task, TrashItem };
 
 /** A goal with its pace already computed by the server. */
 export interface CaveGoal {
@@ -44,6 +45,14 @@ export interface CaveSnapshot {
   /** Today and tomorrow, which is the window the briefing asks about. */
   events: CalendarEvent[];
   memories: MemoryPage;
+  /**
+   * The bin.
+   *
+   * In the snapshot rather than behind its own request because it is small, it
+   * is bounded by the week, and it purges itself as it is read — so a room that
+   * showed a stale list would be showing something that no longer exists.
+   */
+  trash: TrashItem[];
 }
 
 /** The columns of the board, in order. */

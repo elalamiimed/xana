@@ -603,6 +603,51 @@ export interface AdapterStatus {
 }
 
 /* ------------------------------------------------------------------ */
+/* The trash                                                           */
+/* ------------------------------------------------------------------ */
+
+/**
+ * How long a deleted thing stays recoverable.
+ *
+ * Seven days because that is the window in which a person notices: a task
+ * removed by mistake is usually missed the next time they look at the list, and
+ * a week covers the weekend, the trip, and the "I will deal with it Monday".
+ * Longer than that and the bin becomes a second, worse copy of the database
+ * that nobody ever empties.
+ *
+ * Here rather than in the store because the interface says it out loud — "in
+ * the trash for seven days" is a promise to the user, and a second copy of the
+ * number in a component is a second copy that can be wrong.
+ */
+export const TRASH_DAYS = 7;
+
+/** The things a user can delete, and therefore recover. */
+export type TrashKind = "task" | "event" | "goal" | "milestone" | "note" | "memory";
+
+export const TRASH_KINDS: readonly TrashKind[] = ["task", "event", "goal", "milestone", "note", "memory"];
+
+/** A label for each kind, for a list a person reads. */
+export const TRASH_LABELS: Record<TrashKind, string> = {
+  task: "Task",
+  event: "Event",
+  goal: "Goal",
+  milestone: "Milestone",
+  note: "Note",
+  memory: "Memory",
+};
+
+/** One line in the bin. */
+export interface TrashItem {
+  kind: TrashKind;
+  /** The id the record had in its own table, so a restore can name it. */
+  id: string;
+  title: string;
+  deletedAt: string;
+  /** Whole days before it is removed for good. Never negative. */
+  daysLeft: number;
+}
+
+/* ------------------------------------------------------------------ */
 /* Actions (write-back)                                                */
 /* ------------------------------------------------------------------ */
 
@@ -632,6 +677,28 @@ export type ActionIntent =
   | { type: "protect_block"; title: string; start: string; end: string; reason?: string }
   | { type: "reflect"; period: "weekly" | "monthly" }
   | { type: "brief_me" }
+  /**
+   * Taking things back out.
+   *
+   * Removal is an action like any other because asking for it is how people
+   * talk: "scrap the dentist thing", "clear the list", "that meeting is off".
+   * Every one of these goes to the trash rather than out of the database — see
+   * `trash` in `core/store.ts` — so a sentence misheard is a restore rather
+   * than lost work, and the reply can say so.
+   */
+  | { type: "delete_task"; taskId: string }
+  /**
+   * The whole open list at once, for "remove everything" and "clear the list".
+   *
+   * `open` is the default and the useful one: a list that has become a reproach
+   * is the thing people want gone. `all` exists so the same verb can mean the
+   * whole table when someone genuinely means that, and nothing else reaches for
+   * it.
+   */
+  | { type: "clear_tasks"; scope?: "open" | "all" }
+  | { type: "delete_event"; eventId: string }
+  | { type: "delete_goal"; goalId: string }
+  | { type: "forget_memory"; memoryId: string }
   | { type: "none" };
 
 export interface ActionOutcome {

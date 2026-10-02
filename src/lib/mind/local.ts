@@ -92,7 +92,115 @@ function any(text: string, ...patterns: RegExp[]): boolean {
 type Handler = (input: LocalMindInput) => LocalMindOutput | undefined;
 
 /**
- * "remind me to X", "reminder: X", "don't let me forget X"
+ * "remove X", "delete the dentist thing", "clear the list", "cancel the four o'clock"
+ *
+ * WHY THIS IS FIRST IN THE LIST
+ *
+ * Every other handler here adds something. This one removes, and a removal verb
+ * must never be shadowed by a constructive one — "drop the review" reaching a
+ * handler that reads "review" as a title to capture would turn a deletion into a
+ * duplicate. It runs first so the destructive reading always wins.
+ *
+ * THE BULK FORM IS THE ONE PEOPLE ACTUALLY USE
+ *
+ * "Remove everything" is what someone says when a list has stopped being a plan
+ * and become a reproach, and it is exactly the request that produced this
+ * handler: the app had no way to take anything out at all, so the only honest
+ * answer was a sentence about what it could not do. It goes to the trash, in one
+ * piece, and she says so.
+ *
+ * When a phrase names something, the name is resolved against what she can see —
+ * tasks, the calendar, the board, memory — and if nothing matches she says so
+ * rather than removing the nearest thing. An assistant that guesses at "remove
+ * the proposal" is one you stop asking.
+ */
+const REMOVAL = /^(?:please\s+|can you\s+|could you\s+|xana,?\s+)*(?:remove|delete|trash|drop|scrap|cancel|bin|forget|clear|empty|wipe)\b\s*(.*)$/i;
+
+/**
+ * What counts as "everything".
+ *
+ * The list, the tasks, or the word everything — and deliberately not a bare
+ * pronoun. "Forget it" and "drop it" are how people end a subject, not how they
+ * ask for the whole task list to be removed, and a bulk delete that a
+ * conversational tic can trigger is a bulk delete nobody should ship.
+ */
+const BULK_TARGET = /^(?:everything|all)\b/i;
+const BULK_NOUN = /^(?:whole\s+)?(?:list|tasks?|to-?dos?)$/i;
+
+/** A target that names nothing: "remove it", "delete that". */
+const PRONOUN_TARGET = /^(?:it|that|this|them|those|these|him|her)\b/i;
+
+const handleDelete: Handler = ({ text, lifeState, sessionId }) => {
+  const m = REMOVAL.exec(text.trim());
+  if (!m) return undefined;
+
+  const raw = (m[1] ?? "").trim().replace(/[.!?]+$/, "");
+  const target = raw.replace(/^(?:the|that|those|my|all of the|about)\s+/i, "").trim();
+  if (!target) return undefined;
+
+  if (BULK_TARGET.test(target) || BULK_NOUN.test(target)) {
+    const outcome = executeAction({ type: "clear_tasks" }, { sessionId });
+    return { text: "", outcome };
+  }
+
+  // "Forget it" is a sentence, not an instruction.
+  if (PRONOUN_TARGET.test(target)) return undefined;
+
+  const found = removalTarget(target, lifeState);
+  if (!found) {
+    /**
+     * How loudly to fail depends on how it was asked.
+     *
+     * "Remove the dentist thing" named something and could not find it, and
+     * saying so is the useful answer. "Forget about my tasks for now and let's
+     * talk about this loneliness thing" merely begins with a verb this handler
+     * owns, and answering it with a list-matching complaint would be the app
+     * arguing with a sentence that was never a request. So a long phrase falls
+     * through to the rest of the mind, where it belongs.
+     */
+    if (target.split(/\s+/).filter(Boolean).length > 5) return undefined;
+    return {
+      text: `Nothing I can see matches "${target}". Give me the wording from the list and I'll take it out.`,
+      outcome: { ok: false, effect: "removal.missing", message: "" },
+    };
+  }
+
+  const outcome = executeAction(found.intent, { sessionId });
+  return { text: "", outcome };
+};
+
+/**
+ * What "the dentist thing" means, if anything.
+ *
+ * Tasks first: they are the long list, the one with duplicates and stale items,
+ * and the one people ask to be pruned. Then the calendar, then the board, then
+ * memory — each step is a smaller and more deliberate collection than the last,
+ * and a phrase that matches a task and a memory should remove the task.
+ */
+function removalTarget(
+  phrase: string,
+  state: LifeState,
+): { intent: ActionIntent; label: string } | undefined {
+  const task = bestTaskMatch(phrase, state);
+  if (task) return { intent: { type: "delete_task", taskId: task.id }, label: task.title };
+
+  // Today's calendar, plus whatever is next when it is not today — the life
+  // state carries one "next" rather than a second day, and a phrase like
+  // "cancel the standup" usually means the one that is coming.
+  const events = [...state.calendar.today, ...(state.calendar.next ? [state.calendar.next] : [])];
+  const event = bestMatch(phrase, events.map((e) => ({ id: e.id, title: e.title })));
+  if (event) return { intent: { type: "delete_event", eventId: event.id }, label: event.title };
+
+  const goal = bestMatch(phrase, state.goals.map((g) => ({ id: g.goal.id, title: g.goal.title })));
+  if (goal) return { intent: { type: "delete_goal", goalId: goal.id }, label: goal.title };
+
+  const memory = bestMatch(phrase, state.memory.map((hit) => ({ id: hit.memory.id, title: hit.memory.title })));
+  if (memory) return { intent: { type: "forget_memory", memoryId: memory.id }, label: memory.title };
+
+  return undefined;
+}
+
+/** "remind me to X", "reminder: X", "don't let me forget X"
  *
  * A day without a clock time keeps the day but not midnight: "Friday at 12:00
  * AM" is the wrong thing to say back to someone who said "Friday".
@@ -602,6 +710,10 @@ const handleHelp: Handler = ({ text }) => {
  * that do not collide, so the rest of the order is free.
  */
 const HANDLERS: Handler[] = [
+  // First, because it is the only one that removes anything: a destructive verb
+  // must not be shadowed by a handler that would read the same words as
+  // something to add. See the note on `handleDelete`.
+  handleDelete,
   handleReminder,
   handleNote,
   handleRemember,
@@ -1067,25 +1179,50 @@ export function toMessage(
 /* Small helpers                                                       */
 /* ------------------------------------------------------------------ */
 
-/** Best fuzzy match of a phrase against the open task list. */
-function bestTaskMatch(phrase: string, state: LifeState): { id: string; title: string } | undefined {
-  const needle = phrase.toLowerCase();
-  const pool = [...state.tasks.focus, ...state.tasks.overdue];
-  const exact = pool.find((t) => t.title.toLowerCase() === needle);
+/**
+ * Words that carry no meaning when someone is naming a thing to remove.
+ *
+ * "Delete the dentist thing" is how people talk, and every one of these words
+ * would otherwise count against the match: the phrase has two content tokens,
+ * only one of which appears in the title, so a scorer that treats them equally
+ * reports half a match and refuses. These are the words that make a spoken
+ * phrase fuzzy without making it ambiguous.
+ */
+const FILLER = new Set(["thing", "things", "stuff", "item", "items", "entry", "entries", "one", "ones", "please"]);
+
+/** Best fuzzy match of a phrase against a list of titles. */
+function bestMatch(
+  phrase: string,
+  pool: ReadonlyArray<{ id: string; title: string }>,
+): { id: string; title: string } | undefined {
+  const needle = phrase.toLowerCase().trim();
+  if (needle.length < 2) return undefined;
+
+  const exact = pool.find((item) => item.title.toLowerCase() === needle);
   if (exact) return exact;
-  const contains = pool.find((t) => t.title.toLowerCase().includes(needle) || needle.includes(t.title.toLowerCase()));
+  const contains = pool.find(
+    (item) => item.title.toLowerCase().includes(needle) || needle.includes(item.title.toLowerCase()),
+  );
   if (contains) return contains;
 
-  // Token overlap, for "the deck thing" matching "Review Aurora deck".
-  const words = needle.split(/\W+/).filter((w) => w.length > 3);
+  // Token overlap, for "the dentist thing" matching "Book the dentist follow-up".
+  const words = needle.split(/\W+/).filter((w) => w.length > 3 && !FILLER.has(w));
   if (words.length === 0) return undefined;
-  let best: { task: { id: string; title: string }; score: number } | undefined;
-  for (const task of pool) {
-    const title = task.title.toLowerCase();
+  let best: { item: { id: string; title: string }; score: number } | undefined;
+  for (const item of pool) {
+    const title = item.title.toLowerCase();
     const score = words.filter((w) => title.includes(w)).length / words.length;
-    if (score > 0.5 && (!best || score > best.score)) best = { task, score };
+    // Half the content words is a match, not a maybe. Removal is the one verb
+    // with an undo, the reply names what it took, and a phrase with the filler
+    // stripped is usually down to the one word that identifies it.
+    if (score >= 0.5 && (!best || score > best.score)) best = { item, score };
   }
-  return best?.task;
+  return best?.item;
+}
+
+/** Best fuzzy match of a phrase against the open task list. */
+function bestTaskMatch(phrase: string, state: LifeState): { id: string; title: string } | undefined {
+  return bestMatch(phrase, [...state.tasks.focus, ...state.tasks.overdue]);
 }
 
 /** Default reminder slot: today at 18:00, or tomorrow if it is already past. */

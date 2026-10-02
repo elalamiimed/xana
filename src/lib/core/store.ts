@@ -30,11 +30,48 @@ import type {
   Reflection,
   Task,
   TaskStatus,
+  TrashItem,
+  TrashKind,
 } from "./types";
+import { TRASH_DAYS } from "./types";
 import { cosine, lexicalOverlap, localEmbedder, type Embedder } from "./vector";
 import { clamp, nowIso, recencyWeight, toDateKey, uid } from "./time";
 
 type Row = Record<string, unknown>;
+
+/* ------------------------------------------------------------------ */
+/* The trash                                                           */
+/* ------------------------------------------------------------------ */
+
+/** Which table each kind lives in, so the bin can put it back. */
+const TRASH_TABLES: Record<TrashKind, string> = {
+  task: "tasks",
+  event: "events",
+  goal: "goals",
+  milestone: "milestones",
+  note: "notes",
+  memory: "memories",
+};
+
+/**
+ * A JSON round trip is not identity for a BLOB.
+ *
+ * `JSON.stringify` turns a Buffer into `{type: "Buffer", data: [...]}`, and
+ * inserting that object back would store the string "[object Object]" where a
+ * memory's embedding belongs — a restored memory that is present, readable, and
+ * invisible to recall. This is the one value in the whole schema that needs it.
+ */
+function rehydrate(value: unknown): unknown {
+  if (
+    value !== null &&
+    typeof value === "object" &&
+    (value as { type?: unknown }).type === "Buffer" &&
+    Array.isArray((value as { data?: unknown }).data)
+  ) {
+    return Buffer.from((value as { data: number[] }).data);
+  }
+  return value;
+}
 
 /* ------------------------------------------------------------------ */
 /* Vector <-> BLOB                                                     */
@@ -119,6 +156,9 @@ export class XanaStore {
     this.migrate();
     this.addMissingColumns();
     this.backfillGoalOrder();
+    // Anything that has been in the trash for longer than a week goes now,
+    // rather than waiting for someone to open the bin. See `TRASH_DAYS`.
+    this.purgeTrash();
   }
 
   /**
@@ -391,7 +431,158 @@ export class XanaStore {
         meta TEXT
       );
       CREATE INDEX IF NOT EXISTS idx_conversation_created ON conversation(created_at DESC);
+
+      /*
+       * The trash.
+       *
+       * A deleted row MOVES here — it does not stay in its table with a flag on
+       * it. That is a deliberate choice and the reason is the query count: this
+       * store is read by the briefing, the derived layers, the adapters, the
+       * cave and the seed script, and "remember to filter the deleted rows" is
+       * a rule that has to be applied correctly in twenty-five places forever.
+       * The first query somebody forgets puts a deleted task back in the
+       * briefing. Moving the row means every existing read is already correct,
+       * including ones written next year.
+       *
+       * The payload column holds the whole row as JSON, so a restore puts back
+       * exactly what was taken — including a memory's embedding, which is why
+       * the BLOB is rehydrated rather than re-embedded (a restore must not
+       * change what recall finds, and re-embedding could).
+       */
+      CREATE TABLE IF NOT EXISTS trash (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        ref_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        deleted_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_trash_deleted ON trash(deleted_at DESC);
     `);
+  }
+
+  /* ---------------- the trash ---------------- */
+
+  /**
+   * Every read in this class is written against the live tables, and a deleted
+   * row is not in them — it has moved to `trash`. Nothing has to remember to
+   * filter, which is the entire point. See the schema note.
+   */
+  private moveToTrash(kind: TrashKind, refId: string): boolean {
+    const table = TRASH_TABLES[kind];
+    const row = this.db.prepare(`SELECT * FROM ${table} WHERE id = ?`).get(refId) as Row | undefined;
+    if (!row) return false;
+
+    const title = typeof row.title === "string" && row.title.trim() ? row.title : "(untitled)";
+    this.db
+      .prepare(
+        `INSERT OR REPLACE INTO trash (id, kind, ref_id, title, payload, deleted_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(`${kind}:${refId}`, kind, refId, title, JSON.stringify(row), nowIso());
+    this.db.prepare(`DELETE FROM ${table} WHERE id = ?`).run(refId);
+    return true;
+  }
+
+  /** What is in the bin, newest first, with the days it has left. */
+  listTrash(): TrashItem[] {
+    this.purgeTrash();
+    const now = Date.now();
+    const rows = this.db
+      .prepare(`SELECT kind, ref_id, title, deleted_at FROM trash ORDER BY deleted_at DESC`)
+      .all() as Array<{ kind: string; ref_id: string; title: string; deleted_at: string }>;
+
+    return rows.map((row) => {
+      const deletedAt = new Date(row.deleted_at);
+      const expiresAt = new Date(deletedAt.getTime() + TRASH_DAYS * 86_400_000);
+      return {
+        kind: row.kind as TrashKind,
+        id: row.ref_id,
+        title: row.title,
+        deletedAt: row.deleted_at,
+        daysLeft: Math.max(0, Math.ceil((expiresAt.getTime() - now) / 86_400_000)),
+      };
+    });
+  }
+
+  /**
+   * Put a deleted thing back exactly as it was.
+   *
+   * The payload is the row that was removed, so the restore is an insert of the
+   * same values rather than a reconstruction from memory — a task comes back
+   * with its due date and priority, and a memory comes back with its embedding
+   * intact rather than re-embedded from text that may read differently now.
+   *
+   * Keys the table no longer has are dropped rather than fatal: a row deleted
+   * before a schema change must still be restorable, with the new columns left
+   * at their defaults.
+   */
+  restoreFromTrash(kind: TrashKind, refId: string): boolean {
+    const table = TRASH_TABLES[kind];
+    const row = this.db
+      .prepare(`SELECT payload FROM trash WHERE kind = ? AND ref_id = ?`)
+      .get(kind, refId) as { payload: string } | undefined;
+    if (!row) return false;
+
+    let payload: Row;
+    try {
+      payload = JSON.parse(row.payload) as Row;
+    } catch {
+      return false;
+    }
+
+    const columns = (this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>)
+      .map((c) => c.name)
+      .filter((name) => name in payload);
+    if (columns.length === 0) return false;
+
+    this.db
+      .prepare(
+        `INSERT OR REPLACE INTO ${table} (${columns.join(", ")})
+         VALUES (${columns.map(() => "?").join(", ")})`,
+      )
+      .run(...columns.map((name) => rehydrate(payload[name])));
+
+    this.db.prepare(`DELETE FROM trash WHERE id = ?`).run(`${kind}:${refId}`);
+
+    // A goal's milestones went into the bin with it, so they come back with it.
+    // Without this a restored goal would open empty, which reads as data loss
+    // even though nothing was lost.
+    if (kind === "goal") {
+      const children = this.db
+        .prepare(`SELECT ref_id FROM trash WHERE kind = 'milestone' AND payload LIKE ?`)
+        .all(`%"goal_id":"${refId}"%`) as Array<{ ref_id: string }>;
+      for (const child of children) this.restoreFromTrash("milestone", child.ref_id);
+    }
+    return true;
+  }
+
+  /**
+   * Remove everything that has been in the bin for longer than `TRASH_DAYS`.
+   *
+   * Called on every open and before every listing, which is what makes the
+   * window a real promise instead of a label: the app has to run for the purge
+   * to happen, and it is the app that wrote the thing.
+   */
+  purgeTrash(now: Date = new Date()): number {
+    const cutoff = new Date(now.getTime() - TRASH_DAYS * 86_400_000).toISOString();
+    return this.db.prepare(`DELETE FROM trash WHERE deleted_at < ?`).run(cutoff).changes;
+  }
+
+  /** Empty the bin on purpose — the one delete with no way back. */
+  emptyTrash(): number {
+    return this.db.prepare(`DELETE FROM trash`).run().changes;
+  }
+
+  /**
+   * Drop one item out of the bin ahead of the deadline.
+   *
+   * The interface offers it as "delete for good", which is the only irreversible
+   * verb in the app, so it is its own call rather than a flag on `restore` —
+   * nothing should be able to remove something permanently by accident.
+   */
+  purgeOne(kind: TrashKind, refId: string): boolean {
+    return this.db.prepare(`DELETE FROM trash WHERE kind = ? AND ref_id = ?`).run(kind, refId).changes > 0;
   }
 
   /* ---------------- memories ---------------- */
@@ -565,20 +756,26 @@ export class XanaStore {
   }
 
   /**
-   * Forget a memory permanently.
+   * Forget a memory.
    *
-   * A hard delete rather than a `superseded_by` flag, and that is a
-   * deliberate departure from how contradictions are handled elsewhere.
-   * Superseding is for "this was true and then changed", where keeping the
-   * history is useful. Forgetting is the user saying a thing should not be
-   * known, and a soft delete would leave it in `allMemories`, in the vector
-   * index, and reachable by a recall that happened to score it well.
+   * A hard delete, and that is a deliberate departure from how contradictions
+   * are handled elsewhere. Superseding is for "this was true and then changed",
+   * where keeping the history is useful. Forgetting is the user saying a thing
+   * should not be known — so the row leaves `memories` entirely rather than
+   * sitting in it behind a flag, which would leave it in `allMemories`, in the
+   * vector index, and reachable by a recall that happened to score it well.
+   *
+   * It goes to the trash rather than nowhere, which preserves every word of
+   * that reasoning: the row is out of the table, out of the index and out of
+   * reach of recall, and the user can still undo a misheard "forget that" for a
+   * week. `forget` is about what the app knows; the bin is about what the user
+   * can take back, and the two are not in conflict.
    *
    * Returns whether anything was removed, so the caller can tell "forgotten"
    * from "there was nothing there".
    */
   forgetMemory(id: string): boolean {
-    return this.db.prepare(`DELETE FROM memories WHERE id = ?`).run(id).changes > 0;
+    return this.moveToTrash("memory", id);
   }
 
   /**
@@ -803,15 +1000,34 @@ export class XanaStore {
   }
 
   /**
-   * Remove a task outright.
+   * Remove a task.
    *
    * Distinct from setting the status to `dropped`, which already exists and
    * means "I decided not to". This is for something typed by mistake or no
    * longer real, where keeping a record of it would be a record of a typo.
+   *
+   * It goes to the bin, which is what makes asking for this by voice safe: "is
+   * that everything?" is a question people answer wrong, and a deletion that
+   * cannot be undone turns a misheard sentence into lost work.
    */
   deleteTask(id: string): boolean {
-    const result = this.db.prepare(`DELETE FROM tasks WHERE id = ?`).run(id);
-    return result.changes > 0;
+    return this.moveToTrash("task", id);
+  }
+
+  /**
+   * The whole open list, in one move.
+   *
+   * For "remove everything" and "clear the list", which is what people say when
+   * a list has stopped being a plan and become a reproach. Every row is trashed
+   * individually rather than by a `DELETE ... WHERE`, so the bin holds each one
+   * separately and they can be restored one at a time.
+   */
+  deleteTasks(ids: readonly string[]): string[] {
+    const gone: string[] = [];
+    for (const id of ids) {
+      if (this.moveToTrash("task", id)) gone.push(id);
+    }
+    return gone;
   }
 
   tasksCompletedSince(iso: string): Task[] {
@@ -862,17 +1078,29 @@ export class XanaStore {
    * person types by hand they must be able to un-type. A calendar entry with
    * no way to delete it is worse than no calendar: it sits in the briefing
    * forever telling them about a class that moved.
+   *
+   * Removed entries go to the bin, so "cancel the thing at four" said about the
+   * wrong thing costs a restore rather than an apology.
    */
   deleteEvent(id: string): boolean {
-    const result = this.db.prepare(`DELETE FROM events WHERE id = ?`).run(id);
-    return result.changes > 0;
+    return this.moveToTrash("event", id);
   }
 
-  eventsBetween(fromIso: string, toIso: string): CalendarEvent[] {    return (
-      this.db
+  eventsBetween(fromIso: string, toIso: string): CalendarEvent[] {    return (      this.db
         .prepare(`SELECT * FROM events WHERE start < ? AND end > ? ORDER BY start ASC`)
         .all(toIso, fromIso) as Row[]
     ).map(rowToEvent);
+  }
+
+  /**
+   * One event by id.
+   *
+   * Added for removal: cancelling an event has to say *which* one it cancelled,
+   * and "the thing at four" is only reassuring if the reply names it back.
+   */
+  eventById(id: string): CalendarEvent | undefined {
+    const row = this.db.prepare(`SELECT * FROM events WHERE id = ?`).get(id) as Row | undefined;
+    return row ? rowToEvent(row) : undefined;
   }
 
   /* ---------------- goals ---------------- */
@@ -1055,12 +1283,19 @@ export class XanaStore {
    * The milestones carry `ON DELETE CASCADE`, but `foreign_keys` has to be
    * on for that to fire, so the count is deleted explicitly as well rather
    * than trusting a pragma that could be off.
+   *
+   * Both go to the bin, and the milestones go FIRST: the cascade would take
+   * them the moment the goal row goes, and a cascade does not stop at the
+   * trash. Restoring the goal brings its milestones back with it — see
+   * `restoreFromTrash`.
    */
   deleteGoal(id: string): boolean {
     const tx = this.db.transaction((goalId: string) => {
-      this.db.prepare(`DELETE FROM milestones WHERE goal_id = ?`).run(goalId);
-      const result = this.db.prepare(`DELETE FROM goals WHERE id = ?`).run(goalId);
-      return result.changes > 0;
+      const milestones = this.db
+        .prepare(`SELECT id FROM milestones WHERE goal_id = ?`)
+        .all(goalId) as Array<{ id: string }>;
+      for (const milestone of milestones) this.moveToTrash("milestone", milestone.id);
+      return this.moveToTrash("goal", goalId);
     });
     return tx(id);
   }
@@ -1190,7 +1425,7 @@ export class XanaStore {
   }
 
   deleteMilestone(id: string): boolean {
-    return this.db.prepare(`DELETE FROM milestones WHERE id = ?`).run(id).changes > 0;
+    return this.moveToTrash("milestone", id);
   }
 
   /** Milestone completions in a window — used by reflections and patterns. */
@@ -1278,6 +1513,17 @@ export class XanaStore {
     return (
       this.db.prepare(`SELECT * FROM notes ORDER BY updated_at DESC LIMIT ?`).all(limit) as Row[]
     ).map(rowToNote);
+  }
+
+  /**
+   * Remove a note.
+   *
+   * Notes could be written and never unwritten, which made them the one thing
+   * in the app that only ever grew. Into the bin like everything else: a note
+   * deleted by a misheard word is recoverable for a week.
+   */
+  deleteNote(id: string): boolean {
+    return this.moveToTrash("note", id);
   }
 
   /* ---------------- reflections ---------------- */
