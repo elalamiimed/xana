@@ -446,14 +446,19 @@ wrong about the shape: a bare language is only one of the ways a tag can fail.
 | `bad-grammar` / `phrases-not-supported` | Done, with their own sentence: nothing in Xana sends a grammar, so those mean an extension is substituting its own recognition configuration |
 | — | **Added:** a refusal is retried down a finite ladder of other regional variants of the *same* language, never a different one, and never a tag already refused. The app chose the tag, so correcting it is the app's job |
 | — | **Added:** the Composer, the wake listener and this page's recogniser all take their four shared options from `configureRecognizer`, so a language can no longer be set in one place and not another |
+| — | **Corrected, and this was the second half of the same mistake:** the first version resolved the *language* of every tag the browser reported, so `en-GB` was sent as `en-US`, `fr-CA` as `fr-FR`, `pt-PT` as `pt-BR` — and `zh-HK` (Cantonese) as `zh-CN` (Mandarin). Only a **bare** tag is resolved now; a tag that already names a locale is the browser's answer in full and is sent unchanged. `isBareLanguage` is the whole rule, and `scripts/check-speech-language.ts` asserts the ten tags that were being rewritten |
+| — | **Corrected:** the microphone button was drawn only where `SpeechRecognition` existed, so a browser with no Web Speech API could not reach the local recorder even though `local-speech.ts` needs none of it — the click handler's "switch to the local transcriber" branch was unreachable from a button that condition had hidden. `planDictation` decides the engine and the button together, the mic check now resolves the tag from the saved setting rather than from the browser alone, and `verify:dictation` drives all eight combinations |
 
 `npm run verify:speech` drives the decision through the reported case
-(`["en", "zh-CN", "en-GB", "en-US"]` → `en-US`), the ladder's finiteness, and the
-rule that a fallback never changes language. MEMORY.md §21 has the reasoning;
-§22 records the second half of the report — the shell never read the saved
-transcription setting until the settings panel had been opened, so a saved
-"transcribe on this machine" was ignored on every fresh page load and this
-browser's recogniser was used anyway.
+(`["en", "zh-CN", "en-GB", "en-US"]` → `en-US`), the ladder's finiteness, the rule
+that a fallback never changes language, and — added with the correction above —
+the ten complete tags that must come out the other side unchanged.
+MEMORY.md §21 has the reasoning; §22 records the second half of the report — the
+shell never read the saved transcription setting until the settings panel had been
+opened, so a saved "transcribe on this machine" was ignored on every fresh page
+load and this browser's recogniser was used anyway. §23 records the correction:
+the fix was one character too wide, and a complete tag is an answer rather than a
+gap to fill.
 
 ### Refuted — do not spend time here
 

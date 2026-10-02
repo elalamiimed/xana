@@ -15,6 +15,8 @@ import {
   dictationNote as buildDictationNote,
   getSpeechRecognition,
   hasOnDeviceRecognition,
+  planDictation,
+  type DictationPlan,
   type SpeechRecognizer,
 } from "./speech";
 import {
@@ -29,9 +31,11 @@ import { logMic } from "./mic-log";
 /**
  * The single input line. Pinned to the bottom, one hairline, radius-full.
  *
- * Enter sends, Shift+Enter breaks the line. The mic exists only where the Web
- * Speech API does — a dead control is worse than no control, so when
- * `getSpeechRecognition()` returns null the button is not rendered at all.
+ * Enter sends, Shift+Enter breaks the line. The mic is drawn wherever something
+ * could actually dictate — the browser's recogniser, or this machine's own
+ * transcriber — and not at all where nothing could. `planDictation` decides both,
+ * because a control that does nothing is worse than no control, and a control
+ * that explains itself is better than either.
  *
  * WHY DICTATION USED TO LOOK BROKEN
  *
@@ -159,7 +163,18 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
   /** The last recogniser whose session actually opened, for the watchdog. */
   const opened = useRef<SpeechRecognizer | null>(null);
   const openTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [micAvailable, setMicAvailable] = useState(false);
+  /**
+   * Which engine the button means, and whether it exists.
+   *
+   * One value rather than a `micAvailable` boolean and an inline `if` in the
+   * click handler: those were two copies of one decision, and they disagreed —
+   * see `planDictation`.
+   */
+  const [dictation, setDictation] = useState<DictationPlan>({
+    engine: "none",
+    button: false,
+    note: "",
+  });
   /** Whether this browser can recognise speech without leaving the machine. */
   const [onDevice, setOnDevice] = useState(false);
   /** Set once the on-device retry has been tried, so it cannot loop. */
@@ -207,8 +222,12 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
   // Feature detection runs after mount, never during render: the server has
   // no `window`, and a mismatch here would desync hydration.
   useEffect(() => {
-    const available = getSpeechRecognition() !== null;
-    setMicAvailable(available);
+    const plan = planDictation({
+      mode,
+      hasRecognition: getSpeechRecognition() !== null,
+      canRecord: canRecord(),
+    });
+    setDictation(plan);
     setOnDevice(hasOnDeviceRecognition());
     // Whether the button exists at all is the first question when a user says
     // "I clicked the mic" — if this is false, there was no button to click and
@@ -220,7 +239,8 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
     // what will actually be sent, which is the pair that explains a refusal.
     const chosen = resolveSpeechLanguage(language, browserLanguages());
     logMic("composer.mount", {
-      micButton: available,
+      micButton: plan.button,
+      engine: plan.engine,
       onDevice: hasOnDeviceRecognition(),
       secure: window.isSecureContext,
       lang: chosen.tag,
@@ -228,7 +248,7 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
       browserLang: chosen.fromBrowser || navigator.language || "none",
       hasMediaDevices: typeof navigator.mediaDevices?.getUserMedia === "function",
     });
-  }, [language]);
+  }, [language, mode]);
 
   /**
    * Close the microphone.
@@ -616,15 +636,22 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
 
   const startDictation = useCallback(() => {
     /**
-     * Which path, decided in one place.
+     * Which path, decided in one place — the same function that decides whether
+     * the button exists, so the two cannot disagree again.
      *
-     * The local one is asked for first when the setting says so. It is not tried
+     * The local path is asked for first when the setting says so. It is not tried
      * "if the browser fails", because the browser's failure is `network` — a
      * blocked service — and by the time that is known the user has already
      * spoken into a void.
      */
-    if (mode === "local" && canRecord()) {
-      logMic("composer.mic.click", { path: "local" });
+    const plan = planDictation({
+      mode,
+      hasRecognition: getSpeechRecognition() !== null,
+      canRecord: canRecord(),
+    });
+    logMic("composer.mic.click", { path: plan.engine });
+
+    if (plan.engine === "local") {
       onTakeMicrophone?.();
       baseText.current = value;
       stopping.current = false;
@@ -636,18 +663,16 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
       return;
     }
 
-    const Recognition = getSpeechRecognition();
-    logMic("composer.mic.click", { path: "browser", available: Recognition !== null });
-    if (!Recognition) {
-      // No browser recognition AND no local recorder is the one combination with
-      // nothing to try, so it gets its own sentence rather than a dead button.
-      if (canRecord()) {
-        setDictationNote(
-          "This browser has no speech recognition. Switch transcription to the local transcriber in Settings → Voice.",
-        );
-      }
+    if (plan.engine === "none") {
+      // Either nothing here can dictate, or only the local path could and the
+      // setting points at the browser. In the second case the note says which
+      // setting, because that is a fix the user can make in one click.
+      if (plan.note) setDictationNote(plan.note);
       return;
     }
+
+    const Recognition = getSpeechRecognition();
+    if (!Recognition) return;
 
     // Hand over the microphone before asking for it. Framed as a callback so
     // this component does not need to know that always-listening exists.
@@ -847,7 +872,7 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
         </kbd>
       ) : null}
 
-      {micAvailable ? (
+      {dictation.button ? (
         <button
           type="button"
           onClick={() => (dictating ? stopDictation() : startDictation())}

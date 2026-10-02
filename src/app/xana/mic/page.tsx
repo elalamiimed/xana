@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   configureRecognizer,
@@ -16,6 +16,7 @@ import {
   resolveSpeechLanguage,
   speechLanguageFallbacks,
 } from "@/components/xana/speech-language";
+import { useSettings } from "@/components/xana/useSettings";
 import { logMic } from "@/components/xana/mic-log";
 
 /**
@@ -71,6 +72,23 @@ export default function MicPage() {
   const recognizer = useRef<SpeechRecognizer | null>(null);
 
   /**
+   * The language the APP would send, not the one this page would pick.
+   *
+   * The setting is read here for one reason: a diagnostic that exercises a
+   * different configuration than the app does proves nothing about the app. This
+   * page used to resolve the tag from the browser alone, so a user who had set
+   * "English (United Kingdom)" in Settings watched this page test `en-US`, get a
+   * different answer, and have no way to tell which one the microphone button
+   * would use.
+   */
+  const settings = useSettings();
+  const speechLang = settings.view?.voice.speechLang ?? "";
+  const chosen = useMemo(
+    () => resolveSpeechLanguage(speechLang, browserLanguages()),
+    [speechLang],
+  );
+
+  /**
    * The capability facts, read once on mount.
    *
    * `secure context` matters more than it looks: `getUserMedia` and
@@ -83,11 +101,10 @@ export default function MicPage() {
     const recognition = getSpeechRecognition();
     const cannotMeter = typeof navigator.mediaDevices?.getUserMedia !== "function";
     const languages = typeof navigator.languages !== "undefined" ? navigator.languages.join(", ") : navigator.language;
-    const chosen = resolveSpeechLanguage("", browserLanguages());
     const ladder = speechLanguageFallbacks(chosen);
     const where =
       chosen.source === "setting"
-        ? "from Settings"
+        ? "set by hand in Settings → Voice"
         : chosen.source === "browser"
           ? "from this browser"
           : "the built-in default, because this browser will not name a language";
@@ -139,11 +156,20 @@ export default function MicPage() {
        * the bare `en`, which a speech service refuses as a locale, so `en-US` is
        * sent instead. Before this row existed the app sent `navigator.language`
        * untouched and blamed the user for the refusal.
+       *
+       * The second line is the other half of the rule: a tag that already names
+       * a region is the browser's answer in full and is sent unchanged, so most
+       * of the time nothing here is a correction at all.
        */
       {
         label: "Browser language",
-        value:
-          `${languages}${chosen.fromBrowser ? ` — "${chosen.fromBrowser}" is not a locale a service will accept, so ${chosen.tag} is sent instead` : ""}`,
+        value: `${languages}${
+          chosen.fromBrowser
+            ? ` — "${chosen.fromBrowser}" names a language and no locale, so ${chosen.tag} is sent instead`
+            : chosen.source === "setting"
+              ? " — overridden by the setting above, which is what is sent"
+              : " — used as it is; it already names a locale"
+        }`,
         tone: "idle",
       },
       {
@@ -156,7 +182,7 @@ export default function MicPage() {
       },
       { label: "User agent", value: navigator.userAgent, tone: "idle" },
     ]);
-  }, []);
+  }, [chosen]);
 
   const stopMeter = useCallback(() => {
     if (frame.current !== null) {
@@ -239,7 +265,9 @@ export default function MicPage() {
 
   const tryRecognition = useCallback(() => {
     const Recognition = getSpeechRecognition();
-    const chosen = resolveSpeechLanguage("", browserLanguages());
+    // The same tag the microphone button would send, setting included — a
+    // diagnostic that tests a different configuration proves nothing about the
+    // app it is diagnosing.
     logMic("micpage.recognition.start", {
       available: Recognition !== null,
       lang: chosen.tag,
@@ -298,7 +326,7 @@ export default function MicPage() {
       setRecognitionState("could not start");
       setRecognitionError("The recogniser refused to start. It may already be running.");
     }
-  }, []);
+  }, [chosen]);
 
   const stopRecognition = useCallback(() => {
     const instance = recognizer.current;

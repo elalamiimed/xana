@@ -148,6 +148,67 @@ export function hasOnDeviceRecognition(): boolean {
   return typeof withStatics.available === "function" && typeof withStatics.install === "function";
 }
 
+/* ================================================================== */
+/* Which engine the mic button means                                  */
+/* ================================================================== */
+
+/**
+ * What pressing the microphone will do, and whether it should be there at all.
+ *
+ * A pure function of three facts the caller reads from the browser, because this
+ * decision was made twice — once to decide whether to draw the button, once to
+ * decide what the click does — and the two copies disagreed. The button was
+ * drawn only where `SpeechRecognition` existed, while the click handler had a
+ * branch for "no recogniser, but this machine can record": a sentence telling the
+ * user to switch to the local transcriber, reachable only from a button that
+ * that very branch's condition would have hidden. The local path needs no
+ * `SpeechRecognition` at all — it is `MediaRecorder` and a Whisper service on
+ * this machine — so a browser without the Web Speech API could dictate and was
+ * offered nothing.
+ *
+ * `canRecord` is a parameter rather than a call to `canRecord()` so that this
+ * stays a decision and not a query, and so it can be driven in a test.
+ */
+export interface DictationPlan {
+  /** What a click will use. `"none"` means it cannot dictate here. */
+  readonly engine: "local" | "browser" | "none";
+  /** Whether the button should exist. A control that explains itself is worth
+   *  drawing; a control that does nothing is not. */
+  readonly button: boolean;
+  /** Why it cannot dictate, in words a person can act on. Empty when it can. */
+  readonly note: string;
+}
+
+export function planDictation(input: {
+  /** Where transcription is configured to happen. */
+  mode: "browser" | "local";
+  /** Whether this browser exposes the Web Speech API. */
+  hasRecognition: boolean;
+  /** Whether this browser can record audio at all. */
+  canRecord: boolean;
+}): DictationPlan {
+  // The setting decides first. A user who chose the local transcriber must not be
+  // quietly given the browser's service just because the browser has one — that
+  // choice is the whole point of the setting.
+  if (input.mode === "local" && input.canRecord) {
+    return { engine: "local", button: true, note: "" };
+  }
+  if (input.hasRecognition) {
+    return { engine: "browser", button: true, note: "" };
+  }
+  if (input.canRecord) {
+    // No Web Speech API, but this machine can record and transcribe locally. The
+    // button is drawn and the click explains the one setting that would make it
+    // work, rather than the app hiding the feature it has.
+    return {
+      engine: "none",
+      button: true,
+      note: "This browser has no speech recognition. Switch transcription to the local transcriber in Settings → Voice.",
+    };
+  }
+  return { engine: "none", button: false, note: "" };
+}
+
 /**
  * Why dictation stopped, in words a person can act on.
  *

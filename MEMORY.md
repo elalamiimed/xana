@@ -553,6 +553,53 @@ in a component, ask who is holding the value and when they got it. The same
 question applies to `transcribe` and to the dictation language, which is why both
 now arrive before anything can ask for the microphone.
 
+### 23. An inference must be no wider than the gap it fills
+
+§21's fix resolved the *language* of **every** tag the browser reported. That was
+one character too wide, and the machine it was written on could not show it: this
+profile's first preference is the bare `en`, so `en` → `en-US` looked perfect.
+The same line applied to a complete tag silently rewrote it —
+
+| browser asked for | sent before | sent now |
+|---|---|---|
+| `en` | `en-US` | `en-US` |
+| `en-GB` | `en-US` | `en-GB` |
+| `fr-CA` | `fr-FR` | `fr-CA` |
+| `pt-PT` | `pt-BR` | `pt-PT` |
+| `zh-HK` | **`zh-CN`** | `zh-HK` |
+
+The last row is why this is not a cosmetic slip. `zh-HK` is Cantonese and `zh-CN`
+is Mandarin: that is not a change of accent model, it is a change of language, and
+it is the exact failure §21 refused when it rejected "fall back to `en-US` come
+what may". The bug was fixed in one direction and reintroduced in the other — the
+app substituting its own answer for one the browser had already given in full.
+
+**The rule is the shape of the tag, not the contents of a list.** `en` names a
+language and no model, which is a gap and is filled. `en-GB`, `zh-Hant` and
+`es-419` name both, which is an answer and is passed through. `isBareLanguage` is
+one `includes("-")`, and `representativeFor` keeps answering for a *language* so
+that nothing calls it on a tag again — the confusion was in the helper's name, not
+in its arithmetic.
+
+The general shape: **an inference must be no wider than the gap it fills.**
+Resolving a bare language fills a gap the browser left; resolving a complete tag
+overwrites something it said. Same function, same list, opposite verdicts.
+
+**And the same mistake, one level up.** The microphone button was drawn only
+where `SpeechRecognition` existed, while the click handler carried a branch for
+"no recogniser, but this machine can record" — a sentence telling the user to
+switch to the local transcriber, reachable only from a button that condition had
+already hidden. The local path needs no `SpeechRecognition` at all; it is
+`MediaRecorder` and Whisper on `127.0.0.1`. A browser that could dictate through
+it was offered nothing, and dead code was the only evidence anyone had meant
+otherwise. `planDictation` is that decision once — mode, recogniser, recorder — and
+both the button and the click read it, which is what `verify:dictation` now
+drives across all eight combinations.
+
+Anywhere a control has a *condition* and a *handler*, they are one decision
+written twice. The second copy is the one that rots, and it rots silently: the
+control simply does not appear, and nothing errors.
+
 ---
 
 ## Traps that have already bitten

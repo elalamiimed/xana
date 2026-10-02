@@ -29,6 +29,10 @@
  *     microphone rather than as a refusal, and would send the user to buy a new
  *     headset.
  *   - A language the user chose by hand must not be second-guessed at all.
+ *   - A tag that already names a region must not be rewritten either. The first
+ *     version of the fix resolved the language of every tag, which turned `zh-HK`
+ *     into `zh-CN` — Cantonese into Mandarin — and that is the same class of
+ *     mistake as the bug being fixed, with the sign flipped.
  */
 
 import {
@@ -127,6 +131,47 @@ group("A normalised tag is what is compared and sent", () => {
   const qualified = resolveSpeechLanguage("", ["en-US;q=0.9"]);
   check("a quality value is stripped", qualified.tag === "en-US", qualified.tag);
   check("so the tag matches rather than merely resembling", qualified.fromBrowser === "", qualified.fromBrowser);
+});
+
+group("A tag that names a locale is the browser's answer in full, and is not rewritten", () => {
+  /**
+   * The first version of this module resolved the LANGUAGE of every browser tag,
+   * so a browser asking for `en-GB` was given `en-US`, `fr-CA` got `fr-FR`, and
+   * `zh-HK` — Cantonese — got `zh-CN`, Mandarin. It is the same mistake as the
+   * original bug with the sign flipped: the app rewriting a tag the user's own
+   * browser had already stated completely, and for Chinese it is not a regional
+   * preference but a different language.
+   *
+   * The rule is one character wide: a tag with a subtag is complete. These are
+   * the exact tags that were being changed.
+   */
+  const cases: readonly (readonly [string, string])[] = [
+    ["en-GB", "en-GB"],
+    ["en-AU", "en-AU"],
+    ["en-IN", "en-IN"],
+    ["zh-HK", "zh-HK"],
+    ["zh-TW", "zh-TW"],
+    ["zh-Hant", "zh-Hant"],
+    ["fr-CA", "fr-CA"],
+    ["es-MX", "es-MX"],
+    ["es-419", "es-419"],
+    ["pt-PT", "pt-PT"],
+  ];
+  for (const [asked, expected] of cases) {
+    const chosen = resolveSpeechLanguage("", [asked]);
+    check(`${asked} is sent as ${expected}`, chosen.tag === expected, chosen.tag);
+    check(`${asked} is not reported as a correction`, chosen.fromBrowser === "", chosen.fromBrowser);
+  }
+
+  // And the ladder starts from what the browser actually asked for, rather than
+  // from a representative the app substituted for it.
+  const british = resolveSpeechLanguage("", ["en-GB"]);
+  check("a refused en-GB retries other Englishes", speechLanguageFallbacks(british)[0] === "en-US", String(speechLanguageFallbacks(british)[0]));
+
+  // The one case that must still be resolved: a language and no locale.
+  const bare = resolveSpeechLanguage("", ["pt"]);
+  check("a bare language still gets a locale", bare.tag === "pt-BR", bare.tag);
+  check("and is still reported as a correction", bare.fromBrowser === "pt", bare.fromBrowser);
 });
 
 /* ------------------------------------------------------------------ */
@@ -273,7 +318,12 @@ group("The curated list is well formed", () => {
   check("the representative of en is the first English", representativeFor("en") === "en-US", representativeFor("en"));
   check("of zh is the first Chinese", representativeFor("zh") === "zh-CN", representativeFor("zh"));
   check("of an unknown language there is none", representativeFor("kl") === "");
-  check("a bare tag resolves through its base", representativeFor("en-GB") === "en-US", representativeFor("en-GB"));
+  // This answers for the LANGUAGE, not for the tag: `en-GB` asked about as a
+  // language is still English, and en-US is the English this module would pick on
+  // its own. It is not a licence to rewrite `en-GB` — the group above asserts that
+  // a complete tag is sent exactly as the browser asked for it. See
+  // `isBareLanguage`.
+  check("a language asked about by a regional tag still answers for the language", representativeFor("en-GB") === "en-US", representativeFor("en-GB"));
 
   check("variants exclude the tag asked about", !variantsOf("en", "en-US").includes("en-US"));
   check("and are all of that language", variantsOf("en").every((tag) => baseLanguage(tag) === "en"));

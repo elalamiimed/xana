@@ -462,7 +462,14 @@ tag is resolved before it is sent, a refusal is met by trying another model of t
 same language rather than by blaming the browser, and
 **Settings → Voice → Dictation language** overrides the whole thing if the guess
 is wrong for you. The microphone check shows which tag is being sent, where it
-came from, and what will be tried after it.
+came from, and what will be tried after it — using the same setting the app uses,
+so it measures the app rather than a configuration of its own.
+
+Only a **bare** tag is resolved. A browser that asks for `en-GB`, `fr-CA`, `pt-PT`
+or `zh-HK` has already named its locale, and that is what is sent: rewriting a
+complete tag is the same mistake as sending an incomplete one, and for
+`zh-HK` — Cantonese — it would have meant Mandarin. The rule is the shape of the
+tag, not a list of approved ones.
 
 ### A local transcriber, for when the cloud path is blocked
 

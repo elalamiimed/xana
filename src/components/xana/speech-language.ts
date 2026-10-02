@@ -16,7 +16,7 @@
  * cannot serve it. The user is told to go and change a browser setting that is
  * not wrong, for a failure the app created by passing a value through untouched.
  *
- * Two things were wrong and both are fixed here:
+ * Three things were wrong and all are fixed here:
  *
  *  1. **A bare language tag is not a locale.** `en` says which language; it does
  *     not say which *model* — en-US, en-GB and en-IN are three different acoustic
@@ -27,6 +27,12 @@
  *     English even though this browser is set to something else". There is now a
  *     setting (`voice.speechLang`), and it is tried before everything else,
  *     because an explicit choice must beat an inference.
+ *  3. **Only a bare tag is resolved, and the first version of that fix got this
+ *     wrong.** It resolved the language of *every* browser tag, so a browser
+ *     asking for `en-GB` was sent `en-US`, `fr-CA` got `fr-FR`, and `zh-HK` —
+ *     Cantonese — got `zh-CN`. That is the original bug with the sign flipped:
+ *     the app rewriting a tag the browser had already stated in full, and for
+ *     Chinese a change of language rather than of region. See `isBareLanguage`.
  *
  * WHAT IS DELIBERATELY NOT CLAIMED
  *
@@ -40,9 +46,10 @@
  *   - it supplies the retry ladder, which is tried only after the service has
  *     actually refused a tag — evidence, not a guess.
  *
- * A tag outside the list is still sent as-is. Refusing it here would be this
- * module inventing a restriction the browser never stated, and would break the
- * one user whose locale happens to be missing from a list someone typed out.
+ * A tag outside the list is still sent as-is, and so is any tag that names a
+ * region or a script. Refusing or rewriting either would be this module inventing
+ * a restriction the browser never stated, and would break the one user whose
+ * locale happens to be missing from a list someone typed out.
  *
  * THE LADDER STAYS INSIDE ONE LANGUAGE
  *
@@ -228,10 +235,35 @@ export function baseLanguage(tag: string): string {
 }
 
 /**
+ * Whether a tag names a language and nothing else: `en`, not `en-GB`.
+ *
+ * This is the difference the whole module turns on, and it is a test for a
+ * subtag rather than a lookup in a list. `en` is a language and no model, so a
+ * service that wants a locale refuses it and it must be resolved. `en-GB`,
+ * `zh-Hant` and `es-419` already name a model: they are what the browser asked
+ * for, in full, and they are sent as they are.
+ *
+ * Resolving those too was a defect of this module's first version, and it was
+ * the same mistake in the opposite direction: `navigator.language` of `zh-HK`
+ * became `zh-CN`, which is not a British-for-American substitution but Cantonese
+ * transcribed as Mandarin. The app had no more business rewriting a complete tag
+ * than it had leaving a bare one alone.
+ */
+function isBareLanguage(tag: string): boolean {
+  return !tag.includes("-");
+}
+
+/**
  * The tag this module would use for a language on its own.
  *
- * This is what a bare `en` becomes, and it is the whole of the reported bug's
- * fix: `en` is a language, `en-US` is the model to ask for.
+ * This is what a bare `en` becomes, and it is half of the reported bug's fix:
+ * `en` is a language, `en-US` is the model to ask for.
+ *
+ * It answers for a LANGUAGE, not for a tag, which is why `representativeFor`
+ * of `en-GB` is still `en-US`. That is a fact about English and not a
+ * recommendation to rewrite `en-GB`: only `resolveSpeechLanguage` decides what
+ * is sent, and it asks this only about a bare tag. Calling it on a complete tag
+ * and adopting the answer is the defect `isBareLanguage` exists to prevent.
  */
 export function representativeFor(language: string): string {
   const base = baseLanguage(language);
@@ -294,10 +326,13 @@ export function browserLanguages(): readonly string[] {
  *  1. **The setting.** An explicit choice always wins, including a tag this
  *     module would not have picked — the user may know their service better than
  *     a list in a source file does.
- *  2. **The browser's own preference**, normalised, and resolved to a regional
- *     tag when the browser named only a language. This is the step that fixes the
- *     reported failure: the browser said `en`, which no service will accept as a
- *     locale, so `en-US` is sent instead.
+ *  2. **The browser's own preference**, normalised. A tag that names only a
+ *     language (`en`) is resolved to a regional model, because no service accepts
+ *     a language where it wants a locale — this is the step that fixes the
+ *     reported failure. A tag that already names a region or a script
+ *     (`en-GB`, `zh-HK`, `es-419`) is sent exactly as the browser asked for it:
+ *     it is complete, and rewriting it would be this module answering a request
+ *     nobody made.
  *  3. **The default**, when the browser will not name one at all.
  */
 export function resolveSpeechLanguage(
@@ -310,13 +345,16 @@ export function resolveSpeechLanguage(
   for (const raw of fromBrowser) {
     const tag = normalizeLanguageTag(raw);
     if (!tag) continue;
+    // Only a bare language is resolved. See `isBareLanguage`: `en-GB` is a
+    // complete answer and `en` is not, and treating the second like the first is
+    // what produced the reported refusal.
+    const representative = isBareLanguage(tag) ? representativeFor(tag) : "";
+    if (representative && representative !== tag) {
+      return { tag: representative, source: "browser", fromBrowser: tag };
+    }
     // The first usable tag wins outright. Walking on to a later preference
     // because this one is missing from `SPEECH_LANGUAGES` would answer in a
     // language the user did not ask for and cannot read.
-    const representative = representativeFor(tag);
-    if (representative) {
-      return { tag: representative, source: "browser", fromBrowser: representative === tag ? "" : tag };
-    }
     return { tag, source: "browser", fromBrowser: "" };
   }
 

@@ -20,6 +20,12 @@
  * The event shape is worth reading once, because the whole bug lives in it:
  * `event.results` is the list for the CURRENT session and is re-sent in full on
  * every event, while `event.resultIndex` says how much of it is new.
+ *
+ * The last group is a second, unrelated question that is decided in code and
+ * useless in a browser: which engine the microphone button means, and whether it
+ * should exist at all. It used to be answered twice — once for the button, once
+ * for the click — and the two answers disagreed, which is what a pure function
+ * with a test is for.
  */
 
 import {
@@ -29,6 +35,7 @@ import {
   type DictationEvent,
   type DictationState,
 } from "../src/components/xana/dictation";
+import { planDictation } from "../src/components/xana/speech";
 
 /* ------------------------------------------------------------------ */
 /* Harness                                                             */
@@ -371,6 +378,64 @@ group("The initial state is genuinely empty", () => {
   check("interim is empty", EMPTY_DICTATION.interim === "");
   check("the text is empty", dictationText(EMPTY_DICTATION) === "");
   check("so nothing is rendered before speech", dictationText(EMPTY_DICTATION).length === 0);
+});
+
+/* ------------------------------------------------------------------ */
+/* Which engine the button means                                       */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The microphone button and the click behind it used to be two copies of one
+ * decision, and they had already disagreed: the button was drawn only where
+ * `SpeechRecognition` existed, while the click handler had a branch for "no
+ * recogniser, but this machine can record". The local path needs no
+ * `SpeechRecognition` at all, so a browser that could dictate through the local
+ * transcriber was offered nothing.
+ *
+ * `planDictation` is that decision once, as a function of three booleans, which
+ * is what makes it testable here rather than only in a browser.
+ */
+group("Which engine the mic button means, and whether it exists at all", () => {
+  // The setting decides first: a user who chose the local transcriber must not be
+  // quietly given the browser's service because the browser has one.
+  const localWanted = planDictation({ mode: "local", hasRecognition: true, canRecord: true });
+  check("the chosen engine wins over the available one", localWanted.engine === "local", localWanted.engine);
+
+  // The reported configuration's opposite: no Web Speech API at all, but this
+  // machine can record — a browser that could dictate locally and was told
+  // nothing rather than shown a button.
+  const noApi = planDictation({ mode: "browser", hasRecognition: false, canRecord: true });
+  check("a browser with no recogniser still gets a button", noApi.button);
+  check("which explains the one setting that would make it work", noApi.note.includes("Settings → Voice"), noApi.note);
+  check("and claims no engine rather than starting one", noApi.engine === "none", noApi.engine);
+
+  const browser = planDictation({ mode: "browser", hasRecognition: true, canRecord: true });
+  check("the browser's own service is used when it is asked for", browser.engine === "browser", browser.engine);
+  check("with nothing to explain", browser.note === "", browser.note);
+
+  // Local chosen but unrecordable: the browser engine is still a real fallback,
+  // and taking it is better than a button that refuses.
+  const fallback = planDictation({ mode: "local", hasRecognition: true, canRecord: false });
+  check("an unusable local setting falls back to the browser", fallback.engine === "browser", fallback.engine);
+
+  const nothing = planDictation({ mode: "local", hasRecognition: false, canRecord: false });
+  check("nothing to dictate with means no button", !nothing.button);
+  check("and no note, because there is nothing to press", nothing.note === "", nothing.note);
+  check("and never an engine", nothing.engine === "none", nothing.engine);
+
+  // No input may produce a plan that draws a button with nothing behind it, or an
+  // engine with no button to reach it.
+  let incoherent = 0;
+  for (const mode of ["browser", "local"] as const) {
+    for (const hasRecognition of [true, false]) {
+      for (const canRecord of [true, false]) {
+        const plan = planDictation({ mode, hasRecognition, canRecord });
+        if (plan.engine !== "none" && !plan.button) incoherent += 1;
+        if (plan.engine === "none" && plan.button && !plan.note) incoherent += 1;
+      }
+    }
+  }
+  check("no combination draws a dead button or hides a live engine", incoherent === 0, String(incoherent));
 });
 
 /* ------------------------------------------------------------------ */
