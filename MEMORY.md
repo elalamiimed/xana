@@ -600,10 +600,74 @@ Anywhere a control has a *condition* and a *handler*, they are one decision
 written twice. The second copy is the one that rots, and it rots silently: the
 control simply does not appear, and nothing errors.
 
+### 24. A dependency the user chose is the app's to start
+
+The line was *"Waiting for the local transcriber. Start it with
+python/serve.ps1 — this reconnects on its own."* and the reply was one sentence:
+**"I assume this should start automatically."** The second half of that line was
+true and the first half was an abdication. The user had already chosen "transcribe
+on this machine" in Settings; the service that choice depends on is therefore the
+app's dependency, not the user's chore. A feature that works only for someone who
+read the README is not finished.
+
+**Starting a process is easy; starting it safely is the work.** Three properties,
+and each one is a bug that was avoided rather than discovered:
+
+- **Idempotent.** Everything begins with a `/health` probe on loopback. A service
+  that answers `ready:true` is left alone, and — the case that matters — one that
+  answers `ready:false` because it is still loading a 75 MB model is *waited for*,
+  not duplicated. Two copies of a server racing for one port is a state where the
+  loser is a process nobody owns and the winner is the one the app cannot stop.
+- **Rate-limited.** The browser retries every three seconds, so a naive "start it
+  when it is missing" is a fork bomb with a friendly name. One start per minute,
+  and concurrent callers share one in-flight promise.
+- **Never fatal.** The browser engine is a real fallback, so every failure here is
+  a sentence — no interpreter, not set up yet, did not come up — and never a throw
+  on a path the user is waiting on.
+
+**The launcher's two lookups are part of the feature.** `serve.ps1` found the
+virtual environment and the newest `model.bin` for a human at a terminal, because
+neither has a name faster-whisper would guess. The app has to do the same two
+lookups, or a completely correct install starts a service that reports "no engine
+installed" — which reads as a broken install rather than as a launcher that did
+not look. `python/models` and the service's own cache are both searched, because a
+machine set up by hand has the weights in one and not the other.
+
+**And it exposed a bug that was always there.** The local path is a loop of
+awaited recordings. Two of them would hold the same microphone and submit every
+sentence twice, and the window in which that can happen was, until now, the
+milliseconds between the click and the first recording. Starting a service moved
+the recording twenty seconds away from the click, so a double click could reach
+it. Both local loops — the mic's and the wake word's — are now guarded by a ref,
+and the wake word's guard is a wrapper rather than a `try/finally` around the
+whole loop, because that body returns from a dozen places and every one of them
+is a legitimate exit.
+
+The general shape: **when a feature needs a service, the app that offers the
+feature owns the service's lifetime.** `npm run dev` starts it at boot, so the
+first press does not pay for a model load; `/api/transcriber` starts it on demand,
+which is what covers `next start` and a service that dies mid-session; and
+`python\serve.ps1` stays for the person who wants to watch it run.
+
 ---
 
 ## Traps that have already bitten
 
+- **`Get-Content | Set-Content` destroys the file's UTF-8.** One `-replace`
+  round-trip through the shell turned every em dash in a new file into `\xe2\x80?`
+  and the dev server refused to compile it: *"invalid utf-8 sequence of 2 bytes"*.
+  Edit source with a tool that reads and writes UTF-8. `npm run check:encoding`
+  exists for exactly this and named the three damaged lines in seconds — run it
+  after any bulk edit.
+- **A detached child still dies with the process that started it under a job
+  object.** Windows kills the whole tree on job close regardless of
+  `detached: true`, so "the service outlives the server" holds in an ordinary
+  terminal and not under a sandbox that wraps commands in one. Worth knowing
+  before designing anything that assumes a spawned process survives its parent.
+- **`process.exit()` while a detached child handle is closing aborts the process
+  on Windows** — `Assertion failed: !(handle->flags & UV_HANDLE_CLOSING)` from
+  `uv_async_send`, exit code `0xC0000409`, which reports a passing check as a
+  crash. Set `process.exitCode` and let the process end on its own.
 - **`handleBrief` with no guard.** It returned a briefing unconditionally and,
   sitting in the handler list, swallowed every unmatched utterance — so
   nonsense input produced a confident briefing. Every handler must return

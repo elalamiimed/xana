@@ -480,19 +480,25 @@ that blocks Microsoft's speech endpoint, every recognition attempt fails with th
 error name `network` however good the microphone is, and no amount of retrying
 changes that. Both engines are now wired to it.
 
-**Two commands to set it up:**
+**One command to set it up:**
 
 ```bash
 powershell -ExecutionPolicy Bypass -File python\setup.ps1   # once, needs internet
-powershell -ExecutionPolicy Bypass -File python\serve.ps1   # each session
 ```
 
 Then **Settings → Voice → Transcription → "This machine, with local Whisper"**.
 That choice is read as soon as the app loads, so it applies to the very next
 thing you say rather than only after the settings panel has been opened once.
-The panel has a **Check the local transcriber** button that reports what the
-service says about itself, so you find out before relying on it rather than
-mid-sentence.
+
+**You do not start the service — the app does.** It used to be a second command
+per session, and the app's answer to a missing transcriber was a line telling you
+to go and run it: the app handing back its own dependency as a chore. Now the
+server starts it when you boot the app and again whenever it is needed — pressing
+the mic, or saying her name — through `/api/transcriber`, which probes first, never
+starts a second copy of something already coming up, and refuses to respawn more
+than once a minute. `python\serve.ps1` still exists for running it by hand, in
+front of you, with its output on your screen. The panel's button **starts it and
+reports what it says**, and its log is `data\stt.log`.
 
 `setup.ps1` installs into `python\.venv`, so nothing touches your system Python
 and no administrator rights are needed; deleting the folder undoes it. **It uses
@@ -500,8 +506,9 @@ the Tsinghua PyPI mirror**, because `pypi.org` is often the thing that is blocke
 on the same networks that block speech recognition, and it **fetches the model
 weights itself** — from ModelScope, falling back to Hugging Face — because a
 library with no weights reports itself as not ready and looks like a broken
-install. `serve.ps1` finds both the environment and the model on its own, with no
-environment variables to set. See **[python/README.md](python/README.md)**.
+install. The app finds both the environment and the model on its own, with no
+environment variables to set — the same two lookups `serve.ps1` does. See
+**[python/README.md](python/README.md)**.
 
 **What changes when it is on.** Audio is recorded locally, the end of your
 sentence is found from the waveform rather than a timer, and the clip goes to
@@ -744,6 +751,15 @@ node scripts/probe-status-rows.mjs 40         # is the one-row-per-connection ru
   arranged on demand in a real browser and exactly what caused the bug. It also
   pins the interim-to-final promotion, a final result repeated by the browser, and
   the sparse result lists.
+- `npm run verify:transcriber` — that the app starts the Python service rather
+  than asking you to. The decision is a pure function of five facts and is driven
+  across all 32 combinations, because every way it can be wrong is invisible from
+  outside: starting a second copy of a service that is still loading its model,
+  respawning on every one of the browser's three-second retries, telling someone
+  to run `setup.ps1` twice, or offering a start with no interpreter to start with.
+  The model lookup is checked against a temporary tree of nested snapshot folders,
+  and the live half starts the real service, waits for it to be able to
+  transcribe, and asserts that asking again does NOT start a second one.
 - `npm run verify:stt` — the optional Python transcriber, checked without a
   backend installed: the routes and JSON keys are asserted statically, `--selftest`
   proves `/health` never claims `ready` when it is not, junk audio comes back as

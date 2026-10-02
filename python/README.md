@@ -38,6 +38,17 @@ If `pip` is not recognised, use `python -m pip install faster-whisper`.
 
 ## Running it
 
+**Xana starts it for you.** Once the app is set up to transcribe on this machine
+(**Settings → Voice → Transcription**), the server starts this service itself —
+when it boots, and again whenever it is needed — and leaves it running. There is
+nothing to keep open and no second command per session; the service's output goes
+to `data\stt.log`, and the same panel has a button that starts it and reports what
+it says.
+
+The two commands below are for running it **by hand**, which is what you want when
+you are debugging this side rather than using it: the output is on your screen and
+`Ctrl+C` stops it.
+
 ```
 cd python
 python xana_stt.py
@@ -49,8 +60,9 @@ Or, if you would rather not think about Python's command name:
 powershell -ExecutionPolicy Bypass -File python\serve.ps1
 ```
 
-Leave that window open while you use Xana. It prints one line per request, and
-`Ctrl+C` stops it.
+Either way it prints one line per request while it runs. A service already
+listening is left alone by the app, so starting it here does not fight the app's
+own copy: whichever bound the port is the one that serves.
 
 Check it is healthy by opening <http://127.0.0.1:4319/health> in a browser. You
 want to see `"ready": true`. If it says `false`, the `reason` field says what is

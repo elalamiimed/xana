@@ -25,7 +25,7 @@ import {
   resolveSpeechLanguage,
   speechLanguageFallbacks,
 } from "./speech-language";
-import { canRecord, recordUtterance, transcribe, transcriberHealth } from "./local-speech";
+import { canRecord, ensureLocalTranscriber, recordUtterance, transcribe, transcriberHealth } from "./local-speech";
 import { logMic } from "./mic-log";
 
 /**
@@ -179,6 +179,15 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
   const [onDevice, setOnDevice] = useState(false);
   /** Set once the on-device retry has been tried, so it cannot loop. */
   const triedLocally = useRef(false);
+  /**
+   * True while the local recorder owns the microphone.
+   *
+   * The local path is a loop of awaited recordings, so a second entry would run
+   * a second loop over the same device — transcribing every sentence twice and
+   * appending it twice. Starting the service made the window between the press
+   * and the loop wide enough for a double click to find it.
+   */
+  const localLoop = useRef(false);
   /**
    * Whether the session was ended by the user rather than by the browser.
    *
@@ -563,75 +572,109 @@ const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
    * using the device.
    */
   const startLocalDictation = useCallback(async () => {
-    const health = await transcriberHealth();
-    logMic("composer.local.health", { available: health.available, ready: health.ready, backend: health.backend });
-    if (!health.ready) {
-      setDictating(false);
-      setDictationNote(
-        health.available
-          ? `The local transcriber is running but not ready. ${health.reason}`
-          : "The local transcriber is not running. Start it with `python/serve.ps1`, then press the mic again — or switch transcription back to the browser in Settings → Voice.",
-      );
-      return;
-    }
+    /**
+     * One recorder at a time.
+     *
+     * The service may need twenty seconds to load its model, and the microphone
+     * button stays live throughout — so a second press used to be able to start a
+     * second loop, and two loops transcribe the same sentence twice and append it
+     * twice. The window was always there; starting a service made it wide.
+     */
+    if (localLoop.current) return;
+    localLoop.current = true;
 
-    setDictating(true);
-    setDictationNote(null);
-
-    while (!stopping.current) {
-      const clip = await recordUtterance({
-        onLevel: (level) => setLevel(level),
-        onSpeechStart: () => setHeard(""),
-      });
-      if (stopping.current) break;
-
-      if (clip.ended === "cancelled") break;
-      if (clip.ended === "error") {
-        logMic("composer.local.record.fail", { name: clip.error?.name ?? "unknown" });
-        setDictationNote(buildDictationNote(clip.error));
-        break;
+    try {
+      let health = await transcriberHealth();
+      if (!health.ready) {
+        /**
+         * The service is the app's dependency, not the user's errand.
+         *
+         * A browser cannot start a process, so the app asks the server to — see
+         * `/api/transcriber`. It is idempotent and rate-limited, so this is not
+         * a retry loop dressed up: it is one request that either finds the
+         * service running, starts it, or explains why it cannot.
+         */
+        logMic("composer.local.start", { available: health.available, ready: health.ready });
+        setDictationNote("Starting the local transcriber… the first run loads the model.");
+        const ensured = await ensureLocalTranscriber();
+        health = ensured.health;
+        if (stopping.current) return;
+        if (!health.ready && ensured.note) {
+          logMic("composer.local.start.fail", { note: ensured.note.slice(0, 90) });
+          setDictationNote(ensured.note);
+          return;
+        }
       }
-      if (!clip.blob || !clip.heardSpeech) {
-        // The end of the sentence is also the end of this utterance's attempt:
-        // in a hands-free loop that is the moment a person expects the field to
-        // keep what it has and wait, so the loop continues; but a single press
-        // with nothing said should say so rather than sit silently.
-        logMic("composer.local.heard-nothing", { ended: clip.ended });
-        if (clip.ended === "no-speech" && !committed.current) {
-          setDictationNote("I did not hear anything. Press the mic and speak.");
+
+      logMic("composer.local.health", { available: health.available, ready: health.ready, backend: health.backend });
+      if (!health.ready) {
+        setDictationNote(
+          health.available
+            ? `The local transcriber is running but not ready. ${health.reason}`
+            : "The local transcriber is not running, and could not be started. Its log is data/stt.log — or switch transcription back to the browser in Settings → Voice.",
+        );
+        return;
+      }
+
+      setDictating(true);
+      setDictationNote(null);
+
+      while (!stopping.current) {
+        const clip = await recordUtterance({
+          onLevel: (level) => setLevel(level),
+          onSpeechStart: () => setHeard(""),
+        });
+        if (stopping.current) break;
+
+        if (clip.ended === "cancelled") break;
+        if (clip.ended === "error") {
+          logMic("composer.local.record.fail", { name: clip.error?.name ?? "unknown" });
+          setDictationNote(buildDictationNote(clip.error));
           break;
         }
-        continue;
-      }
+        if (!clip.blob || !clip.heardSpeech) {
+          // The end of the sentence is also the end of this utterance's attempt:
+          // in a hands-free loop that is the moment a person expects the field to
+          // keep what it has and wait, so the loop continues; but a single press
+          // with nothing said should say so rather than sit silently.
+          logMic("composer.local.heard-nothing", { ended: clip.ended });
+          if (clip.ended === "no-speech" && !committed.current) {
+            setDictationNote("I did not hear anything. Press the mic and speak.");
+            break;
+          }
+          continue;
+        }
 
-      logMic("composer.local.clip", { bytes: clip.blob.size, ms: clip.durationMs, type: clip.blob.type });
-      setHeard("…");
-      const result = await transcribe(clip.blob);
-      if (stopping.current) break;
+        logMic("composer.local.clip", { bytes: clip.blob.size, ms: clip.durationMs, type: clip.blob.type });
+        setHeard("…");
+        const result = await transcribe(clip.blob);
+        if (stopping.current) break;
 
-      if (result.error) {
-        logMic("composer.local.transcribe.fail", { error: result.error.slice(0, 80) });
-        setDictationNote(result.error);
-        break;
-      }
-      const text = result.text.trim();
-      if (!text) {
-        logMic("composer.local.empty-transcript");
-        continue;
-      }
+        if (result.error) {
+          logMic("composer.local.transcribe.fail", { error: result.error.slice(0, 80) });
+          setDictationNote(result.error);
+          break;
+        }
+        const text = result.text.trim();
+        if (!text) {
+          logMic("composer.local.empty-transcript");
+          continue;
+        }
 
-      // Append across passes, the same way a session boundary is handled in the
-      // browser path: what was said in an earlier utterance survives this one.
-      committed.current = committed.current ? `${committed.current} ${text}` : text;
-      const spoken = committed.current;
-      setHeard(spoken);
-      setValue(baseText.current ? `${baseText.current} ${spoken}` : spoken);
+        // Append across passes, the same way a session boundary is handled in the
+        // browser path: what was said in an earlier utterance survives this one.
+        committed.current = committed.current ? `${committed.current} ${text}` : text;
+        const spoken = committed.current;
+        setHeard(spoken);
+        setValue(baseText.current ? `${baseText.current} ${spoken}` : spoken);
+      }
+    } finally {
+      localLoop.current = false;
+      setLevel(0);
+      setDictating(false);
+      setHeard("");
+      onReleaseMicrophone?.();
     }
-
-    setLevel(0);
-    setDictating(false);
-    setHeard("");
-    onReleaseMicrophone?.();
   }, [onReleaseMicrophone]);
 
   const startDictation = useCallback(() => {

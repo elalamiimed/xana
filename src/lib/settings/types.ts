@@ -90,12 +90,13 @@ export interface VoiceSettings {
   /**
    * Transcribe speech on this machine instead of through the browser.
    *
-   * Off by default because it needs a separate program running
-   * (`python/serve.ps1`) — but it is the ONLY path that works on a network where
-   * the browser's speech service is unreachable, where recognition fails with
-   * `network` no matter how good the microphone is. Diagnosed, not assumed: the
-   * flight recorder showed ten consecutive `network` errors with a microphone
-   * that opened every time.
+   * It needs a program of its own — `python/xana_stt.py`, set up once with
+   * `python/setup.ps1` — and **the app starts it**, at boot and again on demand
+   * (`src/lib/stt/supervisor.ts`). It is the ONLY path that works on a network
+   * where the browser's speech service is unreachable, where recognition fails
+   * with `network` no matter how good the microphone is. Diagnosed, not assumed:
+   * the flight recorder showed ten consecutive `network` errors with a
+   * microphone that opened every time.
    *
    * `browser` is the honest fallback, not the preference. Where the browser's
    * service works it is faster and needs no install, so it stays the default.

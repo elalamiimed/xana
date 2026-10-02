@@ -190,6 +190,74 @@ export interface TranscribeResult {
 }
 
 /**
+ * Ask the app to start the local transcriber, and report how it went.
+ *
+ * WHY THIS EXISTS AT ALL
+ *
+ * A browser cannot start a process, so the service that "transcribe on this
+ * machine" depends on was, until now, the user's job: the app's answer to a
+ * missing service was a sentence telling them to go and run `python/serve.ps1`.
+ * That is the app handing back its own dependency as a chore, and it is the one
+ * thing a user reasonably assumes is automatic.
+ *
+ * The asking goes through `/api/transcriber`, which is idempotent and
+ * rate-limited on the server: it probes first, never starts a second copy of
+ * something already coming up, and refuses to respawn more than once a minute.
+ * So calling this on every retry — which is what the wake loop does — is safe.
+ *
+ * It never throws. Every outcome is a health reading plus a sentence, because
+ * the caller is a microphone that has to say something either way.
+ */
+export async function ensureLocalTranscriber(options: { timeoutMs?: number } = {}): Promise<{
+  /** True when this call is the one that started the service. */
+  started: boolean;
+  /** What to tell the user, or "" when there is nothing worth saying. */
+  note: string;
+  health: TranscriberHealth;
+}> {
+  const fallback = async (note: string) => ({
+    started: false,
+    note,
+    health: await transcriberHealth(),
+  });
+
+  try {
+    const response = await fetch("/api/transcriber", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+      signal: AbortSignal.timeout(options.timeoutMs ?? 45_000),
+    });
+    if (!response.ok) {
+      return fallback(
+        "The app could not start the local transcriber. Check it in Settings → Voice.",
+      );
+    }
+    const body = (await response.json()) as {
+      started?: unknown;
+      note?: unknown;
+      status?: Partial<TranscriberHealth>;
+    };
+    const status = body.status ?? {};
+    return {
+      started: body.started === true,
+      note: typeof body.note === "string" ? body.note : "",
+      health: {
+        available: status.available === true,
+        ready: status.ready === true,
+        backend: typeof status.backend === "string" ? status.backend : "unknown",
+        model: typeof status.model === "string" ? status.model : "",
+        reason: typeof status.reason === "string" ? status.reason : "",
+      },
+    };
+  } catch {
+    // The route is unreachable, or the wait ran past the timeout. Either way the
+    // honest answer is the service's own state, read directly.
+    return fallback("");
+  }
+}
+
+/**
  * Transcribe a recorded clip on this machine.
  *
  * The body is the audio itself, not a multipart form: the service takes raw

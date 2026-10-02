@@ -21,7 +21,7 @@ import {
   stopSpeaking,
 } from "../speech";
 import { getSpeechRecognition } from "../speech";
-import { canRecord, transcriberHealth, type TranscriberHealth } from "../local-speech";
+import { canRecord, ensureLocalTranscriber, transcriberHealth, type TranscriberHealth } from "../local-speech";
 import {
   SPEECH_LANGUAGES,
   browserLanguages,
@@ -62,6 +62,8 @@ export default function VoicePanel({ view, onSave, saving }: VoicePanelProps) {
   /** Whether the local transcriber is actually running, measured not assumed. */
   const [localState, setLocalState] = useState<TranscriberHealth | null>(null);
   const [probing, setProbing] = useState(false);
+  /** What the app said when it tried to start the service, if it could not. */
+  const [startNote, setStartNote] = useState("");
 
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [supported, setSupported] = useState(false);
@@ -183,15 +185,33 @@ export default function VoicePanel({ view, onSave, saving }: VoicePanelProps) {
             <Button
               onClick={() => {
                 setProbing(true);
-                void transcriberHealth(undefined, 2500)
-                  .then(setLocalState)
+                setStartNote("");
+                /**
+                 * Start it, then report what it says.
+                 *
+                 * This used to only look — which meant the answer for a user
+                 * whose service was not running was "not running, go and run a
+                 * PowerShell script". The app can start it, so the button does,
+                 * and `ensureLocalTranscriber` is the same path the microphone
+                 * and the wake word take: idempotent, and rate-limited on the
+                 * server so pressing this repeatedly cannot spawn a fleet.
+                 */
+                void ensureLocalTranscriber()
+                  .then((ensured) =>
+                    transcriberHealth().then((health) => {
+                      setLocalState(health);
+                      if (ensured.note) setStartNote(ensured.note);
+                    }),
+                  )
                   .finally(() => setProbing(false));
               }}
               disabled={probing}
             >
-              {probing ? "Checking…" : "Check the local transcriber"}
+              {probing ? "Working…" : "Start or check the local transcriber"}
             </Button>
           </Actions>
+
+          {startNote ? <StatusLine tone="error">{startNote}</StatusLine> : null}
 
           {localState ? (
             localState.ready ? (
@@ -202,13 +222,13 @@ export default function VoicePanel({ view, onSave, saving }: VoicePanelProps) {
               <StatusLine tone="error">
                 {localState.available
                   ? `Running but not ready. ${localState.reason}`
-                  : "Not running. Start it with python/serve.ps1 — see python/README.md."}
+                  : "Not running. The app starts it when you press the mic — and if it cannot, data/stt.log says why."}
               </StatusLine>
             )
           ) : (
             <StatusLine tone="info">
               {canRecord()
-                ? "Check it before relying on it: it needs a separate program running."
+                ? "Started by the app when it is needed. This button starts it now and reports what it says."
                 : "This browser cannot record audio, so the local path is unavailable here."}
             </StatusLine>
           )}

@@ -19,6 +19,10 @@
  *
  * To reach it from another device on the network:
  *   HOSTNAME=0.0.0.0 npm run dev
+ *
+ * It also starts the local transcriber (`python/xana_stt.py`) when Settings →
+ * Voice says to transcribe on this machine, so "on this machine" means the app
+ * starts it rather than the user. See the block near the bottom.
  */
 
 import { createServer as createHttpServer } from "node:http";
@@ -116,6 +120,53 @@ server.listen(port, hostname, () => {
   console.log(`  Settings http://${hostname}:${port}  →  Settings button (or Ctrl+,)`);
   console.log(`\n  Ctrl+C to stop.\n`);
 });
+
+/* ------------------------------------------------------------------ */
+/* The local transcriber                                              */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Start the on-machine transcriber, when the settings say to use it.
+ *
+ * WHY IT IS STARTED AT ALL
+ *
+ * The app used to answer a missing transcriber with a sentence telling the user
+ * to go and run `python/serve.ps1` — its own dependency handed back as a chore,
+ * for a setting the user had already made. So the app starts it now, and there
+ * are two moments it can: here, and on demand (`/api/transcriber`, which is what
+ * covers `next start` and a service that dies mid-session).
+ *
+ * This one exists because it is free. The server has just come up and nobody is
+ * waiting, so a user who chose "transcribe on this machine" does not pay for
+ * their first press with twenty seconds of model loading. The on-demand path
+ * stays as the net under it.
+ *
+ * GATED ON THE SETTING, deliberately: a machine that transcribes in the browser
+ * should not have a Python process and 75 MB of weights resident because it
+ * happened to run `npm run dev`.
+ */
+void (async () => {
+  try {
+    const { loadSettings } = await import("../src/lib/settings/store.ts");
+    if (loadSettings().voice.transcribe !== "local") return;
+
+    const { ensureTranscriber } = await import("../src/lib/stt/supervisor.ts");
+    const result = await ensureTranscriber();
+    if (result.status.ready) {
+      const how = result.started ? "started" : "already running";
+      console.log(`  Speech   local transcriber ${how} — ${result.status.backend}, model ${result.status.model}`);
+      console.log("");
+    } else if (result.note) {
+      console.log(`  Speech   ${result.note}`);
+      console.log("");
+    }
+  } catch (err) {
+    // Never fatal: the browser engine is a fallback, and the mic reports the
+    // real problem in the place the user is looking.
+    console.log(`  Speech   could not be started: ${err && err.message ? err.message : err}`);
+    console.log("");
+  }
+})();
 
 /* ------------------------------------------------------------------ */
 /* .env reload                                                        */

@@ -30,6 +30,7 @@
     "verify:vad": "node --import ./scripts/ts-loader.mjs scripts/check-vad.ts",
     "verify:dictation": "node --import ./scripts/ts-loader.mjs scripts/check-dictation.ts",
     "verify:speech": "node --import ./scripts/ts-loader.mjs scripts/check-speech-language.ts",
+    "verify:transcriber": "node --import ./scripts/ts-loader.mjs scripts/check-stt-supervisor.ts",
     "verify:task-edit": "node --import ./scripts/ts-loader.mjs scripts/check-task-edit.ts",
     "verify:stt": "node scripts/check-stt.mjs",
     "verify:transcribe": "node scripts/check-transcribe-live.mjs",
@@ -45,7 +46,7 @@
     "debug:key": "node scripts/debug-key.mjs",
     "debug:engine": "node scripts/debug-engine.mjs",
     "inspect": "node --import ./scripts/ts-loader.mjs scripts/inspect.ts",
-    "check": "npm run typecheck && npm run verify:wake && npm run verify:vad && npm run verify:dictation && npm run verify:speech && npm run verify:task-edit && npm run demo && npm run smoke && npm run verify:orb && npm run verify:providers && npm run check:design && npm run check:palette"
+    "check": "npm run typecheck && npm run verify:wake && npm run verify:vad && npm run verify:dictation && npm run verify:speech && npm run verify:transcriber && npm run verify:task-edit && npm run demo && npm run smoke && npm run verify:orb && npm run verify:providers && npm run check:design && npm run check:palette"
   },
   "dependencies": {
     "better-sqlite3": "^13.0.3",

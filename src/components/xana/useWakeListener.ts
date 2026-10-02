@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { SpeechRecognizer } from "./speech";
 import { configureRecognizer } from "./speech";
 import { logMic } from "./mic-log";
-import { recordUtterance, transcribe, transcriberHealth } from "./local-speech";
+import { recordUtterance, transcribe, transcriberHealth, ensureLocalTranscriber } from "./local-speech";
 import {
   browserLanguages,
   nextSpeechLanguage,
@@ -244,6 +244,15 @@ export function useWakeListener({
   const localStop = useRef(false);
 
   /**
+   * True while a local loop is running, so a second one cannot join it.
+   *
+   * Two loops would hold the same microphone and submit every sentence twice.
+   * The guard is load-bearing now that a loop begins by starting a service, which
+   * can take as long as a model takes to load.
+   */
+  const localLoop = useRef(false);
+
+  /**
    * Submit a request heard by the local loop, with the same cooldown as the
    * other engine. Declared before the loop that calls it.
    */
@@ -270,29 +279,54 @@ export function useWakeListener({
    * arrives alone, the next utterance is taken as the request without needing the
    * name again — which is what makes the window between the two feel natural.
    */
-  const runLocalLoop = useCallback(async () => {
-    const health = await transcriberHealth();
-    logMic("wake.local.health", { available: health.available, ready: health.ready, backend: health.backend });
-    if (!health.ready) {
-      /**
-       * Not ready — but the loop stays ALIVE rather than dying.
-       *
-       * An earlier version set `failed` and returned, which meant a transcriber
-       * that was restarting, or had not been started yet, killed always-listening
-       * for the rest of the session. The user restarted the service, said her
-       * name, and nothing happened — with the app still holding a note about a
-       * problem that had already been fixed. A dependency that can come back must
-       * be waited for, not given up on.
-       */
-      setState("failed");
-      setNote(
-        health.available
-          ? `The local transcriber is running but not ready. ${health.reason}`
-          : "Waiting for the local transcriber. Start it with python/serve.ps1 — this reconnects on its own.",
-      );
-      await new Promise((resolve) => setTimeout(resolve, 3000));
-      if (localStop.current || !enabled) return;
-      return runLocalLoop();
+  /**
+   * The loop itself, without the "only one of these" guard, which is the small
+   * wrapper below. Split rather than wrapped in a `try/finally` here because this
+   * body returns from a dozen places and every one of them is a legitimate exit.
+   */
+  const localLoopBody = useCallback(async () => {
+    /**
+     * Wait for a transcriber that is coming up, and start one that is not.
+     *
+     * The service is the app's own dependency — the user chose "transcribe on
+     * this machine", so a missing service is not their errand to run. A browser
+     * cannot start a process, so this asks the server (`/api/transcriber`),
+     * which probes first, starts at most one copy, and rate-limits itself so
+     * this loop cannot spawn a service every three seconds.
+     */
+    for (;;) {
+      let health = await transcriberHealth();
+      if (!health.ready) {
+        logMic("wake.local.start", { available: health.available, ready: health.ready });
+        setState("starting");
+        setNote("Starting the local transcriber…");
+        const ensured = await ensureLocalTranscriber();
+        health = ensured.health;
+        if (localStop.current || !enabled) return;
+        if (health.ready) break;
+
+        /**
+         * Still not ready — but the loop stays ALIVE rather than dying.
+         *
+         * An earlier version set `failed` and returned, which meant a
+         * transcriber that was restarting, or had not been started yet, killed
+         * always-listening for the rest of the session. The user restarted the
+         * service, said her name, and nothing happened — with the app still
+         * holding a note about a problem that had already been fixed. A
+         * dependency that can come back must be waited for, not given up on.
+         */
+        setState("failed");
+        setNote(
+          ensured.note ||
+            (health.available
+              ? `The local transcriber is running but not ready. ${health.reason}`
+              : "The local transcriber is not running, and could not be started. Its log is data/stt.log — Settings → Voice has a check for it."),
+        );
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+        if (localStop.current || !enabled) return;
+        continue;
+      }
+      break;
     }
 
     setNote("");
@@ -381,6 +415,24 @@ export function useWakeListener({
       }
     }
   }, [enabled, submitLocal]);
+
+  /**
+   * Run the local loop, unless one is already running.
+   *
+   * Two loops would hold the same microphone and submit every sentence twice,
+   * and the window that makes that possible is now as wide as a model takes to
+   * load: the body above starts by asking for a service. `retry` and the effect
+   * can both call this.
+   */
+  const runLocalLoop = useCallback(async () => {
+    if (localLoop.current) return;
+    localLoop.current = true;
+    try {
+      await localLoopBody();
+    } finally {
+      localLoop.current = false;
+    }
+  }, [localLoopBody]);
 
   /**
    * The language to send, resolved once per setting.

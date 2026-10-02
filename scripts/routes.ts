@@ -8,7 +8,7 @@
  *
  *   node --import ./scripts/ts-loader.mjs scripts/routes.ts
  *
- * It exercises exactly the four endpoints the UI consumes, over the real
+ * It exercises exactly the endpoints the UI consumes, over the real
  * adapters, executor and life-state assembly. The only thing it does not cover
  * is Next's own HTTP transport.
  */
@@ -68,6 +68,7 @@ async function main(): Promise<void> {
   const contextAlias = await import("../src/app/api/context/route");
   const stateRoute = await import("../src/app/api/state/route");
   const chatRoute = await import("../src/app/api/chat/route");
+  const transcriberRoute = await import("../src/app/api/transcriber/route");
   const actionRoute = await import("../src/app/api/action/route");
   const { getRegistry } = await import("../src/lib/plugins/registry");
 
@@ -192,6 +193,33 @@ async function main(): Promise<void> {
     jsonRequest(`${base}/api/action`, { action: { type: "complete_task", taskId: "does-not-exist" } }),
   );
   check("refuses an unknown task id with 422", missingResponse.status === 422, String(missingResponse.status));
+
+  /* ---------------- The local transcriber's route ---------------- */
+
+  section("GET /api/transcriber — the local service, asked rather than assumed");
+
+  // GET starts nothing. That matters: this route is polled by the panel, and a
+  // status read that spawned a process would be a landmine.
+  const sttGet = await transcriberRoute.GET();
+  const sttBody = await bodyOf(sttGet);
+  check("responds 200", sttGet.status === 200, String(sttGet.status));
+  const sttStatus = (sttBody.status ?? {}) as Record<string, unknown>;
+  check("reports whether anything is listening", typeof sttStatus.available === "boolean", typeof sttStatus.available);
+  check("and whether it can transcribe", typeof sttStatus.ready === "boolean", typeof sttStatus.ready);
+  check(
+    "names what it would do about it",
+    ["ready", "loading", "start", "setup", "no-python"].includes(String(sttBody.action)),
+    String(sttBody.action),
+  );
+  check("and where the pieces are", typeof sttBody.installed === "object" && sttBody.installed !== null);
+
+  // The one guard on the only route in this app that starts a process. A simple
+  // cross-origin POST is possible without a preflight; a JSON one is not, which
+  // is why the content type is the thing being checked.
+  const sttPlain = await transcriberRoute.POST(
+    new Request(`${base}/api/transcriber`, { method: "POST", headers: { "content-type": "text/plain" }, body: "go" }),
+  );
+  check("refuses a non-JSON POST without starting anything", sttPlain.status === 415, String(sttPlain.status));
 
   /* ---------------- Write-back visibility ---------------- */
 
