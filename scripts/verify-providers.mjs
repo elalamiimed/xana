@@ -434,8 +434,13 @@ async function keyRoundTrip() {
   //    locally. This is the regression that made a stored key look ignored:
   //    the reply said `local` with no explanation, which is identical to the
   //    reply when no model was ever configured.
+  // Not a credential, and the string says so: this key is meant to be rejected,
+  // and the test is that the rejection is visible rather than silent.
   const failing = await put({
-    model: { enabled: true, apiKey: "sk-deliberately-invalid-for-the-failure-test" },
+    model: {
+      enabled: true,
+      apiKey: "sk-deliberately-invalid-for-the-failure-test", // xana-secret-ok
+    },
   });
   // The detail matters: this asserts a field of a response, and when it fails
   // the question is always "what came back instead" — a bare FAIL here sent

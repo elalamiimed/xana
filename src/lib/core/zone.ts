@@ -340,6 +340,18 @@ export function monthDayInZone(instant: Date, zone: string = APP_TIME_ZONE): str
   return labelInZone(instant, zone, { month: "short", day: "numeric" });
 }
 
+/**
+ * "October 2026", for a calendar's own header.
+ *
+ * The only label in here that names a month without a day, because the month
+ * view is the only screen that shows a month as a thing rather than as a
+ * container for days. It goes through `Intl` like the rest of them, so the
+ * month a browser in another zone reads is still the month its days belong to.
+ */
+export function monthYearInZone(instant: Date, zone: string = APP_TIME_ZONE): string {
+  return labelInZone(instant, zone, { month: "long", year: "numeric" });
+}
+
 /** "Saturday, Oct 3", the whole of a day in one line. */
 export function weekdayMonthDayInZone(instant: Date, zone: string = APP_TIME_ZONE): string {
   return labelInZone(instant, zone, { weekday: "long", month: "short", day: "numeric" });

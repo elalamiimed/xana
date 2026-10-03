@@ -24,12 +24,16 @@ import { addDays, nowIso, toDateKey } from "@/lib/core/time";
 import {
   addDaysInZone,
   dateKeyInZone,
+  daysBetweenInZone,
+  endOfDayInZone,
+  fromDateKeyInZone,
   hourMinuteInZone,
   instantFromWallClock,
   startOfDayInZone,
 } from "@/lib/core/zone";
 import { computeGoalProgress, goalsWithProgress } from "@/lib/derived/goals";
 import { invalidateContext } from "@/lib/context/gateway";
+import type { CalendarRange } from "@/lib/cave/types";
 import type {
   CalendarEvent,
   Goal,
@@ -74,6 +78,8 @@ export interface CavePayload {
   task?: Task;
   events?: CalendarEvent[];
   event?: CalendarEvent;
+  /** A window of the schedule, for the calendar. */
+  range?: CalendarRange;
   memories?: unknown;
   removed?: string;
   /** The bin, whenever an operation touched it. */
@@ -83,6 +89,17 @@ export interface CavePayload {
   /** The single day an operation wrote, as it now stands. */
   day?: HealthSample;
 }
+
+/**
+ * A window of the schedule, resolved on the server.
+ *
+ * Defined in `@/lib/cave/types` — the client-safe half of the cave — and
+ * re-exported here so the operation and its answer are read in one place. The
+ * browser cannot import this file, so the type has to live on the other side of
+ * the line; `ops.ts` imports the store, and a component that reached a type
+ * through it would pull `better-sqlite3` into the bundle.
+ */
+export type { CalendarRange };
 
 export class CaveError extends Error {
   readonly status: number;
@@ -768,6 +785,75 @@ export function listCaveEvents(): CalendarEvent[] {
 }
 
 /**
+ * How far a single calendar read may reach, in days.
+ *
+ * A month grid is 42 days and a year view is 366, so this is not a limit anyone
+ * reaches on purpose — it is the bound that stops a typo (`from: "0202-01-01"`)
+ * asking SQLite for every row in the table across eight thousand years and
+ * handing the answer to a browser.
+ */
+export const CALENDAR_MAX_DAYS = 400;
+
+/**
+ * The schedule over a window of days, for the calendar.
+ *
+ * WHY THIS IS NOT `listCaveEvents` WITH A BIGGER WINDOW
+ *
+ * The snapshot's `events` is deliberately two days: it is what the briefing
+ * reads, and it is fetched on every cave open whether or not anyone looks at
+ * the schedule. Widening it would charge every room for the month the calendar
+ * wants, and — worse — would make "today and tomorrow" a variable, so the
+ * briefing's window would silently become whatever the last calendar view
+ * happened to ask for. So the calendar asks for its own window, by name.
+ *
+ * WHY THE INPUT IS DAYS AND THE OUTPUT IS INSTANTS
+ *
+ * A calendar thinks in days: the grid draws 42 of them, and a click on a cell
+ * means "that day", not "that instant". The boundaries of those days are the
+ * app's (see `@/lib/core/zone`), and resolving them is the server's job for the
+ * same reason `listCaveEvents` resolves its own: a browser in another zone must
+ * not decide for itself where a Tuesday ends. The answer carries both forms, so
+ * the client can place events on the grid and label the range without ever
+ * doing date arithmetic.
+ *
+ * The window is half-open at the instant level and closed at the day level:
+ * `start <= event.start < end` would drop an event that begins exactly at
+ * midnight on the last day, so the store's query is given the whole of the last
+ * day (`endOfDayInZone`).
+ */
+export function listEventRange(input: Record<string, unknown>): CavePayload {
+  const from = cleanDate(input.from);
+  if (!from) throw new CaveError("That is not a date I can read. Use YYYY-MM-DD.");
+  const to = cleanDate(input.to);
+  if (!to) throw new CaveError("That is not a date I can read. Use YYYY-MM-DD.");
+
+  const start = fromDateKeyInZone(from);
+  const end = endOfDayInZone(fromDateKeyInZone(to));
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+    throw new CaveError("That is not a date I can read. Use YYYY-MM-DD.");
+  }
+  if (end.getTime() < start.getTime()) {
+    throw new CaveError("That window ends before it starts.");
+  }
+
+  const days = daysBetweenInZone(start, end) + 1;
+  if (days > CALENDAR_MAX_DAYS) {
+    throw new CaveError(`A calendar window can be at most ${CALENDAR_MAX_DAYS} days.`);
+  }
+
+  return {
+    range: {
+      from,
+      to,
+      start: start.toISOString(),
+      end: end.toISOString(),
+      days,
+      events: getStore().eventsBetween(start.toISOString(), end.toISOString()),
+    },
+  };
+}
+
+/**
  * `YYYY-MM-DDTHH:MM` from a date field and a time field, in the app's zone.
  *
  * This used to build `new Date(\`${day}T${clock}:00\`)`, which reads the wall
@@ -816,6 +902,21 @@ function cleanMinutes(value: unknown, fallback: number): number {
 }
 
 /**
+ * The first instant of a `YYYY-MM-DD` day in the app's zone, or null.
+ *
+ * The day-level counterpart of `cleanMoment`, and the whole of what an all-day
+ * event needs: no clock is read and none can be typed, so there is nothing here
+ * that could land an hour out.
+ */
+function cleanDayStart(value: unknown): string | null {
+  const day = cleanDate(value);
+  if (!day) return null;
+  const at = fromDateKeyInZone(day);
+  if (Number.isNaN(at.getTime())) return null;
+  return at.toISOString();
+}
+
+/**
  * Put something in the schedule by hand.
  *
  * The schedule is what makes the briefing worth reading — "Next", "Focus" and
@@ -827,23 +928,33 @@ function cleanMinutes(value: unknown, fallback: number): number {
  * A time is required and an end is not: most things a person adds have a start
  * and a guess at how long, so the duration has a default rather than a second
  * required field.
+ *
+ * An all-day entry is the one case where the clock is not read at all. Feeds
+ * have carried them since the ICS adapter was written, and the calendar draws
+ * them as a chip in a lane above the hours, so one written by hand has to have
+ * the same shape: the day's first instant to the next day's first instant. The
+ * time field is ignored rather than refused, because the toggle is the control
+ * and a refused clock the user cannot see is not a sentence anyone can act on.
  */
 export function createEvent(input: Record<string, unknown>): CavePayload {
   const title = cleanText(input.title, 200);
   if (!title) throw new CaveError("An event needs a title.");
 
-  const start = cleanMoment(input.date, input.time);
+  const allDay = input.allDay === true;
+  const start = allDay ? cleanDayStart(input.date) : cleanMoment(input.date, input.time);
   if (!start) throw new CaveError("An event needs a date.");
 
   const minutes = cleanMinutes(input.minutes, 60);
-  const end = new Date(new Date(start).getTime() + minutes * 60_000).toISOString();
+  const end = allDay
+    ? addDaysInZone(new Date(start), 1).toISOString()
+    : new Date(new Date(start).getTime() + minutes * 60_000).toISOString();
 
   const event = getStore().createEvent({
     title,
     start,
     end,
     location: cleanText(input.location, 120),
-    allDay: input.allDay === true,
+    allDay,
     source: "user",
     xanaAuthored: false,
   });
@@ -896,24 +1007,47 @@ export function updateEvent(input: Record<string, unknown>): CavePayload {
     patch.location = cleanText(input.location, 120) ?? "";
   }
 
-  if ("date" in input || "time" in input || "minutes" in input) {
+  if ("date" in input || "time" in input || "minutes" in input || "allDay" in input) {
     const base = new Date(current.start);
+    const wasAllDay = current.allDay === true;
+    const allDay = "allDay" in input ? input.allDay === true : wasAllDay;
+    if (allDay !== wasAllDay) patch.allDay = allDay;
+
     const day = "date" in input ? cleanDate(input.date) : dateKeyInZone(base);
     if (!day) throw new CaveError("That is not a date I can read. Use YYYY-MM-DD.");
-    const clock = "time" in input ? cleanClock(input.time) : hourMinuteInZone(base);
-    if (!clock) throw new CaveError("That is not a time I can read. Use HH:MM.");
 
-    const start = cleanMoment(day, clock);
-    if (!start) throw new CaveError("That is not a date I can read. Use YYYY-MM-DD.");
+    if (allDay) {
+      // A whole day, so the clock and the length are not read: the two ends are
+      // the day's own boundaries, which is what makes a chip in the all-day lane
+      // exactly as wide as the cell under it.
+      const start = cleanDayStart(day);
+      if (!start) throw new CaveError("That is not a date I can read. Use YYYY-MM-DD.");
+      patch.start = start;
+      patch.end = addDaysInZone(new Date(start), 1).toISOString();
+    } else {
+      // Coming back from an all-day entry, "00:00" is the stored start and is
+      // not what anyone means by un-ticking the box. The hour a new event would
+      // have got is, so that is the fallback rather than the midnight the entry
+      // was parked on.
+      const clock = "time" in input
+        ? cleanClock(input.time)
+        : wasAllDay
+          ? "09:00"
+          : hourMinuteInZone(base);
+      if (!clock) throw new CaveError("That is not a time I can read. Use HH:MM.");
 
-    // An end that is not after its start is not a duration, so a nonsense
-    // existing pair falls back to the hour a new event would have got.
-    const held = Math.round((new Date(current.end).getTime() - base.getTime()) / 60_000);
-    const fallback = held > 0 ? held : 60;
-    const minutes = "minutes" in input ? cleanMinutes(input.minutes, fallback) : fallback;
+      const start = cleanMoment(day, clock);
+      if (!start) throw new CaveError("That is not a date I can read. Use YYYY-MM-DD.");
 
-    patch.start = start;
-    patch.end = new Date(new Date(start).getTime() + minutes * 60_000).toISOString();
+      // An end that is not after its start is not a duration, so a nonsense
+      // existing pair falls back to the hour a new event would have got.
+      const held = Math.round((new Date(current.end).getTime() - base.getTime()) / 60_000);
+      const fallback = wasAllDay || held <= 0 ? 60 : held;
+      const minutes = "minutes" in input ? cleanMinutes(input.minutes, fallback) : fallback;
+
+      patch.start = start;
+      patch.end = new Date(new Date(start).getTime() + minutes * 60_000).toISOString();
+    }
   }
 
   if (Object.keys(patch).length === 0) throw new CaveError("Nothing to change.");
@@ -1221,6 +1355,7 @@ const OPERATIONS = {
   "event.create": createEvent,
   "event.update": updateEvent,
   "event.delete": deleteEvent,
+  "event.range": listEventRange,
   "memory.list": listMemories,
   "memory.create": createMemory,
   "memory.update": updateMemory,

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Tabs } from "@/components/xana/settings/controls";
 import { compareGoals, toneFor } from "@/lib/cave/types";
+import { dateKeyInZone } from "@/lib/core/zone";
 
 import CaveBoard from "./CaveBoard";
 import { READING } from "./empty-note";
@@ -43,7 +44,10 @@ export interface CaveProps {
 const ROOMS: readonly { id: CaveRoom; label: string }[] = [
   { id: "goals", label: "Goals" },
   { id: "tasks", label: "Tasks" },
-  { id: "schedule", label: "Schedule" },
+  // "Calendar", not "Schedule". The room outgrew the word: a schedule is a list
+  // of what is next, and this is a month you can drag things around in, which is
+  // what everyone who has ever used one calls it.
+  { id: "schedule", label: "Calendar" },
   { id: "log", label: "Log" },
   { id: "memory", label: "Memory" },
   { id: "trash", label: "Trash" },
@@ -147,12 +151,13 @@ export default function Cave({ open, onClose, initialRoom = "goals" }: CaveProps
     }
 
     if (room === "schedule") {
-      const today = controller.events.filter(
-        (e) => new Date(e.start).toDateString() === new Date().toDateString(),
-      ).length;
-      return today === 0
+      // The app's day, not the browser's: this line and the calendar's own
+      // "today" have to agree, and only one of them can be right.
+      const today = dateKeyInZone(new Date());
+      const count = controller.events.filter((e) => dateKeyInZone(new Date(e.start)) === today).length;
+      return count === 0
         ? "Nothing scheduled today."
-        : `${today} thing${today === 1 ? "" : "s"} today.`;
+        : `${count} thing${count === 1 ? "" : "s"} today.`;
     }
 
     if (room === "log") {
@@ -233,6 +238,7 @@ export default function Cave({ open, onClose, initialRoom = "goals" }: CaveProps
       role="dialog"
       aria-labelledby="cave-title"
       className="fixed inset-0 z-50 flex flex-col bg-void"
+      data-cave
     >
       {/* ---------------- header ---------------- */}
       <header className="flex shrink-0 flex-wrap items-center justify-between gap-4 border-b border-hairline px-6 py-4">
@@ -373,7 +379,7 @@ export default function Cave({ open, onClose, initialRoom = "goals" }: CaveProps
               : room === "tasks"
                 ? "Open tasks only — completing one removes it from this list. Everything here is stored locally in data/xana.db."
                 : room === "schedule"
-                  ? "Today and tomorrow. What Next, Focus and Open read from."
+                  ? "A month, a week or a day. Drag to move, draw to add, and the briefing reads the same entries."
                   : room === "log"
                     ? "The last seven days, one row per day. Sleep, mood, meals and the rest are what the energy forecast, the sleep debt and the patterns reason from — and a reading taken back leaves nothing behind."
                     : room === "trash"

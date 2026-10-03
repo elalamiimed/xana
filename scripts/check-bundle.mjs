@@ -65,6 +65,14 @@ const MARKERS = [
   // Not "Last 7 days": the window comes from the server, so that sentence only
   // exists once the component runs. A bundle marker has to be a literal.
   ["cave: log window", "what the energy forecast is built on"],
+  // The calendar. Three literals from the room that replaced the two-day list,
+  // one per thing it gained: a place to type, a grid you can drag in, and an
+  // honest empty state. A page holding the old Schedule list instead of these
+  // is a page holding a stale bundle, which is the one failure that looks
+  // exactly like the feature not working.
+  ["cave: calendar quick add", "What's going on? Press Enter to put it in"],
+  ["cave: calendar drag hint", "Drag a block to move it, its edge to change how long it lasts"],
+  ["cave: calendar empty state", "Nothing in these days. Press any slot to add one."],
 ];
 
 const html = await (await fetch(base)).text();

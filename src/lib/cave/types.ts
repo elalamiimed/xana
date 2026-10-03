@@ -53,6 +53,34 @@ export interface MemoryPage {
   stats: MemoryStats;
 }
 
+/**
+ * A window of the schedule, resolved on the server.
+ *
+ * The calendar asks in days — "the six weeks this month grid draws" — and the
+ * answer names both the days it asked about and the two instants those days
+ * became, because a client that resolved the boundaries itself would be the
+ * second implementation of the app's clock, and the two would disagree at
+ * midnight in any zone but the server's.
+ *
+ * It lives here rather than beside the operation that builds it because this
+ * file is the client-safe half of the cave: `ops.ts` imports the store, and a
+ * browser that pulled the store in to reach a type would take `better-sqlite3`
+ * with it.
+ */
+export interface CalendarRange {
+  /** The first day, `YYYY-MM-DD`, inclusive, in the app's zone. */
+  from: string;
+  /** The last day, inclusive. */
+  to: string;
+  /** `from`'s first millisecond, ISO. */
+  start: string;
+  /** `to`'s last millisecond, ISO. */
+  end: string;
+  /** Whole days in the window, both ends counted. */
+  days: number;
+  events: CalendarEvent[];
+}
+
 /** The GET payload: everything the screens need to open. */
 export interface CaveSnapshot {
   goals: CaveGoal[];

@@ -1,559 +1,683 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+/**
+ * The calendar: the schedule as a month, a week or a day.
+ *
+ * WHY THIS REPLACED A TWO-DAY LIST
+ *
+ * The room used to show today and tomorrow as rows, because those are the two
+ * days the briefing asks about — a month view "would be a calendar", said the
+ * note in `DESIGN.md`, "and this is not trying to be one". That was true when
+ * the only way in was a form. It is not true of a person who has a term, a
+ * rota or a week of lectures: a schedule you cannot see the shape of is a
+ * schedule you re-type, and the two days on screen were the briefing's window,
+ * not the user's.
+ *
+ * So this is a real calendar, and the form did not go away — it became the thing
+ * that opens when you press a slot, which is where the intention actually is.
+ *
+ * THE FOUR GESTURES
+ *
+ *   drag a block         -> move it, across days and across hours
+ *   drag its edge        -> change when it starts or ends
+ *   drag empty grid      -> draw a new entry and type its name
+ *   drag a month chip    -> another day, same hour
+ *
+ * Every one of them is optimistic: the thing moves on the frame the pointer is
+ * released and the server is asked afterwards, so the round trip is never
+ * something the hand can feel. What the server answers is the authority, and a
+ * refusal puts the window back rather than leaving a lie on screen.
+ *
+ * WHAT IS NOT DRAGGABLE
+ *
+ * An entry from a feed. `source` other than `user` means somebody else's record:
+ * moving it here would look permanent and be undone by the next sync, which is a
+ * worse lie than having no gesture at all. It opens, it is readable, and the
+ * popover says where it came from.
+ *
+ * THE CLOCK
+ *
+ * Every day, hour and "today" on this screen comes from `@/lib/core/zone`. The
+ * grid asks the server for a window of *days* and never resolves a midnight
+ * itself, which is the whole reason `event.range` answers in days.
+ */
 
-import type { CalendarEvent } from "@/lib/cave/types";
-import {
-  addDaysInZone,
-  clockInZone,
-  dateKeyInZone,
-  fromDateKeyInZone,
-  hourMinuteInZone,
-  weekdayMonthDayInZone,
-} from "@/lib/core/zone";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { emptyNote } from "./empty-note";
+import type { CalendarEvent } from "@/lib/core/types";
 import type { CaveController } from "./useCave";
+import {
+  addDays,
+  CALENDAR_VIEWS,
+  daysForView,
+  DEFAULT_MINUTES,
+  durationOf,
+  formatClock,
+  hourHeightFor,
+  optimisticCreate,
+  optimisticMove,
+  optimisticResize,
+  periodLabel,
+  shiftAnchor,
+  windowFor,
+  type CalendarView,
+} from "@/lib/calendar/geometry";
+import { dateKeyInZone, fromDateKeyInZone, hourInZone, minuteInZone, monthDayInZone } from "@/lib/core/zone";
 
-/**
- * The schedule, and the form that fills it.
- *
- * WHY THIS SCREEN EXISTS
- *
- * "Next", "Focus" and "Open" in the briefing are all questions about the
- * schedule, and until now the only ways in were a published ICS feed or
- * telling her in the chat. Neither covers the ordinary case: a class that
- * repeats every week, a lecture moved to Thursday, a study block someone
- * wants to hold themselves to. Without a way to write the schedule, the
- * briefing can only ever report what an adapter happened to publish.
- *
- * This room shows today and tomorrow rather than a month, because those are
- * the only two days the briefing asks about — a month view would be a
- * calendar, and this is not trying to be one.
- *
- * WHY A HAND-WRITTEN ENTRY CAN NOW BE EDITED
- *
- * Add and remove were the only two things here, so a lecture that moved to
- * Thursday had to be deleted and retyped: a new id, and a gap in the day it
- * moved out of. The row edits in place for the same reason the tasks room does,
- * and only rows marked `source: "user"` get the control. A synced entry is
- * somebody else's record: editing it here would look permanent and then be
- * overwritten by the next sync, which is a worse lie than having no control.
- *
- * The day and the clock in the editor are the app's readings of the instants
- * (see `@/lib/core/zone`), so the field shows the hour the room printed beside
- * it rather than the hour in whatever zone the browser is set to.
- */
-
-/** The app's `YYYY-MM-DD` for an instant, which is what a date input wants. */
-function dayKey(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  return dateKeyInZone(d);
-}
-
-/** "09:30" for an instant, the 24 hour form a time input wants. */
-function timeKey(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  return hourMinuteInZone(d);
-}
-
-function humanTime(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return clockInZone(d);
-}
-
-function durationMinutes(event: CalendarEvent): number {
-  return Math.max(
-    0,
-    Math.round((new Date(event.end).getTime() - new Date(event.start).getTime()) / 60_000),
-  );
-}
-
-/**
- * "Today" / "Tomorrow" / a weekday, for grouping.
- *
- * Today and tomorrow are the app's days, not the browser's: a machine set to
- * another zone must not put tonight's lecture under the wrong heading.
- */
-function dayHeading(key: string): string {
-  const today = dateKeyInZone(new Date());
-  if (key === today) return "Today";
-  if (key === dateKeyInZone(addDaysInZone(new Date(), 1))) return "Tomorrow";
-  const instant = fromDateKeyInZone(key);
-  // A key that is not a date is shown as it came rather than as "Invalid Date".
-  if (Number.isNaN(instant.getTime())) return key;
-  return weekdayMonthDayInZone(instant);
-}
+import EventEditor from "./calendar/EventEditor";
+import MonthGrid from "./calendar/MonthGrid";
+import TimeGrid from "./calendar/TimeGrid";
+import { useCalendarWindow, withRecord, withoutRecord } from "./calendar/useCalendarWindow";
+import { useMonthDrag } from "./calendar/useMonthDrag";
+import { useTimeGridDrag } from "./calendar/useTimeGridDrag";
+import type {
+  AnchorBox,
+  CalendarActions,
+  EventDraft,
+  EventDraftFields,
+} from "./calendar/contract";
+import { emptyNote } from "./empty-note";
 
 export interface ScheduleRoomProps {
   controller: CaveController;
 }
 
+/** A draft, plus where on screen the editor should sit. */
+interface OpenDraft {
+  draft: EventDraft;
+  at: AnchorBox;
+}
+
 export default function ScheduleRoom({ controller }: ScheduleRoomProps) {
-  const today = dayKey(new Date().toISOString());
+  const [view, setView] = useState<CalendarView>("week");
+  const [anchor, setAnchor] = useState(() => dateKeyInZone(new Date()));
+  const [today, setToday] = useState(() => dateKeyInZone(new Date()));
+  const [compact, setCompact] = useState(false);
+  const [open, setOpen] = useState<OpenDraft | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [editorError, setEditorError] = useState("");
   const [title, setTitle] = useState("");
-  const [date, setDate] = useState(today);
-  const [time, setTime] = useState("09:00");
-  const [minutes, setMinutes] = useState("60");
-  const [location, setLocation] = useState("");
-  const [confirming, setConfirming] = useState<string | null>(null);
-  /** The event currently being edited in place, by id. */
-  const [editing, setEditing] = useState<string | null>(null);
-  const [draft, setDraft] = useState({
-    title: "",
-    date: "",
-    time: "09:00",
-    minutes: "60",
-    location: "",
-  });
-  const [editError, setEditError] = useState("");
-  /** The first field of the open editor, so opening it lands the caret there. */
-  const editTitleRef = useRef<HTMLInputElement | null>(null);
-  /** Every row's edit chip, so cancelling can hand focus back to the one that opened it. */
-  const editChips = useRef(new Map<string, HTMLButtonElement | null>());
-  /** The row whose chip should take focus once its editor closes. */
-  const refocus = useRef<string | null>(null);
+  /** Where the quick-add line puts what it writes. */
+  const [slot, setSlot] = useState<{ dayKey: string; startMin: number }>(() => ({
+    dayKey: dateKeyInZone(new Date()),
+    startMin: Math.min(23 * 60, Math.ceil((hourInZone(new Date()) * 60 + minuteInZone(new Date())) / 60) * 60),
+  }));
+
+  const viewRef = useRef<HTMLDivElement | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+
+  const data = useCalendarWindow(controller, view, anchor);
+  const events = data.events;
+  const days = useMemo(() => daysForView(view, anchor), [view, anchor]);
+  const hourHeight = hourHeightFor(compact);
+
+  /* ---------------- the clock, only as often as it can change ---------------- */
 
   useEffect(() => {
-    if (editing) editTitleRef.current?.focus();
-  }, [editing]);
+    const tick = () => setToday(dateKeyInZone(new Date()));
+    const timer = setInterval(tick, 60_000);
+    return () => clearInterval(timer);
+  }, []);
 
   useEffect(() => {
-    if (editing !== null) return;
-    const id = refocus.current;
-    if (!id) return;
-    refocus.current = null;
-    editChips.current.get(id)?.focus();
-  }, [editing]);
-
-  /** Grouped by day, in order, so the list reads like a schedule. */
-  const byDay = useMemo(() => {
-    const map = new Map<string, CalendarEvent[]>();
-    for (const event of controller.events) {
-      const key = dayKey(event.start);
-      const list = map.get(key) ?? [];
-      list.push(event);
-      map.set(key, list);
-    }
-    for (const list of map.values()) list.sort((a, b) => a.start.localeCompare(b.start));
-    return [...map.entries()].sort(([a], [b]) => a.localeCompare(b));
-  }, [controller.events]);
-
-  const add = () => {
-    const text = title.trim();
-    if (!text || !date) return;
-    void controller.run("event.create", {
-      title: text,
-      date,
-      time,
-      minutes: Number(minutes) || 60,
-      location: location.trim() || null,
-    });
-    // The title and place clear; the date and time stay, because adding one
-    // thing to a morning usually means adding the next one to the same morning.
-    setTitle("");
-    setLocation("");
-  };
-
-  const openEditor = (event: CalendarEvent) => {
-    setConfirming(null);
-    setEditError("");
-    setEditing(event.id);
-    setDraft({
-      title: event.title,
-      date: dayKey(event.start),
-      time: timeKey(event.start),
-      minutes: String(durationMinutes(event) || 60),
-      location: event.location ?? "",
-    });
-  };
-
-  /** Close the editor and give the caret back to the chip that opened it. */
-  const closeEditor = (id: string) => {
-    refocus.current = id;
-    setEditing(null);
-    setEditError("");
-  };
+    const query = window.matchMedia("(max-width: 767px)");
+    const update = () => setCompact(query.matches);
+    update();
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, []);
 
   /**
-   * What actually changed, as a patch.
-   *
-   * The day, the clock and the length travel together and only when one of them
-   * moved, because to the person editing they are one field: "move it to four"
-   * changes when it starts and when it ends, and the operation takes the three
-   * readings as a set. The title and the place are separate, so renaming an
-   * event cannot shift its hour.
-   *
-   * Every typed value is checked here rather than left to the server, so a
-   * half-typed field comes back as a sentence beside the editor instead of as a
-   * silent reinterpretation of what was meant.
+   * Which pointer is doing the pointing, which is not the same question as how
+   * wide the window is: a touchscreen laptop is a fine pointer at 1440px, and a
+   * tablet in landscape is a coarse one at 1024px. The drag handles need this
+   * and nothing else does — see `gripHeightFor`.
    */
-  const changedFields = (event: CalendarEvent): Record<string, unknown> | string => {
-    const patch: Record<string, unknown> = {};
+  const [coarse, setCoarse] = useState(false);
+  useEffect(() => {
+    const query = window.matchMedia("(pointer: coarse)");
+    const update = () => setCoarse(query.matches);
+    update();
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, []);
 
-    const nextTitle = draft.title.trim();
-    if (nextTitle !== event.title) patch.title = nextTitle;
+  /**
+   * Paging moves the quick-add line's target with the view.
+   *
+   * The line says which day it will write to, and a calendar where "next month"
+   * then "Add" wrote into the month you had just left would be one where the
+   * sentence beside the field was the only warning. A slot the user picked by
+   * pressing a cell is left alone: this only fires when the view itself moves.
+   */
+  useEffect(() => {
+    setSlot((current) => (current.dayKey === anchor ? current : { ...current, dayKey: anchor }));
+  }, [anchor]);
 
-    const day = draft.date;
-    const clock = draft.time;
-    const length = Number(draft.minutes);
-    // `|| 60` matches what the editor opened with, so an entry whose stored end
-    // is not after its start (a corrupt row, not one this room can create) does
-    // not read as "the length changed" and quietly rewrite its own times on a
-    // rename. The editor shows 60 for that row, and 60 is what it compares to.
-    const held = durationMinutes(event) || 60;
-    if (day !== dayKey(event.start) || clock !== timeKey(event.start) || length !== held) {
-      if (!day) return "An event needs a date.";
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return "That is not a date I can read.";
-      if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(clock)) return "That is not a time I can read.";
-      if (!Number.isInteger(length) || length < 1 || length > 720) {
-        return "A length is a whole number of minutes, 1 to 720.";
+  /* ---------------- the actions the grids are handed ---------------- */
+
+  /** A feed's record is shown, never changed here. */
+  const canEdit = useCallback((event: CalendarEvent) => event.source === "user", []);
+
+  /**
+   * The record that just landed, for one beat.
+   *
+   * A drop is a movement the user made, so it is allowed to be visible as one:
+   * the block fades up from just short of full opacity where it arrived, which
+   * is the difference between "that landed" and "that blinked". It is cleared on
+   * a timer rather than left set, so the next unrelated render cannot replay it.
+   */
+  const [landed, setLanded] = useState<string | null>(null);
+  const settle = useCallback((id: string) => {
+    setLanded(id);
+    window.setTimeout(() => setLanded((current) => (current === id ? null : current)), 400);
+  }, []);
+
+  /**
+   * Write a change, then ask.
+   *
+   * The optimistic record goes in first so the grid never waits; the answer
+   * replaces it when it lands, so what is on screen is eventually the server's
+   * own record rather than the guess. A refusal re-reads the window instead of
+   * trying to unpick the guess: the server's answer is the only thing that
+   * knows what the row actually looks like now.
+   */
+  const commit = useCallback(
+    async (
+      op: "event.update" | "event.create" | "event.delete",
+      input: Record<string, unknown>,
+      optimistic: (list: CalendarEvent[]) => CalendarEvent[],
+      pendingKey: string,
+    ): Promise<{ ok: boolean; error: string }> => {
+      data.setEvents(optimistic);
+      const { ok, payload, error } = await controller.runDetailed(op, input, pendingKey);
+      if (!ok) {
+        data.refresh();
+        return { ok, error };
       }
-      patch.date = day;
-      patch.time = clock;
-      patch.minutes = length;
-    }
+      const answer = payload.event as CalendarEvent | undefined;
+      if (answer) data.setEvents((list) => withRecord(list, answer));
+      return { ok, error: "" };
+    },
+    [controller, data],
+  );
 
-    const nextLocation = draft.location.trim();
-    if (nextLocation !== (event.location ?? "")) patch.location = nextLocation;
+  const move = useCallback(
+    (event: CalendarEvent, dayKey: string, startMin: number) => {
+      const allDay = event.allDay === true;
+      settle(event.id);
+      void commit(
+        "event.update",
+        allDay
+          ? { id: event.id, date: dayKey }
+          : { id: event.id, date: dayKey, time: formatClock(startMin), minutes: durationOf(event) },
+        (list) => withRecord(list, optimisticMove(event, dayKey, startMin)),
+        event.id,
+      );
+    },
+    [commit, settle],
+  );
 
-    return patch;
-  };
+  const resize = useCallback(
+    (event: CalendarEvent, dayKey: string, startMin: number, minutes: number) => {
+      settle(event.id);
+      void commit(
+        "event.update",
+        { id: event.id, date: dayKey, time: formatClock(startMin), minutes },
+        (list) => withRecord(list, optimisticResize(event, dayKey, startMin, minutes)),
+        event.id,
+      );
+    },
+    [commit, settle],
+  );
 
-  const saveEdit = async (event: CalendarEvent) => {
-    if (!draft.title.trim()) {
-      setEditError("An event needs a title.");
-      return;
-    }
+  const beginCreate = useCallback(
+    (dayKey: string, startMin: number, minutes: number, at: AnchorBox) => {
+      setSlot({ dayKey, startMin });
+      setEditorError("");
+      setOpen({
+        draft: { title: "", dayKey, startMin, minutes, location: "", allDay: false },
+        at,
+      });
+    },
+    [],
+  );
 
-    const changed = changedFields(event);
-    if (typeof changed === "string") {
-      setEditError(changed);
-      return;
-    }
-    setEditError("");
+  const openEvent = useCallback((event: CalendarEvent, at: AnchorBox) => {
+    setEditorError("");
+    setOpen({
+      draft: {
+        id: event.id,
+        title: event.title,
+        dayKey: dateKeyInZone(new Date(event.start)),
+        startMin: hourInZone(new Date(event.start)) * 60 + minuteInZone(new Date(event.start)),
+        minutes: durationOf(event),
+        location: event.location ?? "",
+        allDay: event.allDay === true,
+        source: event.source,
+      },
+      at,
+    });
+  }, []);
 
-    // Nothing moved, so there is nothing to save and nothing to claim.
-    if (Object.keys(changed).length === 0) {
-      closeEditor(event.id);
-      return;
-    }
+  const openDay = useCallback((dayKey: string) => {
+    setAnchor(dayKey);
+    setView("day");
+  }, []);
 
-    const ok = await controller.run("event.update", { id: event.id, ...changed }, event.id);
-    if (ok) closeEditor(event.id);
-    else setEditError(controller.error ?? "That change did not save.");
-  };
+  const actions: CalendarActions = useMemo(
+    () => ({ move, resize, nudge: resize, beginCreate, open: openEvent, openDay }),
+    [move, resize, beginCreate, openEvent, openDay],
+  );
+
+  /* ---------------- the two drag engines ---------------- */
+
+  const monthDrag = useMonthDrag({
+    rootRef: viewRef,
+    canEdit,
+    /* A month drag asks only for another day, so the entry keeps its own hour:
+       the minutes handed on are the ones it already starts at. */
+    onMove: (event, dayKey) => move(event, dayKey, startOfDayMinutes(event)),
+  });
+
+  const createFromDrag = useCallback(
+    (dayKey: string, startMin: number, minutes: number) => {
+      // Where a drawn slot lands on screen: the slot's own box, so the editor
+      // opens next to the thing that was just drawn rather than in a corner.
+      beginCreate(dayKey, startMin, minutes, slotBox(scrollRef.current, dayKey, startMin, minutes));
+    },
+    [beginCreate],
+  );
+
+  const gridDrag = useTimeGridDrag({
+    scrollRef,
+    columns: days,
+    hourHeight,
+    canEdit,
+    onMove: move,
+    onResize: resize,
+    onCreate: createFromDrag,
+  });
+
+  /* ---------------- the editor's two endings ---------------- */
+
+  const save = useCallback(
+    async (fields: EventDraftFields) => {
+      const draft = open?.draft;
+      if (!draft) return;
+      setSaving(true);
+      setEditorError("");
+
+      let result: { ok: boolean; error: string };
+
+      if (draft.id) {
+        const existing = events.find((candidate) => candidate.id === draft.id);
+        const input: Record<string, unknown> = {
+          id: draft.id,
+          title: fields.title,
+          date: fields.dayKey,
+          location: fields.location,
+          allDay: fields.allDay,
+        };
+        if (!fields.allDay) {
+          input.time = formatClock(fields.startMin);
+          input.minutes = fields.minutes;
+        }
+        const optimistic = existing
+          ? fields.allDay
+            ? optimisticAllDay(existing, fields.dayKey)
+            : optimisticResize(existing, fields.dayKey, fields.startMin, fields.minutes)
+          : null;
+        result = await commit(
+          "event.update",
+          input,
+          (list) =>
+            optimistic
+              ? withRecord(list, { ...optimistic, title: fields.title, location: fields.location || undefined })
+              : list,
+          draft.id,
+        );
+      } else {
+        const temporary = optimisticCreate(
+          `draft-${Date.now().toString(36)}`,
+          fields.title,
+          fields.dayKey,
+          fields.startMin,
+          fields.minutes,
+          fields.location || undefined,
+        );
+        const input: Record<string, unknown> = {
+          title: fields.title,
+          date: fields.dayKey,
+          allDay: fields.allDay,
+          location: fields.location,
+        };
+        if (!fields.allDay) {
+          input.time = formatClock(fields.startMin);
+          input.minutes = fields.minutes;
+        }
+        // The guess goes in, and is taken straight back out when the server's
+        // own record arrives under a different id.
+        data.setEvents((list) => withRecord(list, temporary));
+        const answer = await controller.runDetailed("event.create", input, "event.create");
+        data.setEvents((list) => withoutRecord(list, temporary.id));
+        if (answer.ok && answer.payload.event) {
+          data.setEvents((list) => withRecord(list, answer.payload.event as CalendarEvent));
+        } else if (!answer.ok) {
+          data.refresh();
+        }
+        result = { ok: answer.ok, error: answer.error };
+        setSlot({ dayKey: fields.dayKey, startMin: fields.startMin });
+      }
+
+      setSaving(false);
+      if (result.ok) setOpen(null);
+      else setEditorError(result.error || "That change did not save.");
+    },
+    [commit, controller, data, events, open],
+  );
+
+  const remove = useCallback(async () => {
+    const draft = open?.draft;
+    if (!draft?.id) return;
+    setSaving(true);
+    const id = draft.id;
+    const result = await commit("event.delete", { id }, (list) => withoutRecord(list, id), id);
+    setSaving(false);
+    if (result.ok) setOpen(null);
+    else setEditorError(result.error || "That did not remove.");
+  }, [commit, open]);
+
+  /* ---------------- the quick-add line ---------------- */
+
+  const quickAdd = useCallback(async () => {
+    const text = title.trim();
+    if (!text) return;
+    setTitle("");
+    const fields: EventDraftFields = {
+      title: text,
+      dayKey: slot.dayKey,
+      startMin: slot.startMin,
+      minutes: DEFAULT_MINUTES,
+      location: "",
+      allDay: false,
+    };
+    const temporary = optimisticCreate(
+      `draft-${Date.now().toString(36)}`,
+      fields.title,
+      fields.dayKey,
+      fields.startMin,
+      fields.minutes,
+    );
+    data.setEvents((list) => withRecord(list, temporary));
+    const { ok, payload } = await controller.runDetailed(
+      "event.create",
+      { title: fields.title, date: fields.dayKey, time: formatClock(fields.startMin), minutes: fields.minutes },
+      "event.create",
+    );
+    data.setEvents((list) => withoutRecord(list, temporary.id));
+    if (ok && payload.event) data.setEvents((list) => withRecord(list, payload.event as CalendarEvent));
+    else if (!ok) data.refresh();
+  }, [controller, data, slot, title]);
+
+  /* ---------------- what the header says ---------------- */
+
+  const period = periodLabel(view, anchor, days);
+  const range = useMemo(() => windowFor(view, anchor), [view, anchor]);
+  const busy = controller.loading || data.loading;
+  const nothing = !busy && events.length === 0;
 
   return (
-    <div className="mx-auto w-full max-w-[var(--content-max)]">
-      {/* ---------------- add one ---------------- */}
-      <div className="border-b border-hairline px-6 py-5">
-        <h3 className="text-[15px] font-normal text-text">Add to the schedule</h3>
-        <p className="mt-1 max-w-[70ch] text-[13px] leading-relaxed font-light text-dim">
-          This is what “Next”, “Focus” and “Open” read from. A class, a lecture, a
-          block you want to hold yourself to — anything with a time on it.
-        </p>
-
-        <form
-          onSubmit={(event) => {
-            event.preventDefault();
-            add();
-          }}
-          className="mt-4 flex flex-wrap items-end gap-3"
-        >
-          <label className="min-w-[200px] flex-1">
-            <span className="label">what</span>
-            <input
-              value={title}
-              onChange={(event) => setTitle(event.target.value)}
-              placeholder="Algorithms lecture"
-              aria-label="Event title"
-              className="field mt-1.5"
-            />
-          </label>
-
-          <label>
-            <span className="label">date</span>
-            <input
-              type="date"
-              value={date}
-              onChange={(event) => setDate(event.target.value)}
-              aria-label="Date"
-              className="field mt-1.5 w-[160px]"
-            />
-          </label>
-
-          <label>
-            <span className="label">time</span>
-            <input
-              type="time"
-              value={time}
-              onChange={(event) => setTime(event.target.value)}
-              aria-label="Start time"
-              className="field mt-1.5 w-[130px]"
-            />
-          </label>
-
-          <label>
-            <span className="label">minutes</span>
-            <input
-              type="number"
-              min={5}
-              max={720}
-              step={5}
-              value={minutes}
-              onChange={(event) => setMinutes(event.target.value)}
-              aria-label="Duration in minutes"
-              className="field mt-1.5 w-[110px]"
-            />
-          </label>
-
-          <label>
-            <span className="label">where</span>
-            <input
-              value={location}
-              onChange={(event) => setLocation(event.target.value)}
-              placeholder="optional"
-              aria-label="Location"
-              className="field mt-1.5 w-[150px]"
-            />
-          </label>
-
-          <button type="submit" disabled={!title.trim() || !date} className="btn btn-primary">
-            Add
+    <div
+      /* Two height modes, because the two grids want opposite things.
+         A time grid needs a *bounded* box so its own hours can scroll inside it,
+         which is `h-full`. A month grid needs to be as tall as six readable
+         weeks and no shorter, so it takes `min-h-full`: it fills a tall window
+         and makes the room scroll in a short one. Forcing either shape on the
+         other is how the month view ended up with its last week cut off. */
+      className={`flex flex-col ${view === "month" ? "min-h-full" : "h-full min-h-[520px]"}`}
+      data-calendar
+      data-view={view}
+      data-anchor={anchor}
+      data-window={`${range.from}..${range.to}`}
+    >
+      {/* ---------------- periods and views ---------------- */}
+      <header className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-hairline px-4 py-2.5 sm:px-6">
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            className="icon-tap grid place-items-center rounded-full text-dim transition-colors duration-[var(--t-fast)] hover:bg-surface-2 hover:text-text"
+            aria-label={view === "month" ? "Previous month" : view === "week" ? "Previous week" : "Previous day"}
+            onClick={() => setAnchor((current) => shiftAnchor(view, current, -1))}
+          >
+            <Chevron direction="left" />
           </button>
-        </form>
+          <button
+            type="button"
+            className="icon-tap grid place-items-center rounded-full text-dim transition-colors duration-[var(--t-fast)] hover:bg-surface-2 hover:text-text"
+            aria-label={view === "month" ? "Next month" : view === "week" ? "Next week" : "Next day"}
+            onClick={() => setAnchor((current) => shiftAnchor(view, current, 1))}
+          >
+            <Chevron direction="right" />
+          </button>
+          <button
+            type="button"
+            className="chip"
+            aria-pressed={anchor === today}
+            onClick={() => setAnchor(today)}
+          >
+            today
+          </button>
+          <h3 className="ml-1.5 text-[15px] font-normal tracking-[0.01em] text-text" data-period>
+            {period}
+          </h3>
+        </div>
+
+        <div className="flex items-center gap-1" role="group" aria-label="Calendar view">
+          {CALENDAR_VIEWS.map((entry) => (
+            <button
+              key={entry.id}
+              type="button"
+              className="chip"
+              aria-pressed={view === entry.id}
+              onClick={() => setView(entry.id)}
+            >
+              {entry.label}
+            </button>
+          ))}
+        </div>
+      </header>
+
+      {/* ---------------- the quick-add line ---------------- */}
+      <form
+        className="flex shrink-0 flex-wrap items-center gap-2 border-b border-hairline px-4 py-2 sm:px-6"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void quickAdd();
+        }}
+      >
+        <input
+          value={title}
+          onChange={(event) => setTitle(event.target.value)}
+          placeholder="What's going on? Press Enter to put it in"
+          aria-label="Add to the calendar"
+          className="field tap max-w-[520px] flex-1"
+          data-quick-add
+        />
+        <span className="timestamp" data-quick-slot>
+          {slotLabel(slot.dayKey, today)} · {formatClock(slot.startMin)}
+        </span>
+        <button type="submit" disabled={!title.trim()} className="btn btn-primary">
+          Add
+        </button>
+      </form>
+
+      {/* ---------------- the grid ---------------- */}
+      <div ref={viewRef} className="min-h-0 flex-1 px-2 py-3 sm:px-6">
+        {view === "month" ? (
+          <MonthGrid
+            days={days}
+            anchor={anchor}
+            today={today}
+            events={events}
+            actions={actions}
+            drag={monthDrag}
+            canEdit={canEdit}
+            onOpenDay={openDay}
+            landed={landed}
+          />
+        ) : (
+          <TimeGrid
+            days={days}
+            today={today}
+            events={events}
+            hourHeight={hourHeight}
+            scrollRef={scrollRef}
+            drag={gridDrag}
+            allDayDrag={monthDrag}
+            actions={actions}
+            canEdit={canEdit}
+            landed={landed}
+            coarse={coarse}
+          />
+        )}
       </div>
 
-      {/* ---------------- the schedule ---------------- */}
-      <div>
-        {byDay.map(([key, events]) => (
-          <section key={key}>
-            <div className="flex items-baseline justify-between border-b border-hairline bg-surface/40 px-6 py-2">
-              <h4 className="label">{dayHeading(key)}</h4>
-              <span className="timestamp">
-                {events.length} {events.length === 1 ? "thing" : "things"}
-              </span>
-            </div>
-            <ul className="divide-y divide-hairline">
-              {events.map((event) => {
-                if (editing === event.id) {
-                  return (
-                    <li key={event.id} className="bg-surface-2/40 px-6 py-4">
-                      {/* Escape cancels and Enter saves from any text field, the
-                          same contract as the task editor one room over. */}
-                      <form
-                        onSubmit={(submitEvent) => {
-                          submitEvent.preventDefault();
-                          void saveEdit(event);
-                        }}
-                        onKeyDown={(keyEvent) => {
-                          if (keyEvent.key !== "Escape") return;
-                          keyEvent.preventDefault();
-                          closeEditor(event.id);
-                        }}
-                        aria-label={`Edit ${event.title}`}
-                        className="flex flex-wrap items-end gap-3"
-                      >
-                        <label className="min-w-[200px] flex-1">
-                          <span className="label">what</span>
-                          <input
-                            ref={editTitleRef}
-                            value={draft.title}
-                            onChange={(changeEvent) =>
-                              setDraft((d) => ({ ...d, title: changeEvent.target.value }))
-                            }
-                            aria-label="Event title"
-                            className="field mt-1.5"
-                          />
-                        </label>
+      {/* ---------------- what the room says about itself ---------------- */}
+      <p className="shrink-0 px-4 pb-3 text-[12px] leading-relaxed font-normal text-faint sm:px-6">
+        {nothing || busy
+          ? emptyNote(busy, "Nothing in these days. Press any slot to add one.")
+          : "Drag a block to move it, its edge to change how long it lasts, or empty space to draw a new one. Everything here is stored locally in data/xana.db."}
+      </p>
 
-                        <label>
-                          <span className="label">date</span>
-                          <input
-                            type="date"
-                            value={draft.date}
-                            onChange={(changeEvent) =>
-                              setDraft((d) => ({ ...d, date: changeEvent.target.value }))
-                            }
-                            aria-label="Date"
-                            className="field mt-1.5 w-[160px]"
-                          />
-                        </label>
+      {/* The board, and on a phone the wash behind it. Below the compact
+          breakpoint the form docks to the bottom edge as a sheet, and a sheet
+          without a scrim is a panel that has landed on top of the page rather
+          than one that was opened over it. The scrim is a button with a name,
+          which is how the settings sheet spells the same thing — a press
+          anywhere outside then has somewhere honest to land. */}
+      {open && compact ? (
+        <button
+          type="button"
+          aria-label="Close the event form"
+          onClick={() => setOpen(null)}
+          className="scrim-in fixed inset-0 z-[59] cursor-default bg-scrim"
+          data-editor-scrim
+        />
+      ) : null}
 
-                        <label>
-                          <span className="label">time</span>
-                          <input
-                            type="time"
-                            value={draft.time}
-                            onChange={(changeEvent) =>
-                              setDraft((d) => ({ ...d, time: changeEvent.target.value }))
-                            }
-                            aria-label="Start time"
-                            className="field mt-1.5 w-[130px]"
-                          />
-                        </label>
+      {open ? (
+        <EventEditor
+          draft={open.draft}
+          anchor={open.at}
+          docked={compact}
+          busy={saving}
+          error={editorError}
+          onSave={(fields) => void save(fields)}
+          onRemove={() => void remove()}
+          onClose={() => setOpen(null)}
+        />
+      ) : null}
 
-                        <label>
-                          <span className="label">minutes</span>
-                          {/* Step 1 here while the add form uses 5. A number
-                              input validates its own `step` against the value it
-                              holds, and a mismatch blocks the entire form before
-                              React sees the submit, so an event of 47 minutes
-                              could not even be renamed until its length was
-                              rounded in a field the user never opened. */}
-                          <input
-                            type="number"
-                            min={1}
-                            max={720}
-                            step={1}
-                            value={draft.minutes}
-                            onChange={(changeEvent) =>
-                              setDraft((d) => ({ ...d, minutes: changeEvent.target.value }))
-                            }
-                            aria-label="Duration in minutes"
-                            className="field mt-1.5 w-[110px]"
-                          />
-                        </label>
-
-                        <label>
-                          <span className="label">where</span>
-                          <input
-                            value={draft.location}
-                            onChange={(changeEvent) =>
-                              setDraft((d) => ({ ...d, location: changeEvent.target.value }))
-                            }
-                            placeholder="optional"
-                            aria-label="Location"
-                            className="field mt-1.5 w-[150px]"
-                          />
-                        </label>
-
-                        <div className="flex items-center gap-2">
-                          <button
-                            type="submit"
-                            disabled={controller.pending.has(event.id)}
-                            className="btn btn-primary"
-                          >
-                            Save
-                          </button>
-                          <button type="button" onClick={() => closeEditor(event.id)} className="btn">
-                            Cancel
-                          </button>
-                        </div>
-
-                        {editError ? (
-                          <p aria-live="polite" className="w-full text-[12px] leading-relaxed text-danger">
-                            {editError}
-                          </p>
-                        ) : null}
-                      </form>
-                    </li>
-                  );
-                }
-
-                  return (
-                    <li key={event.id} className="flex items-start gap-3 px-6 py-3">
-                      <span className="mt-[3px] w-[72px] shrink-0 text-[13px] font-light tabular-nums text-dim">
-                        {event.allDay ? "all day" : humanTime(event.start)}
-                      </span>
-                      <div className="min-w-0 flex-1">
-                        <p className="text-[14px] leading-snug font-light text-text">{event.title}</p>
-                        <div className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-1">
-                          {!event.allDay ? (
-                            <span className="timestamp">{durationMinutes(event)}m</span>
-                          ) : null}
-                          {event.location ? (
-                            <span className="text-[13px] font-light text-dim">{event.location}</span>
-                          ) : null}
-                          {/* Where it came from matters: a hand-written entry can be
-                              deleted here, a synced one will come back. */}
-                          {event.source !== "user" ? (
-                            <span className="timestamp">from {event.source}</span>
-                          ) : null}
-                        </div>
-                      </div>
-
-                      {event.source === "user" ? (
-                        confirming === event.id ? (
-                          <div className="flex shrink-0 items-center gap-1">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                void controller.run("event.delete", { id: event.id }, event.id);
-                                setConfirming(null);
-                              }}
-                              className="chip chip-danger"
-                            >
-                              remove
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setConfirming(null)}
-                              className="chip"
-                            >
-                              keep
-                            </button>
-                          </div>
-                        ) : (
-                          <div className="flex shrink-0 items-center gap-1">
-                            {/* Edit sits before remove and is the quieter of the
-                                two, because the destructive one should never be the
-                                easier target to hit by accident. Its node is kept so
-                                cancelling the editor can put the caret back on it. */}
-                            <button
-                              ref={(node) => {
-                                editChips.current.set(event.id, node);
-                              }}
-                              type="button"
-                              onClick={() => openEditor(event)}
-                              aria-label={`Edit ${event.title}`}
-                              className="chip"
-                            >
-                              edit
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setConfirming(event.id)}
-                              aria-label={`Remove ${event.title}`}
-                              className="chip chip-danger"
-                            >
-                              remove
-                            </button>
-                          </div>
-                        )
-                      ) : (
-                        // No remove control for a synced entry: deleting it here
-                        // would look permanent and then reappear on the next sync.
-                        <span className="shrink-0 timestamp">synced</span>
-                      )}
-                    </li>
-                  );
-              })}
-            </ul>
-          </section>
-        ))}
-
-        {byDay.length === 0 ? (
-          <div className="px-6 py-10 text-center">
-            <p className="text-[13px] font-light text-dim">
-              {emptyNote(
-                controller.loading,
-                "Nothing scheduled today or tomorrow. Add something above, or tell her — “book a study block at 7”.",
-              )}
-            </p>
-          </div>
-        ) : null}
-      </div>
-
-      <div className="px-6 py-3">
-        <p className="timestamp">
-          Today and tomorrow · connect a calendar in Settings for the rest
-        </p>
-      </div>
+      <Ghost
+        preview={gridDrag.preview?.ghost ? gridDrag.preview : null}
+        ghostRef={gridDrag.ghostRef}
+        labelRef={gridDrag.labelRef}
+      />
+      <Ghost preview={monthDrag.preview} ghostRef={monthDrag.ghostRef} labelRef={monthDrag.labelRef} />
     </div>
   );
+}
+
+/* ------------------------------------------------------------------ */
+/* Small pieces                                                       */
+/* ------------------------------------------------------------------ */
+
+function Chevron({ direction }: { direction: "left" | "right" }) {
+  return (
+    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+      <path
+        d={direction === "left" ? "M7.5 1.5L3 6l4.5 4.5" : "M4.5 1.5L9 6l-4.5 4.5"}
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+/** The floating copy of whatever is being dragged. */
+function Ghost({
+  preview,
+  ghostRef,
+  labelRef,
+}: {
+  preview: { title: string; left: number; top: number; width: number; height: number; label: string } | null;
+  ghostRef: React.RefObject<HTMLDivElement | null>;
+  labelRef: React.RefObject<HTMLSpanElement | null>;
+}) {
+  if (!preview) return null;
+  return (
+    <div
+      ref={ghostRef}
+      className="cal-ghost"
+      style={{ left: preview.left, top: preview.top, width: preview.width, height: preview.height }}
+      aria-hidden="true"
+      data-drag-ghost
+    >
+      <div className="cal-ghost-inner">
+        <span className="block truncate">{preview.title}</span>
+      </div>
+      <span ref={labelRef} className="cal-ghost-label">
+        {preview.label}
+      </span>
+    </div>
+  );
+}
+
+/**
+ * The minutes into the dragged day that an all-day entry starts at: none.
+ */
+function startOfDayMinutes(event: CalendarEvent): number {
+  if (event.allDay === true) return 0;
+  const start = new Date(event.start);
+  return hourInZone(start) * 60 + minuteInZone(start);
+}
+
+/**
+ * Where the quick-add line will write, said the way a person says it.
+ *
+ * "today", "tomorrow", or the date — never the raw `2026-09-28` key it was given
+ * when the slot followed a drag into another week. The label is the only thing
+ * telling the user which day the line is about to write into, so it has to be
+ * readable rather than precise.
+ */
+function slotLabel(dayKey: string, today: string): string {
+  if (dayKey === today) return "today";
+  if (dayKey === addDays(today, 1)) return "tomorrow";
+  return monthDayInZone(fromDateKeyInZone(dayKey)) || dayKey;
+}
+
+/** The record an all-day toggle produces, for the optimistic write. */
+function optimisticAllDay(event: CalendarEvent, dayKey: string): CalendarEvent {
+  return optimisticMove({ ...event, allDay: true }, dayKey, 0);
+}
+
+/**
+ * The box a just-drawn slot occupies, so the editor can open beside it.
+ *
+ * Read from the column rather than from the drag, because the drag is over by
+ * the time this is called and the pointer has already been lifted.
+ */
+function slotBox(grid: HTMLElement | null, dayKey: string, startMin: number, minutes: number): AnchorBox {
+  const column = grid?.querySelector<HTMLElement>(`[data-column="${dayKey}"]`);
+  if (!column) return { left: window.innerWidth / 2 - 120, top: 120, width: 240, height: 0 };
+  const box = column.getBoundingClientRect();
+  const hour = Number.parseFloat(
+    getComputedStyle(grid as HTMLElement).getPropertyValue("--cal-hour") || "56",
+  );
+  const px = Number.isFinite(hour) && hour > 0 ? hour : 56;
+  const top = box.top + (startMin / 60) * px;
+  return { left: box.left, top, width: box.width, height: (minutes / 60) * px };
 }

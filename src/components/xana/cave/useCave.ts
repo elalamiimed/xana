@@ -82,6 +82,22 @@ export interface CaveController {
    * back.
    */
   run: (op: string, input?: Record<string, unknown>, pendingKey?: string) => Promise<boolean>;
+  /**
+   * The same call, with the server's answer kept.
+   *
+   * A drag on the calendar is optimistic: the block moves the moment the
+   * pointer is released, and what the server says afterwards is the
+   * authority on where it actually landed. That reconciliation needs the
+   * record, not a boolean — and it needs it *without* a second read of the
+   * window, because a second read is a second round trip the user can see
+   * as the block jumping back. `run` stays as it is so the rooms that only
+   * need "did that save" are untouched.
+   */
+  runDetailed: (
+    op: string,
+    input?: Record<string, unknown>,
+    pendingKey?: string,
+  ) => Promise<{ ok: boolean; payload: Record<string, unknown>; error: string }>;
   clearError: () => void;
 }
 
@@ -129,8 +145,12 @@ export function useCave(open: boolean): CaveController {
     }
   }, [adopt]);
 
-  const run = useCallback(
-    async (op: string, input: Record<string, unknown> = {}, pendingKey?: string) => {
+  const runDetailed = useCallback(
+    async (
+      op: string,
+      input: Record<string, unknown> = {},
+      pendingKey?: string,
+    ): Promise<{ ok: boolean; payload: Record<string, unknown>; error: string }> => {
       const key = pendingKey ?? op;
       setPending((previous) => new Set(previous).add(key));
       try {
@@ -141,10 +161,11 @@ export function useCave(open: boolean): CaveController {
         });
         adopt(payload as Partial<CaveSnapshot>);
         setError(null);
-        return true;
+        return { ok: true, payload, error: "" };
       } catch (err) {
-        setError(err instanceof Error ? err.message : "That change could not be saved.");
-        return false;
+        const message = err instanceof Error ? err.message : "That change could not be saved.";
+        setError(message);
+        return { ok: false, payload: {}, error: message };
       } finally {
         setPending((previous) => {
           const next = new Set(previous);
@@ -154,6 +175,12 @@ export function useCave(open: boolean): CaveController {
       }
     },
     [adopt],
+  );
+
+  const run = useCallback(
+    async (op: string, input: Record<string, unknown> = {}, pendingKey?: string) =>
+      (await runDetailed(op, input, pendingKey)).ok,
+    [runDetailed],
   );
 
   /**
@@ -187,6 +214,7 @@ export function useCave(open: boolean): CaveController {
     error,
     reload,
     run,
+    runDetailed,
     clearError: () => setError(null),
   };
 }

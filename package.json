@@ -4,6 +4,19 @@
   "private": true,
   "type": "module",
   "description": "Xana — a minimalist, Jarvis-inspired personal AI assistant with a persistent external brain.",
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "author": "elalamiimed (https://github.com/elalamiimed)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/elalamiimed/xana.git"
+  },
+  "homepage": "https://github.com/elalamiimed/xana#readme",
+  "bugs": {
+    "url": "https://github.com/elalamiimed/xana/issues"
+  },
+  "engines": {
+    "node": ">=20.9.0"
+  },
   "scripts": {
     "dev": "node --import ./scripts/ts-loader.mjs scripts/dev.mjs",
     "dev:next": "next dev -p 4310",
@@ -37,6 +50,8 @@
     "verify:health-log": "node --import ./scripts/ts-loader.mjs scripts/check-health-log.ts",
     "verify:cave-load": "node --import ./scripts/ts-loader.mjs scripts/check-cave-load.ts",
     "verify:task-edit": "node --import ./scripts/ts-loader.mjs scripts/check-task-edit.ts",
+    "verify:calendar": "node --import ./scripts/ts-loader.mjs scripts/check-calendar.ts",
+    "verify:calendar-browser": "node scripts/verify-calendar-browser.mjs",
     "verify:edit-voice": "node --import ./scripts/ts-loader.mjs scripts/check-edit-voice.ts",
     "verify:stt": "node scripts/check-stt.mjs",
     "verify:transcribe": "node scripts/check-transcribe-live.mjs",
@@ -46,13 +61,14 @@
     "verify:health-bridge": "node --import ./scripts/ts-loader.mjs scripts/check-health-bridge.ts",
     "verify:live": "node --import ./scripts/ts-loader.mjs scripts/verify-live-connections.ts",
     "check:encoding": "node scripts/check-encoding.mjs",
+    "check:secrets": "node scripts/check-no-secrets.mjs",
     "check:bundle": "node scripts/check-bundle.mjs",
     "check:design": "node scripts/check-design.mjs",
     "check:palette": "node scripts/check-palette.mjs",
     "debug:key": "node scripts/debug-key.mjs",
     "debug:engine": "node scripts/debug-engine.mjs",
     "inspect": "node --import ./scripts/ts-loader.mjs scripts/inspect.ts",
-    "check": "npm run typecheck && npm run verify:wake && npm run verify:vad && npm run verify:pause && npm run verify:dictation && npm run verify:speech && npm run verify:transcriber && npm run verify:trash && npm run verify:health-log && npm run verify:energy && npm run verify:zone && npm run verify:cave-load && npm run verify:task-edit && npm run verify:edit-voice && npm run demo && npm run smoke && npm run verify:orb && npm run verify:providers && npm run check:design && npm run check:palette"
+    "check": "npm run check:encoding && npm run check:secrets && npm run typecheck && npm run verify:wake && npm run verify:vad && npm run verify:pause && npm run verify:dictation && npm run verify:speech && npm run verify:transcriber && npm run verify:trash && npm run verify:health-log && npm run verify:energy && npm run verify:zone && npm run verify:cave-load && npm run verify:task-edit && npm run verify:calendar && npm run verify:edit-voice && npm run demo && npm run smoke && npm run verify:orb && npm run verify:providers && npm run check:design && npm run check:palette"
   },
   "dependencies": {
     "better-sqlite3": "^13.0.3",

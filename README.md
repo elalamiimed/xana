@@ -34,6 +34,12 @@ normally provides is gone — so `dev.mjs` wires it back up itself. Editing
 `.env.local` while the server runs reloads it. `npm run dev:next` remains
 available as the stock CLI, for a normal machine.
 
+![The calendar in My cave: seven day columns with entries placed on the hour, a quick-add line above them, and Month, Week and Day in the corner.](docs/shots/calendar-week.png)
+
+*The calendar, which is the part of her you look at most. Every screenshot in
+this README comes from a throwaway database built by `npm run seed` — the
+plausible life in the pictures is fabricated, and nobody's own.*
+
 ---
 
 ## What she actually does
@@ -294,7 +300,7 @@ have.
 ## My cave
 
 A room for the things worth editing directly rather than talking about: your
-goals, your tasks, your schedule, what you did today, and what she remembers.
+goals, your tasks, your calendar, what you did today, and what she remembers.
 Reachable from **My cave** in the header.
 
 **Days are Beijing days.** The app's calendar is Asia/Shanghai's, not the
@@ -394,6 +400,61 @@ edit there is, and the one that stops it being noise on tonight's briefing — m
 deleting the task and retyping it. That throws away the id, the creation date and
 any history hanging off it. A partial edit also only touches the fields you
 mention, so renaming a task cannot quietly drop its deadline.
+
+**The calendar.** A month, a week or a day over the same entries the briefing
+reads, with the four gestures a calendar is expected to have: **drag a block** to
+move it across days and hours, **drag its edge** to change how long it lasts,
+**drag empty space** to draw a new entry and type its name, and **drag a month
+chip** to another day — which keeps its hour, because moving Tuesday's 09:30
+stand-up to Thursday must not also move it to wherever the pointer was.
+
+![The month view: six weeks of cells, each entry a chip carrying its time and title, and today ringed.](docs/shots/calendar-month.png)
+
+![A block mid-drag: the entry dimmed where it was, a copy of it under the pointer, and a dashed outline labelled 08:30 AM – 09:30 AM where it will land.](docs/shots/calendar-drag.png)
+
+<img src="docs/shots/calendar-phone-board.png" alt="The new-event board on a phone, docked to the bottom edge, with What, Day, Starts, Minutes, Where, Add and Close all above the fold." width="330">
+
+*The drag in the second picture is of an entry added through the room's own
+line, because that is the only kind the room will let go of: an entry from a
+feed is drawn and refused, since a synced calendar is not yours to rewrite.*
+
+It replaced a two-day list. That list could add, edit and remove, and it showed
+today and tomorrow because those are the days the briefing asks about — but a
+term, a rota or a week of lectures has a shape, and a schedule you cannot see the
+shape of is a schedule you re-type. The form did not go away; it is what opens
+when you press a slot, which is where the intention actually is.
+
+- **The drop lands on the frame you let go.** The block is moved in place, the
+  server is asked afterwards, and its answer is the authority. A refusal re-reads
+  the window instead of unpicking the guess, because an inverse computed from a
+  record the server never accepted is a second chance to be wrong.
+- **Every drag snaps to a quarter hour**, and autoscrolls when you hold it near
+  the top or bottom edge — a drag that can only reach the hours already on screen
+  is a drag that stops working at 23:00.
+- **Smooth is a design decision here, not a hope.** The gesture writes a
+  `transform` in a `requestAnimationFrame` loop, reading before writing and never
+  re-rendering the grid to move one box, which is also why it survives a busy CPU.
+  Escape cancels, and a `pointercancel` — the browser taking the gesture for a
+  scroll — cancels rather than drops.
+- **On a touch screen a drag has to be held first.** Until then the surface keeps
+  its native scrolling, so a swipe down a busy day still scrolls it. That is the
+  same trade Google Calendar makes.
+- **Overlapping entries share the width.** Two meetings at two o'clock are each
+  half as wide, three are each a third, and a fourth at four is full width again
+  because the cluster closed. The chain case is the one worth knowing: 9–10,
+  9:30–10:30 and 10–11 is **two** columns, not three, because the first and the
+  third do not overlap each other.
+- **Everything a pointer can do, a keyboard can too.** A focused block moves with
+  the arrow keys — a quarter hour, an hour with shift, a day left and right — and
+  the editor's own day, start and length fields are the exact path. The resize
+  grips are pointer-only on purpose: a length nudged a quarter hour at a time is a
+  worse tool than a field that says what it is.
+- **A synced entry is shown, never changed here.** A feed's record is not yours:
+  dragging it would look permanent and be undone by the next sync, so it opens,
+  reads and says where it came from. The same rule the task list already had.
+- **All-day entries are days, not moments.** They are written from a day's first
+  instant to the next day's first instant, drawn in a lane above the hours, and
+  moved by the day alone.
 
 **What she does with it.** Recalled memories and standing facts are presented to
 the model separately, because they mean different things: a match is relevant to
@@ -857,9 +918,10 @@ and nothing else on that surface does.
 ## Verifying it
 
 ```bash
-npm run check                # typecheck + wake word + vad + pause + dictation + speech + transcriber + trash + health log + energy + zone + cave load + task edit + demo + route smoke + orb + providers + craft floor + palette
+npm run check                # encoding + secrets + typecheck + wake word + vad + pause + dictation + speech + transcriber + trash + health log + energy + zone + cave load + task edit + calendar + demo + route smoke + orb + providers + craft floor + palette
 npm run verify:web           # with the server running: the real HTTP surface
 npm run verify:browser       # with the server running: a real browser
+npm run verify:calendar-browser # with the server and a browser: drag the calendar for real
 npm run verify:crypto        # the keyless quote path, on a stubbed CoinGecko
 npm run verify:health-bridge # the phone door: token, statuses, day upserts
 npm run verify:health-log    # the log: the sentences, the guards, clearing a reading
@@ -994,6 +1056,35 @@ node scripts/probe-status-rows.mjs 40         # is the one-row-per-connection ru
   replacing, a reading taken back leaving no row behind, and — the assertion the
   whole feature is for — that the number written in the room moves the energy
   forecast the briefing shows.
+- `npm run verify:calendar` — the calendar's arithmetic, its window, and what a
+  drag sends. A month grid that starts on the wrong Monday looks like a month, two
+  overlapping meetings that both claim the full width look like two meetings, and
+  a drop a quarter hour out looks like the hand shook — so the grid, the paging
+  (31 January plus a month is 28 February, and the next month is March), the
+  clamping of an entry that crosses midnight, the overlap packing, the patch a
+  drop builds, and the window through the real operation are all asserted against
+  the same module the browser runs. The gesture engine is driven directly — press,
+  move, release, Escape, a lost pointer, and the touch hold — with a fake `window`
+  and a fake element, because a drag that never commits or never removes its
+  listeners has no other evidence anywhere. The suite was written after a real
+  bug: the first overlap implementation drew a chain of three meetings in three
+  columns instead of two, and "a chain of three is one cluster of two columns" is
+  the assertion that caught it.
+- `npm run verify:calendar-browser` — the calendar driven by a real browser, because
+  the arithmetic being right and the grid being *wired* to it are two different
+  claims. It opens My cave → Calendar, adds an entry through the room's own line,
+  then drags a block across days and hours with real `Input.dispatchMouseEvent`
+  input and checks the database, the DOM and the drop indicator's own label all
+  agree on where it landed; draws a new entry on empty grid, types a name and
+  presses Enter; drags a block's bottom edge an hour longer; and drags a month
+  chip to another day, checking the day moved and the clock did not. It also
+  counts frames during the drag and prints the median and worst gap — "smooth" is
+  the requirement, so it is measured rather than asserted. It cleans up every row
+  it created, over a window wide enough to catch entries its own drags moved six
+  weeks away, and refuses to pretend: with no browser to attach to it says so in
+  one line and exits 0. Chromium cannot start inside the sandbox this was built
+  in — its own IPC needs a named pipe the sandbox denies — so it is started
+  outside and attached to with `--port`.
 - `npm run verify:zone` — the app's clock is Beijing's and not the machine's.
   Every measurement is taken at a fixed instant with a known Beijing reading:
   17:30Z is 01:30 on the next day, a day starts and ends at Beijing midnight,
@@ -1022,6 +1113,14 @@ node scripts/probe-status-rows.mjs 40         # is the one-row-per-connection ru
   tokens, the stylesheet as it comes through Tailwind, every endpoint, a live
   chat turn, and a settings round trip that changes the theme, proves the next
   page load renders it, and changes it back.
+- `npm run check:secrets` — the one check whose subject is the repository rather
+  than the code: it reads the files a clone would receive and fails on the shapes
+  credentials have, on a literal value from this machine's own `.env` or
+  `data/settings.json` appearing anywhere, on a real Windows home directory in a
+  path, and on `.gitignore` losing the rules that keep `data/` and `.env` out. It
+  is why a false positive here is treated as a bug in the guard: its first
+  version reported forty-seven leaks and none of them were leaks, because `.env`
+  also holds a public default model name.
 - `npm run check:design` — the craft floor as a check, for the invariants that
   were only auditable by eye and that a new panel is most likely to break again:
   no `font-light` at 12px or below, no component rendering its own `h1`, no
@@ -1211,4 +1310,51 @@ didn't follow that."
   machine and what she is permitted to change. Claiming more than that would be
   security theatre, and the settings file is readable by anyone who can read the
   directory.
+
+---
+
+## Contributing, and reporting something
+
+Xana is a personal project that happens to be public, so there is no community
+process to speak of: its direction is one person's use of it. Bug reports are
+genuinely useful and a patch that fixes something real is welcome.
+[CONTRIBUTING.md](CONTRIBUTING.md) covers how to run the gates, what the design
+contract expects of a change, and what the licence below means for a pull
+request.
+
+A security problem does not go in the issue tracker. [SECURITY.md](SECURITY.md)
+says where it goes, what counts as one, and — the part worth reading before
+filing — what is a decision rather than a vulnerability: plaintext keys in
+`data/settings.json`, no authentication on loopback, and a bearer token on the
+phone endpoint are all deliberate.
+
+## Licence
+
+**Xana is source-available, not open source.** The distinction is the point of
+the licence rather than a quibble about wording, so both halves are worth being
+exact about:
+
+- **You may** read it, run it, study it, change it, and share it — for any
+  noncommercial purpose. Personal use, hobby projects, research and study, and
+  use by a charity, school, public research body, public health or safety body
+  or government institution are all permitted, whatever is funding them.
+- **You may not** use it commercially, or with any anticipated commercial
+  application, without a separate licence from the copyright holder.
+- **The notice travels.** The `Required Notice:` line has to go with every copy
+  anyone passes on, so nobody can take this work and present it as their own.
+
+The terms are the PolyForm Noncommercial License 1.0.0, reproduced in
+[LICENSE](LICENSE) unaltered from the canonical text with its sha256 recorded,
+so the wording can be checked rather than taken on trust. The Open Source
+Initiative's definition requires that commercial use be allowed, which is why a
+licence forbidding it is not "open source" in that sense: the source being
+public and the licence being permissive are two different claims, and this
+project makes only the first.
+
+Commercial licensing is a conversation rather than a closed door — it is the
+right the copyright holder keeps.
+
+The name and the orb are not covered by the licence. Nothing here grants the
+right to use **Xana** as the name of a derived product, or to suggest that a
+fork is this project.
 

@@ -183,6 +183,11 @@ rather than a spec they scan.
   board (the goals columns) may run wider, about `1180px`, because three columns
   are the point; a form or a list sits in `--content-max`. What is not allowed is
   a form spanning a 1416px window, which is what the cave did.
+- **A calendar is a board, not a list.** The month grid and the week grid take the
+  same ~1180px, because seven columns at a readable width do not fit in 760. What
+  keeps that from being the thing this section forbids is that a grid of days has
+  no line length: the text inside it is a title clipped to its own cell, and there
+  is no sentence to read across it.
 
 ### One small control
 
@@ -270,6 +275,63 @@ still frame is drawn; the breath, the rotation and the stagger stop; the ripple
 becomes a pure opacity fade. Opacity and colour transitions survive, so a state
 change still reads without movement. Non-negotiable, and not merely detected —
 the canvas is genuinely never animated in that mode.
+
+### Dragging is tracked, not animated
+
+The calendar is the one surface a person moves things around on, and it is worth
+naming what that costs, because the obvious implementation is wrong.
+
+**A drag writes a `transform` on the frame the pointer moved.** It is not a
+transition towards a target: an easing curve under the hand is the difference
+between holding an object and pulling it on a string, and at a quarter-hour snap
+it also hides the thing the snap is telling you. So the gesture owns a frame loop
+(`requestAnimationFrame`, one read before any write) and React renders twice per
+drag — once when it is picked up, once when it is put down — rather than once per
+frame. Every duration token in this document is for something the user is
+*watching*; a drag is something they are *doing*.
+
+**What is animated is the arrival.** A block that has just been dropped fades up
+from 55% to full over `--t-state` — one beat, no travel, and only ever in
+response to a drop. Under reduced motion the fade stays and nothing else does,
+which is the same rule the entry animations follow.
+
+**One number is shared with the stylesheet.** `--cal-hour` is the height of an
+hour. The geometry module positions every block with it and the stylesheet draws
+the hour rules with it, from the same value, because two independent answers to
+"how tall is an hour" put every block a few pixels off the line it claims to
+start on — a wrongness that is visible and unnameable.
+
+**A gesture ends exactly once, and says how.** `beginPointerDrag` reports
+`onEnd` or `onCancel` on every path and never both, and a release inside the
+180ms touch hold is a cancel rather than silence. The caller draws its preview
+on `onArm` — never on `pointerdown` — and takes it down in one of those two
+callbacks, so "the gesture ended and nobody was told" is not a state that
+exists. It existed: a tap on empty grid left its drawn slot in the DOM for the
+rest of the session, because the path that ends a gesture without arming
+returned in silence. Nothing is drawn before arming for the second half of the
+same reason: a dashed block that appears under a finger which turns out to be
+scrolling is the calendar claiming an intention nobody had.
+
+**A block's resize grips come out of what the body can spare.**
+`gripHeightFor(px, coarse)` takes the body's minimum first — 18px under a
+finger, 12px under a cursor — caps the grip at 14 or 8px, and returns zero when
+what is left is too thin to hit. A block with no grips moves by its whole body,
+and its length is changed in the editor, which is exact. The fixed 14px grip
+this replaced left a 30-minute block at 390px with a body of **minus six
+pixels**: every press reached a handle, so the most ordinary short event could
+be made longer and never moved.
+
+**The event board is measured, and on a phone it docks.** The form is placed
+from the box it actually has, inside a `max-height` counted from the viewport,
+so it cannot be taller than the screen and cannot put its own buttons past the
+fold — the version this replaced was positioned against a hard-coded 360px
+height while standing 574px tall, which put `Add`, `remove` and `Close` 206px
+below the bottom edge with no other way out. Below the compact breakpoint it
+docks to the bottom edge behind a scrim rather than floating beside a 22px
+block. Escape, a press outside, the scrim and `Close` all close it, and Escape
+is taken on the document in the capture phase, because a React handler cannot
+stop the cave's own document listener — which is how closing the form once
+closed the room with it.
 
 ## 5. The orb
 

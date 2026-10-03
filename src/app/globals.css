@@ -1438,3 +1438,620 @@ body {
     }
   }
 }
+
+/* ==================================================================
+   The calendar (My cave → Schedule).
+
+   A grid is the one surface in this app that is *drawn* rather than laid
+   out: 24 hour rules, seven columns, blocks whose height is their
+   duration. So the handful of things that cannot be a utility live here,
+   and everything that can be is in the component.
+
+   THE ONE SHARED NUMBER
+
+   `--cal-hour` is the height of an hour, and it is shared on purpose: the
+   geometry module positions every block with the same number the
+   stylesheet draws the rules with, and the two are passed to each other
+   rather than each deciding. Two sources for "how tall is an hour" is how
+   a block ends up floating a few pixels off the line it is supposed to
+   start on.
+   ================================================================== */
+
+/* Nothing in the calendar is meant to be selected, and a drag proves it.
+   Measured in a browser: press a block, move the pointer, and the browser
+   paints a selection across the room's toolbar, the day headings and its own
+   footer sentence — the interface highlighting its own labels while the user
+   is moving an entry. Nothing here had ever said not to.
+
+   The first attempt at this put `none` on the room, and a second measurement
+   showed it was only half a fix: the headings and the footer line stopped
+   being selected, but "My cave" and the summary above it did not, because the
+   browser anchors a selection at the nearest text it is allowed to select, and
+   that was now outside the room. So the rule is on the cave itself, and scoped
+   to the calendar being the open room — in every other room text selects
+   normally, which is what you want in the log, the memory or a task.
+
+   `:has()` carries its argument's specificity, so the exemption below repeats
+   the whole selector: a bare `[data-cave] input` would lose to the rule above
+   it and the fields someone types into would silently stop taking a selection.
+   Both rules are as long as they are for that reason. */
+[data-cave]:has([data-calendar]) {
+  user-select: none;
+}
+
+[data-cave]:has([data-calendar]) input,
+[data-cave]:has([data-calendar]) textarea {
+  user-select: text;
+}
+
+.cal-time {
+  --cal-hour: 56px;
+}
+
+@media (max-width: 767px) {
+  .cal-time {
+    --cal-hour: 44px;
+  }
+}
+
+/* The hours, and the half hours between them.
+   Two repeating gradients rather than forty-eight elements: the browser
+   paints this as one background, and the DOM the pointer has to travel
+   through stays the fifteen nodes that matter.
+
+   `pointer-events: none` is load-bearing, not tidiness. The layer is
+   positioned and given a z-index so the hour rules draw *over* the
+   columns' own washes and *under* the blocks — and a positioned element
+   with a z-index is hit-tested before its unpositioned siblings, so
+   without this line the rules would swallow every press on empty grid and
+   nothing could ever be drawn on it. */
+.cal-rules {
+  pointer-events: none;
+  background-image: repeating-linear-gradient(
+    to bottom,
+    var(--hairline) 0 1px,
+    transparent 1px var(--cal-hour)
+  );
+}
+
+.cal-rules-half {
+  background-image: repeating-linear-gradient(
+    to bottom,
+    var(--a-04) 0 1px,
+    transparent 1px var(--cal-hour)
+  );
+  background-position-y: calc(var(--cal-hour) / 2);
+}
+
+/* A day column. `pan-y` and not `none`: a swipe down a column has to scroll
+   the grid on a phone, which is why the drag gestures arm on a short hold
+   before they take the pointer (`useTimeGridDrag`). */
+.cal-column {
+  position: relative;
+  border-left: 1px solid var(--hairline);
+  touch-action: pan-y;
+}
+
+.cal-column[data-today="true"] {
+  background-color: var(--a-04);
+}
+
+/* A block, and the copy of it that follows the pointer. Same skin, because
+   the copy is meant to read as the thing you picked up rather than as a
+   second object.
+
+   There used to be a 2px accent stripe down the left edge of every one. It
+   was the only anti-pattern impeccable's detector found anywhere in this
+   codebase, and the argument against it is not that a stripe is ugly: it is
+   that the same stripe on every entry emphasises all of them equally, so it
+   distinguishes nothing while competing with the one distinction the block
+   actually carries — a feed's entry sitting in a recessed well. The 1px
+   hairline that was already there does the edge, and hover still answers. */
+.cal-block,
+.cal-ghost-inner {
+  border-radius: var(--r-sm);
+  border: 1px solid var(--hairline);
+  background-color: var(--surface-2);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: 0;
+  line-height: 1.35;
+}
+
+.cal-block {
+  position: absolute;
+  overflow: hidden;
+  padding: 2px 6px;
+  cursor: grab;
+  touch-action: pan-y;
+  transition:
+    border-color var(--t-fast) var(--ease),
+    background-color var(--t-fast) var(--ease),
+    opacity var(--t-fast) var(--ease);
+}
+
+.cal-block:hover {
+  border-color: var(--a-24);
+  background-color: var(--surface-3);
+}
+
+/* An entry from a feed: shown, not owned. It reads as a recessed well
+   rather than as a card, so "you cannot move this" is visible before the
+   pointer tries. */
+.cal-block[data-synced="true"] {
+  background-color: var(--well);
+  color: var(--text-dim);
+  cursor: default;
+}
+
+.cal-block[data-synced="true"]:hover {
+  background-color: var(--well-deep);
+}
+
+/* A block that runs past midnight keeps going instead of pretending to
+   stop: the square corner is the "there is more of this" mark. */
+.cal-block[data-continues-before="true"] {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+.cal-block[data-continues-after="true"] {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+/* The resize grips. Drawn as a hairline that only appears when the block is
+   under the pointer — a calendar of visible handles reads as a form.
+
+   HEIGHT IS NOT SET HERE. It is computed per block by `gripHeightFor`, because
+   a fixed height is what deleted the move gesture: at 44px per hour a
+   30-minute block is 22px tall, two 14px grips covered 28px of it, and the body
+   left for the pointer was minus six pixels. The component decides, and omits
+   the grips entirely when a block cannot afford them. */
+.cal-grip {
+  position: absolute;
+  left: 0;
+  right: 0;
+  cursor: ns-resize;
+  touch-action: none;
+}
+
+.cal-grip[data-edge="start"] {
+  top: 0;
+}
+
+.cal-grip[data-edge="end"] {
+  bottom: 0;
+}
+
+.cal-grip::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  width: 22px;
+  height: 2px;
+  border-radius: var(--r-full);
+  background-color: var(--a-64);
+  transform: translateX(-50%);
+  opacity: 0;
+  transition: opacity var(--t-fast) var(--ease);
+}
+
+.cal-block:hover .cal-grip::after {
+  opacity: 1;
+}
+
+/* Where a drop would land. Transformed, never re-laid out: the frame loop
+   writes `transform`, `width` and `height` on this node and nothing else. */
+.cal-drop {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 4;
+  border: 1px dashed var(--a-64);
+  border-radius: var(--r-sm);
+  background-color: var(--a-08);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--t-fast) var(--ease);
+}
+
+/* The floating copy of whatever is being dragged. `position: fixed` so it
+   is never clipped by the scroller it came out of, and a transform so the
+   compositor moves it rather than the layout engine. */
+.cal-ghost {
+  position: fixed;
+  z-index: 70;
+  pointer-events: none;
+  will-change: transform;
+}
+
+.cal-ghost-inner {
+  height: 100%;
+  overflow: hidden;
+  padding: 3px 7px;
+  border-color: var(--a-40);
+  box-shadow: var(--shadow-3);
+}
+
+/* The live reading of where a drag will land, beside the copy. */
+.cal-ghost-label {
+  display: block;
+  margin-top: 1px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Now. One accent hairline in the column that is today, which is the only
+   moving thing on a calendar that nobody caused. */
+.cal-now {
+  position: absolute;
+  left: 0;
+  right: 0;
+  z-index: 3;
+  height: 1px;
+  background-color: var(--accent);
+  pointer-events: none;
+}
+
+.cal-now::before {
+  content: "";
+  position: absolute;
+  left: -3px;
+  top: -3px;
+  width: 7px;
+  height: 7px;
+  border-radius: var(--r-full);
+  background-color: var(--accent);
+}
+
+/* ---------------- the event board ---------------- */
+
+/* The form: a card beside the thing it describes on a wide screen, a sheet
+   across the bottom on a phone.
+
+   TWO PROPERTIES HERE ARE THE FIX FOR A BOARD THAT COULD NOT BE CLOSED.
+
+   `max-height` counts from the viewport, so the card can never be taller than
+   the screen whatever the form grows to, and `overflow-y` lets the fields
+   scroll inside it instead of pushing the buttons past the bottom edge. The
+   version this replaced was placed with a hard-coded 360px height that the real
+   form exceeded by 214px at 390px wide, which put `Add`, `remove` and `Close`
+   off the bottom of the screen with no other way out. A measured position plus
+   a height that cannot overrun is the whole fix; the position itself is set by
+   the component, which is the only thing that knows how tall it turned out. */
+.cal-editor {
+  display: flex;
+  flex-direction: column;
+  width: min(330px, calc(100vw - 24px));
+  max-height: calc(100dvh - 16px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 16px;
+  animation: card-in var(--t-base) var(--ease) both;
+}
+
+/* Below the room's compact breakpoint it docks: full width against the bottom
+   edge, where a thumb already is, with the corners against that edge squared
+   off so it reads as attached to the screen rather than floating over it. The
+   bottom padding keeps the buttons clear of a home indicator. */
+.cal-editor[data-docked="true"] {
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: auto;
+  max-height: calc(100dvh - 24px);
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  padding-bottom: max(16px, env(safe-area-inset-bottom));
+  animation: sheet-in var(--t-base) var(--ease) both;
+}
+
+/* A sheet's primary action takes the whole width. Two reasons, and the second
+   one was found by measuring: a 62px button in the bottom-left corner is a
+   small target for the thumb that has to reach it, and it is also exactly where
+   `next dev` parks its indicator, which sat on top of `Add` in every
+   development session. Full width is what this shape owes a thumb anyway; the
+   overlay merely made it visible. */
+.cal-editor[data-docked="true"] .cal-actions .btn-primary {
+  flex: 1 1 100%;
+}
+
+/* ---------------- the month ---------------- */
+
+/* Six rows that are at least a chip taller than they need to be.
+   A month cell has to hold a day number, two chips and a count, and a
+   cell that is a few pixels short does not show a scrollbar — it cuts the
+   second chip in half, which reads as a rendering fault rather than as
+   "there is more here". The minimum is derived from the content that has
+   to fit (9px of padding, a 20px day number, 4px, two 20px chips with a
+   2px gap, and a 16px count line = 91px); the row stretches above it when
+   the window is tall. */
+.cal-month-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  grid-template-rows: repeat(6, minmax(92px, 1fr));
+  flex: 1;
+}
+
+.cal-week-head {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+}
+
+.cal-cell {
+  position: relative;
+  min-height: 0;
+  overflow: hidden;
+  border-top: 1px solid var(--hairline);
+  border-left: 1px solid var(--hairline);
+  padding: 4px 5px 5px;
+  text-align: left;
+  transition: background-color var(--t-fast) var(--ease);
+}
+
+.cal-cell:hover {
+  background-color: var(--surface);
+}
+
+/* A day that belongs to the month either side of this one.
+   Dimmed with colour, never with `opacity`. The first version put 42% opacity
+   on the whole cell, which composited the day numbers and their chips to 2.41:1
+   against the panel — unreadable for anyone with reduced contrast sensitivity,
+   and a lever no value fixes: nothing below about 0.8 keeps `--text-dim` above
+   the 4.5:1 floor. One step down the ramp instead, on each part, against the
+   ratios the token block above records:
+     chip title   --text -> --text-dim    15.2:1 -> 7.9:1 on --surface-2
+     day number   --text-dim -> --text-faint   9.4:1 -> 6.6:1 on --void
+   The chip's own time and the "+N" were already `--text-faint` (5.5:1) and stay
+   there. No background is layered on: the cell is already on the void, a
+   surface rule here would change nothing, and a month whose neighbouring days
+   differ by a wash rather than by their own text is not what a calendar does. */
+.cal-cell[data-outside="true"] .cal-daynum {
+  color: var(--text-faint);
+}
+
+.cal-cell[data-outside="true"] .cal-chip {
+  color: var(--text-dim);
+}
+
+.cal-cell[data-drop="true"] {
+  background-color: var(--a-08);
+  box-shadow: inset 0 0 0 1px var(--a-40);
+}
+
+.cal-daynum {
+  display: inline-grid;
+  place-items: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  border: 1px solid transparent;
+  border-radius: var(--r-full);
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  transition:
+    border-color var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease),
+    background-color var(--t-fast) var(--ease);
+}
+
+.cal-daynum:hover {
+  border-color: var(--hairline-2);
+  color: var(--text);
+}
+
+.cal-cell[data-today="true"] .cal-daynum {
+  border-color: var(--a-40);
+  background-color: var(--a-08);
+  color: var(--text);
+}
+
+/* A chip in a month cell. Dense on purpose — a month is read by shape, and
+   six rows of 44px chips is three weeks on screen. It carries the same 1px
+   hairline the blocks do, and no stripe: see the note on `.cal-block`. */
+.cal-chip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  min-height: 20px;
+  padding: 1px 5px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background-color: var(--surface-2);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.4;
+  text-align: left;
+  cursor: grab;
+  touch-action: pan-y;
+  transition:
+    background-color var(--t-fast) var(--ease),
+    border-color var(--t-fast) var(--ease);
+}
+
+.cal-chip:hover {
+  background-color: var(--surface-3);
+  border-color: var(--a-24);
+}
+
+.cal-chip[data-synced="true"] {
+  background-color: var(--well);
+  color: var(--text-dim);
+  cursor: default;
+}
+
+.cal-chip-time {
+  flex: none;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Where an all-day chip would print a clock reading. Drawn, not typed: the
+   character it used to be took its size from the font, its position from the
+   baseline, and read aloud as "bullet" to anyone not looking at it. */
+.cal-dot {
+  flex: none;
+  width: 5px;
+  height: 5px;
+  border-radius: var(--r-full);
+  background-color: var(--text-faint);
+}
+
+.cal-chip-title {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* "3 more" — a count, and the way into the day. */
+.cal-more {
+  display: block;
+  width: 100%;
+  padding: 1px 5px;
+  border-radius: 6px;
+  color: var(--text-faint);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.3;
+  text-align: left;
+  transition: color var(--t-fast) var(--ease);
+}
+
+.cal-more:hover {
+  color: var(--accent);
+}
+
+/* The all-day lane above the hours. An entry with no clock still has to be
+   somewhere, and this is a calendar's answer to "when, if not at a time". */
+.cal-allday-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 22px;
+  padding: 2px 7px;
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  background-color: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 400;
+  text-align: left;
+  cursor: grab;
+  touch-action: pan-y;
+  transition:
+    background-color var(--t-fast) var(--ease),
+    border-color var(--t-fast) var(--ease);
+}
+
+.cal-allday-chip:hover {
+  background-color: var(--surface-2);
+  border-color: var(--a-24);
+}
+
+.cal-allday-chip[data-synced="true"] {
+  background-color: var(--well);
+  color: var(--text-dim);
+  cursor: default;
+}
+
+/* The hours gutter. Sticky, so it survives the horizontal scroll a week
+   view needs on a phone and the labels never scroll away from their lines. */
+.cal-gutter {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background-color: var(--void);
+}
+
+/* ---------------- a thumb in the month ----------------
+   WCAG 2.5.8 wants 24x24 and DESIGN.md's own floor for a phone is 44. A
+   six-week grid at 390px cannot give every chip 44, so the two things that can
+   grow do: measured at 390x844, 44 of the 53 controls in the month view were
+   under 24px in one axis — the day numbers at 20x20 and chips at 20px tall,
+   stacked 2px apart so the spacing exception does not apply either.
+
+   The day number reaches 24, the chips and the count reach 24, and the row
+   minimum moves with them: the densest cell (padding, a day number, two chips
+   and a count, with 2px gaps) needs 113px, and the row is 116 so nothing is
+   cut in half. Six rows is then 696px, which is taller than the panel on a
+   phone, and the month scrolls — a trade this grid already makes on a short
+   window, and the alternative is a chip too small to press.
+
+   Keyed on the pointer rather than the width, because a touchscreen laptop is
+   a fine pointer at 1440px and a tablet in landscape is a coarse one at 1024. */
+@media (pointer: coarse) {
+  .cal-month-grid {
+    grid-template-rows: repeat(6, minmax(116px, 1fr));
+  }
+
+  .cal-daynum {
+    min-width: 24px;
+    height: 24px;
+  }
+
+  .cal-chip,
+  .cal-more {
+    min-height: 24px;
+  }
+
+  /* "3 more" wraps to two lines in a 42px cell and stands 33px tall for a
+     five-character label. A target wants the height, not the wrap — and a
+     double-figure day is one character wider than the cell, so it ends in an
+     ellipsis rather than being cut through a glyph. */
+  .cal-more {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  /* The clock reading goes, and the title keeps the cell.
+     A month cell on a 390px screen is 43px of content, which is about six
+     characters: "06:30 PM" is 52px on its own, so the time did not fit and the
+     title beside it was pushed out entirely — the chip read "06:30 P" and
+     nothing said what the entry was. The title is what identifies an entry; the
+     hour is one press away in the day view and is still in the chip's own
+     `aria-label` and `title`. The all-day mark stays, which now also tells the
+     two kinds of chip apart. */
+  .cal-cell .cal-chip-time {
+    display: none;
+  }
+}
+
+/* A block arriving where it was dropped, rather than blinking there.
+   Opacity and a short transform: the block travels a few pixels, which is
+   the movement the user just caused, and never a bounce. */
+.cal-settle {
+  animation: cal-settle var(--t-state) var(--ease) both;
+}
+
+@keyframes cal-settle {
+  from {
+    opacity: 0.55;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* Nothing travels, nothing fades in late: a drop lands where it was put,
+     at once. The transitions above are already 1ms through the tokens. */
+  .cal-settle {
+    animation: none;
+  }
+
+  .cal-grip::after {
+    opacity: 0;
+  }
+}
+

@@ -1,0 +1,58 @@
+# The checks that need nothing but Node and a checkout.
+#
+# `npm run check` is the real gate, and it is deliberately NOT what runs here:
+# it compiles the project, which means installing `better-sqlite3` — a native
+# module that has to build — and two of its suites (`check:design`,
+# `check:bundle`) inspect a server that has to be running first. Putting that
+# in CI is a reasonable thing to want and a separate change to make, because it
+# can only be called done once it has been seen to pass.
+#
+# What is here instead is the three gates that are true for any clone: they
+# read files, import nothing outside `node:`, need no install step, and were
+# each run against this repository before being wired up.
+#
+# The point of the third step is worth stating. `check:secrets` approximates
+# "what would be published" by walking the tree; `git ls-files` is the exact
+# answer. If `data/` — the database, the settings file with the API keys in it
+# — or `.env` ever becomes tracked, every pattern check still passes, because
+# none of them look inside a directory they were told to skip. This one fails.
+
+name: checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A read-only token: this workflow only reads the repository.
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Every character is the one that was intended
+        run: node scripts/check-encoding.mjs
+
+      - name: Nothing private in anything a clone would receive
+        run: node scripts/check-no-secrets.mjs
+
+      - name: The palette still holds its contract
+        run: node scripts/check-palette.mjs
+
+      - name: No private state is tracked
+        run: |
+          if git ls-files --error-unmatch data .env >/dev/null 2>&1; then
+            echo "::error::data/ or .env is tracked in this commit. These hold the"
+            echo "::error::database, the API keys in plaintext, and the phone token."
+            git ls-files data .env
+            exit 1
+          fi
+          echo "data/ and .env are not tracked."
