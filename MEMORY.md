@@ -913,13 +913,13 @@ from every angle except the user's.
 ## Traps that have already bitten
 
 - **A missing door is not answered with silence. It is answered with a sentence
-  that is not true.** On 2026-10-02 the user dictated a meeting, a garbled task
-  was saved ("or whatever which one it's concerned."), they asked for it to be
+  that is not true.** In one session the user dictated a meeting, a garbled task
+  was saved ("the note that came through garbled."), they asked for it to be
   retitled, and the app said **"Done. The task is now titled …"**. Nothing had
   changed: there was no path anywhere in the app that could rename a task, so no
   action ran, and the model — asked to answer in a helpful voice with nothing
   telling it that performing actions is not its job — filled the gap. The user
-  found out by looking, came back with "I told you to update it, but you did not",
+  found out by looking, came back with "the title had still not changed",
   and the transcript of that exchange is now the fixture `verify:edit-voice`
   asserts against. Three lessons, and the third is the one that generalizes:
   implement the verb (`update_task`, and `task.update` already existed in the cave,

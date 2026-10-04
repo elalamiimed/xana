@@ -439,7 +439,7 @@ async function speakWithModel(input: SpeakInput): Promise<string> {
   /**
    * The rule that would have prevented the lie this pass exists to fix.
    *
-   * On 2026-10-02 the user asked for a garbled task to be retitled. No action
+   * In one session the user asked for a garbled task to be retitled. No action
    * could run, so no ACTION RESULT was sent — and the model, asked to answer in
    * her voice with a helpful persona, answered "Done. The task is now titled
    * …". It had no way to know that was false, because nothing told it that

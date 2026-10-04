@@ -383,7 +383,7 @@ asks which one you mean when there is more than one, because a guess renames the
 wrong row and you would have no way to tell.
 
 That voice path did not exist until it had to. A dictated task arrived titled
-*"or whatever which one it's concerned."*, the request to retitle it had nowhere
+*"the note that came through garbled."*, the request to retitle it had nowhere
 to go, and the reply said it was done. The cave could always edit a task; the
 chat could not, and nothing said so.
 
@@ -1277,7 +1277,7 @@ didn't follow that."
   and the same missing route is half the reason the Google flow below is unrun.
   Weather *was* watched end to end here: with `net.read` and `location` granted
   and no coordinates set, the IP fallback resolved `ipwho.is` and the card read
-  `connected · live · Huizhou`.
+  `connected · live · <the city resolved from the address>`.
 - **The weather IP fallback asks two hosts, because one of them is now behind a
   challenge.** It used to ask `ipapi.co` alone, which answers a Node `fetch`
   with a Cloudflare interstitial — HTTP 403 and an HTML body — so a fresh install

@@ -5,10 +5,10 @@
  *
  * WHY THIS FILE EXISTS
  *
- * On 2026-10-02 the user asked for a garbled task title to be fixed. There was
+ * In one session the user asked for a garbled task title to be fixed. There was
  * no path in the app that could rename a task, so nothing ran — and the reply
  * said "Done. The task is now titled …". The user found out by looking at the
- * list and came back with "I told you to update it, but you did not."
+ * list and came back with "The title had still not changed."
  *
  * Two things were missing and both are asserted here:
  *
@@ -100,11 +100,19 @@ function fresh(...names: string[]): string[] {
 /* ------------------------------------------------------------------ */
 
 await group("The sentence that produced the lie", async () => {
-  fresh("or whatever which one it's concerned.");
-  const reply = await say("rename it to 2pm Academic Support meeting");
+  /*
+   * Synthetic titles, deliberately.
+   *
+   * These two strings used to be a real task title and a real transcription
+   * from the session that produced this bug, which baked a piece of the
+   * author's own day into a fixture — and from there into the repository.
+   * The scenario only needs a garbled title and something to rename it to.
+   */
+  fresh("the note that came through garbled");
+  const reply = await say("rename it to 2pm Budget review");
   check("the rename is an action, not a sentence", reply.outcome?.ok === true, JSON.stringify(reply.outcome));
   check("the effect says what happened", reply.outcome?.effect === "task.updated", String(reply.outcome?.effect));
-  check("and the store agrees", titles().join("|") === "2pm Academic Support meeting", titles().join("|"));
+  check("and the store agrees", titles().join("|") === "2pm Budget review", titles().join("|"));
   check("the reply names the change", /renamed to/i.test(reply.outcome?.message ?? ""), String(reply.outcome?.message));
 });
 
@@ -178,7 +186,7 @@ await group("An event request is not read as a task edit", async () => {
 /* ------------------------------------------------------------------ */
 
 await group("The guard, against the transcript", async () => {
-  const lie = 'Done. The task is now titled "2pm Academic Support meeting."';
+  const lie = 'Done. The task is now titled "2pm Budget review."';
   const guarded = guardUnmadeClaim(lie, { text: "Yes, please.", acted: false });
   check("the historical lie is replaced", guarded.replaced === true);
   check("with the honest line", guarded.text === NOTHING_CHANGED, guarded.text.slice(0, 60));

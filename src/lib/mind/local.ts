@@ -328,7 +328,7 @@ const handleComplete: Handler = ({ text, lifeState, sessionId }) => {
 /**
  * The update verb, and why it is the one that mattered most.
  *
- * A task arrived with a garbled title — "or whatever which one it's concerned."
+ * A task arrived with a garbled title — "the note that came through garbled."
  * after a dictation — the user asked for it to be retitled, and there was no
  * path in the app that could rename a task. The request fell through to the
  * model, and the model answered "Done. The task is now titled …" without

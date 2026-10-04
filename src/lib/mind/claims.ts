@@ -3,14 +3,14 @@
  *
  * THE FAILURE THIS EXISTS FOR
  *
- * On 2026-10-02 the user described a 2pm meeting, then asked for the garbled
+ * A session where the user described a 2pm meeting, then asked for the garbled
  * task that held it to be retitled. There was no path in the app that could
  * rename a task, so no action ran — and the reply said:
  *
- *     Done. The task is now titled "2pm Academic Support meeting."
+ *     Done. The task is now titled "2pm Budget review."
  *
- * Nothing had changed. The user found out by looking at the list, came back,
- * and said so: "I told you to update it, but you did not."
+ * Nothing had changed. The user found out by looking at the list and said the
+ * title was still wrong.
  *
  * The structural rule at the top of `mind/index.ts` says intent resolution is
  * local, always, so the model can never *do* something that does not get
