@@ -41,7 +41,8 @@ npm run dev           # prints the URL it started on
 ```
 
 `npm run dev` starts the Next server programmatically rather than shelling out
-to `next dev`; the reasons are in the [README](README.md#L22). Node 20 or newer.
+to `next dev`; the reasons are in
+[docs/REFERENCE.md](docs/REFERENCE.md). Node 20.9 or newer.
 
 Your data lives in `data/` and is never in the repository. If you want the app
 to use a different directory — which is what the verification scripts do, so
