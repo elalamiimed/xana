@@ -142,6 +142,156 @@ export default function AdapterDots({ sources }: AdapterDotsProps) {
 
 /* ------------------------------------------------------------------ */
 
+/**
+ * Silence her, from anywhere.
+ *
+ * WHY THIS IS A BUTTON AND NOT A SETTING
+ *
+ * Reading replies aloud is a switch in Settings → Voice, and while she is
+ * talking that switch is three actions away: open the panel, find the section,
+ * flip it, save — all of it while a sentence plays over the top of you. The
+ * report that produced this control was *"whenever I text xana she just keeps
+ * on talking"*, and the shape of that complaint is the point: the thing the
+ * user wants is one press, at the moment it is happening, without leaving what
+ * they were doing. So the control lives in the header, where it is reachable
+ * from every state of the page, and it takes effect on the click rather than on
+ * the round trip — see `page.tsx`, where the mute is read from a ref so a reply
+ * already in flight is caught by it.
+ *
+ * WHY IT IS NOT THE SAME SWITCH
+ *
+ * It writes `voice.muted`, not `voice.speakReplies`. Muting from here must not
+ * throw away the preference the user chose deliberately — unmuting has to give
+ * back exactly what was there, and a control that quietly rewrites a setting
+ * you set on purpose is one people stop trusting. The store enforces the one
+ * interaction between them: switching spoken replies ON lifts the mute, because
+ * there is no reading of "read replies aloud" that means silence.
+ */
+function MuteButton({
+  speakReplies,
+  muted,
+  ready,
+  onToggle,
+}: {
+  speakReplies: boolean;
+  muted: boolean;
+  ready: boolean;
+  onToggle: () => void;
+}) {
+  /**
+   * Draw it only where there is speech to silence.
+   *
+   * `ready` is false until the shell has asked the browser, and until then the
+   * honest thing is to draw nothing: a control that appears a beat after the
+   * page settles is a flicker, and one drawn optimistically would be a button
+   * with nothing behind it on a browser that cannot speak.
+   */
+  if (!ready) return null;
+
+  /**
+   * And only when she is set to read replies aloud.
+   *
+   * This guard used to be `!speakReplies && !muted`, which a review caught
+   * drawing the control in exactly the state its own comment claimed to hide:
+   * with the preference switched OFF and a stale mute left set — reachable by
+   * muting from here and then turning *Read replies aloud* off in the panel —
+   * the header carried a pressed, accented speaker whose label promised "she
+   * will read replies aloud again", which was false twice over.
+   *
+   * With the preference off there is nothing for a mute to silence, so the
+   * whole control belongs to the panel's switch and not to the header.
+   */
+  if (!speakReplies) return null;
+
+  /**
+   * The switch is mid-PUT.
+   *
+   * The AUDIO does not wait for it — the ref in `page.tsx` is written on the
+   * press, so the sentence stops at once — but the button's own face comes from
+   * the stored value, which arrives with the response. So this is honest about
+   * what it is: the mute is already in force, and the control catches up a
+   * moment later. A failure to save is reported where every other settings
+   * failure is, in the panel.
+   *
+   * ICON ONLY, AND WHY THAT IS NOT A LOSS HERE
+   *
+   * Its two neighbours carry their words, and this one cannot: at 390px the
+   * three word-buttons plus the adapter dots come to 435px of a 326px header,
+   * so a third label is what pushes Settings off the right edge. The columns
+   * that had to give were either the words or the dots, and the dots are a
+   * status row that DESIGN.md §6 says must not shrink — a squashed dot reads as
+   * a different state. The speaker is also the one icon in the header that
+   * needs no word: it is on every phone and every player ever made, and the mic
+   * in the composer already sets the precedent for an icon-only control here.
+   *
+   * ONE NAME, AND THE STATE SAID ONCE
+   *
+   * `aria-label` is constant — "Mute her voice" — and `aria-pressed` carries the
+   * state. That is the W3C APG's own instruction for a toggle: the label must
+   * not change with the state, and a control that renames itself "Unmute" does
+   * not need `aria-pressed` at all. The first version here did both, so a screen
+   * reader announced "Unmute her voice. She will read replies aloud again.,
+   * toggle button, pressed" — the state twice, in two tenses. `title` says the
+   * same constant thing for a hovering pointer, and the crossed-out speaker is
+   * what a sighted user reads.
+   */
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-pressed={muted}
+      aria-label="Mute her voice. Replies are still written."
+      title="Mute her voice"
+      className="icon-tap flex items-center justify-center rounded-full border border-hairline text-[12px] font-normal transition-colors duration-[var(--t-state)] hover:border-hairline-2 hover:bg-surface-2"
+      // The tone is the *state*, and it is carried by `aria-pressed` as well:
+      // DESIGN.md §6 allows the colour to reinforce what the control already
+      // says, never to be the only thing saying it.
+      data-mark="mute toggle"
+      style={{
+        borderColor: muted ? "var(--a-40)" : undefined,
+        backgroundColor: muted ? "var(--a-08)" : undefined,
+        color: muted ? "var(--text)" : "var(--text-dim)",
+      }}
+    >
+      <svg
+        width="14"
+        height="14"
+        viewBox="0 0 14 14"
+        fill="none"
+        aria-hidden="true"
+        className="shrink-0"
+      >
+        <path
+          d="M2 5.4h2.2L7.4 3.1v7.8L4.2 8.6H2z"
+          stroke="currentColor"
+          strokeWidth="1.1"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+        {muted ? (
+          // The cross is what makes the two states tellable apart at a glance,
+          // and it is the whole reason the icon can stand in for a word.
+          <path
+            d="M9.8 5.6 12.6 8.4M12.6 5.6 9.8 8.4"
+            stroke="currentColor"
+            strokeWidth="1.1"
+            strokeLinecap="round"
+          />
+        ) : (
+          <path
+            d="M9.6 5.5a3.1 3.1 0 0 1 0 3M11.5 4a5.4 5.4 0 0 1 0 6"
+            stroke="currentColor"
+            strokeWidth="1.1"
+            strokeLinecap="round"
+          />
+        )}
+      </svg>
+    </button>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+
 /** A single cyan mark for `thinking` / `speaking`. The dot is never alone:
     the orb's status region and the caption carry the same state in words. */
 const PRESENCE_WORD: Record<Presence, string> = {
@@ -160,9 +310,26 @@ export interface HeaderProps {
   onOpenSettings: () => void;
   /** Opens My cave, the goal board and memory room. */
   onOpenCave: () => void;
+  /** Whether she is set to read replies aloud. The mute control follows it. */
+  speakReplies: boolean;
+  /** Whether she is silenced right now. */
+  muted: boolean;
+  /** Whether this browser can speak at all. */
+  speechReady: boolean;
+  /** Silences her, or lets her speak again. Applies before the request. */
+  onToggleMuted: () => void;
 }
 
-export function Header({ lifeState, presence, onOpenSettings, onOpenCave }: HeaderProps) {
+export function Header({
+  lifeState,
+  presence,
+  onOpenSettings,
+  onOpenCave,
+  speakReplies,
+  muted,
+  speechReady,
+  onToggleMuted,
+}: HeaderProps) {
   const live = presence === "thinking" || presence === "speaking";
   const sources = lifeState?.sources ?? [];
   const broken = sources.filter(
@@ -182,7 +349,27 @@ export function Header({ lifeState, presence, onOpenSettings, onOpenCave }: Head
      * "Xana" was 50% covered by an opaque amber dot. `min-h` instead of `h`
      * lets the two groups take a line each when they must, which is the honest
      * answer on a phone. Nothing is hidden and the header is 60px again the
-     * moment there is room for it. */
+     * moment there is room for it.
+     *
+     * AND THE SECOND WRAP, WHICH THE MUTE BUTTON FORCED
+     *
+     * The paragraph above describes two flex children, and a group that is
+     * alone on its own line cannot be told it is too wide: flexbox only wraps
+     * *between* items. So when the mute control made the right-hand group
+     * 435px inside a 326px header, nothing wrapped and nothing scrolled — the
+     * group simply ran to x=467 in a 390px window, which the browser reports as
+     * `scrollWidth === 390` because the page never asked to scroll. The last
+     * button, Settings, was half off the screen and every automated check in
+     * this repo passed, because "does the page overflow" is answered no.
+     *
+     * Measured, not guessed: at 390px the brand is 111px, the dots 132px and
+     * the three controls 178px, against 326px of usable width. So the spacer
+     * below eats the slack when everything fits — one row, exactly as before —
+     * and collapses to nothing when it does not, which lets the dot row and the
+     * buttons take a line each. `min-w-0` is what permits that second wrap: a
+     * flex item defaults to `min-width: auto` and refuses to go below its
+     * content, which is the whole reason the group overflowed rather than
+     * folding. */
     <header className="flex min-h-[var(--header-h)] shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-2 px-6 py-2">
       <div className="flex min-w-0 items-baseline gap-3">
         <span className="text-[13px] font-normal tracking-[0.32em] text-text uppercase">
@@ -191,7 +378,11 @@ export function Header({ lifeState, presence, onOpenSettings, onOpenCave }: Head
         <span className="timestamp truncate">{PRESENCE_WORD[presence]}</span>
       </div>
 
-      <div className="flex shrink-0 items-center gap-3">
+      {/* The slack. `flex-1` and nothing else: it has no minimum, so it is the
+          first thing to disappear when the row runs out of room. */}
+      <div className="flex-1" aria-hidden="true" />
+
+      <div className="flex min-w-0 flex-wrap items-center justify-end gap-x-3 gap-y-2">
         {live ? (
           // The one moving thing outside the orb, and only while she is
           // actually working. `breath` already runs at 2.4s per the state
@@ -204,13 +395,28 @@ export function Header({ lifeState, presence, onOpenSettings, onOpenCave }: Head
 
         <AdapterDots sources={sources} />
 
+        {/* Mute. To the left of the two that open something: it is the only one
+            that is about the moment, and the one a hand goes looking for while
+            a sentence is playing. Icon only, for the reason its own comment
+            gives — three labels do not fit at 390px and the dots are the wrong
+            thing to shrink. */}
+        <MuteButton
+          speakReplies={speakReplies}
+          muted={muted}
+          ready={speechReady}
+          onToggle={onToggleMuted}
+        />
+
         {/* My cave. A word rather than an icon, for the same reason Settings
             is one: the two things a user needs to find on their own are the
-            composer and the place their goals live. */}
+            composer and the place their goals live. The padding tightens below
+            420px so these two fit beside the dots more often than not — the
+            `tap` floor is a minimum, not a size, so this buys 16px of header
+            without taking anything away from a thumb. */}
         <button
           type="button"
           onClick={onOpenCave}
-          className="tap flex items-center gap-2 rounded-full border border-hairline px-3 py-1.5 text-[12px] font-normal text-dim transition-colors duration-[var(--t-fast)] hover:border-hairline-2 hover:bg-surface-2 hover:text-text"
+          className="tap flex items-center gap-2 rounded-full border border-hairline px-3 py-1.5 text-[12px] font-normal text-dim transition-colors duration-[var(--t-fast)] hover:border-hairline-2 hover:bg-surface-2 hover:text-text max-[420px]:px-2"
         >
           <svg width="13" height="13" viewBox="0 0 14 14" fill="none" aria-hidden="true">
             <path
@@ -235,7 +441,7 @@ export function Header({ lifeState, presence, onOpenSettings, onOpenCave }: Head
                 ? `Settings. ${waiting} ${waiting === 1 ? "connection is" : "connections are"} waiting for permission.`
                 : "Settings"
           }
-          className="tap group relative flex items-center gap-2 rounded-full border border-hairline px-3 py-1.5 text-[12px] font-normal text-dim transition-colors duration-[var(--t-fast)] hover:border-hairline-2 hover:bg-surface-2 hover:text-text"
+          className="tap group relative flex items-center gap-2 rounded-full border border-hairline px-3 py-1.5 text-[12px] font-normal text-dim transition-colors duration-[var(--t-fast)] hover:border-hairline-2 hover:bg-surface-2 hover:text-text max-[420px]:px-2"
         >
           <svg width="13" height="13" viewBox="0 0 14 14" fill="none" aria-hidden="true">
             <circle cx="7" cy="7" r="2.4" stroke="currentColor" strokeWidth="1.1" />

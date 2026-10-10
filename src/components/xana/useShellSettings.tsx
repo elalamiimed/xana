@@ -41,6 +41,15 @@ export interface ShellSettings {
   onAppearancePreview: (next: AppearanceSettings) => void;
   voice: {
     speakReplies: boolean;
+    /**
+     * Whether she is silenced right now, whatever `speakReplies` says.
+     *
+     * Surfaced beside the preference rather than folded into it because the
+     * two are read in different places: `speakReplies` decides whether a reply
+     * *should* be read, `muted` decides whether it is. The header button writes
+     * this one; the settings panel writes the other.
+     */
+    muted: boolean;
     voiceName: string;
     rate: number;
     pitch: number;
@@ -142,6 +151,7 @@ export function useShellSettings(
   const voice = useMemo(
     () => ({
       speakReplies: view?.voice.speakReplies ?? false,
+      muted: view?.voice.muted ?? false,
       voiceName: view?.voice.voiceName ?? "",
       rate: view?.voice.rate ?? 1,
       pitch: view?.voice.pitch ?? 1,

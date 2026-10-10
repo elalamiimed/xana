@@ -79,6 +79,24 @@ export interface AppearanceSettings {
 export interface VoiceSettings {
   /** Speak replies aloud, in addition to writing them. */
   speakReplies: boolean;
+  /**
+   * Silence her completely, without giving up the preference.
+   *
+   * A second switch beside `speakReplies` rather than a second meaning for it,
+   * because the two answer different questions and a reader can tell them
+   * apart. `speakReplies` is the standing preference — the one that says she
+   * reads replies aloud, chosen deliberately and worth keeping. This is the
+   * interruption: the sentence playing right now, and the ones after it.
+   *
+   * The distinction is not decorative. Reusing `speakReplies` for the button
+   * meant that muting erased a preference the user had chosen on purpose, to
+   * be restored by hand from the settings panel after every interruption —
+   * which is the opposite of what a mute control is for.
+   *
+   * It is stored rather than session-only because a mute that lifts on the
+   * next page load is not a mute.
+   */
+  muted: boolean;
   /** Preferred voice name, or "" for the browser default. */
   voiceName: string;
   /** 0.5..1.5 */

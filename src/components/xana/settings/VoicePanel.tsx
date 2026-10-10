@@ -373,10 +373,51 @@ export default function VoicePanel({ view, onSave, saving }: VoicePanelProps) {
       >
         <Switch
           label="Read replies aloud"
-          hint="Every reply she writes is also spoken. You can stop her mid-sentence by tapping the orb."
+          hint="Every reply she writes is also spoken. To stop one mid-sentence without changing this, press the speaker in the header — tapping the orb stops the sentence playing now, but the next reply is still read."
           checked={speakReplies}
           onChange={setSpeakReplies}
         />
+
+        {/*
+          The mute, from the other side of the panel.
+
+          `view.voice.muted` is read live rather than copied into state, and
+          that is the whole reason it works: the mute is set from the header's
+          button, this panel does not re-mount when that happens, and a local
+          copy seeded on open would go on showing "not muted" over a muted app.
+          The stored value is already in the prop, so the honest control is the
+          one that reads it.
+
+          It is here because a user who opens Settings to make her speak, finds
+          the switch already on, and presses Save, would otherwise be left
+          exactly as silent as before with the panel looking like it had agreed.
+          The store clears the mute when the switch MOVES — that is what makes
+          pressing Save safe — and this is the case where the switch does not
+          move, so the sentence and the way out have to be here.
+
+          Keyed on `muted` alone and not on the switch, which a review put right:
+          a mute left set while the preference is off is unreachable through the
+          interface but perfectly possible in a hand-edited file, and offering
+          the way out of it costs one word where guessing costs the user a
+          silent assistant with no explanation anywhere.
+        */}
+        {view.voice.muted ? (
+          <>
+            <StatusLine tone="info">
+              {speakReplies
+                ? "Muted — the sentence in progress was stopped and nothing new is being read. That is the speaker button in the header; this switch is untouched, so unmuting gives you back exactly this setting."
+                : "Muted, though replies are not being read aloud anyway — nothing was going to be said either way. Clearing it costs nothing and leaves one less thing to explain later."}
+            </StatusLine>
+            <Actions>
+              <Button
+                onClick={() => void onSave({ voice: { muted: false } })}
+                disabled={saving}
+              >
+                Unmute now
+              </Button>
+            </Actions>
+          </>
+        ) : null}
 
         {speakReplies ? (
           <StatusLine tone="info">

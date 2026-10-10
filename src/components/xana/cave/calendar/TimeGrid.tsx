@@ -121,8 +121,29 @@ export default function TimeGrid({
           inside the horizontal one, so a week on a phone scrolls sideways as one
           piece and the day names never leave their columns. */}
       <div className="min-h-0 flex-1 overflow-x-auto">
+        {/* WHY THE WIDTH IS A MINIMUM PER DAY RATHER THAN A MINIMUM FOR THE ROW
+
+            This was `min-w-[560px]` for a seven-day week, which is a row that is
+            560px wide whatever the screen is — so on a 390px phone the columns
+            were squeezed to 71px each *and* four of them sat past the right edge
+            behind a horizontal scroll nothing announced. The day the user cared
+            about was technically present and practically invisible.
+
+            A minimum per column instead: `--cal-day-min` is 132px, so a week is
+            7x132 + the 64px gutter = 988px and scrolls sideways on a phone while
+            each day keeps a width that can hold a time and a title. On a wide
+            window the row is narrower than its container, `flex-1` takes over,
+            and nothing about the desktop week changes. The side effect is the
+            good one: measured at 390x844, a phone now shows three whole days at
+            a readable size, which is what every phone calendar does, rather than
+            seven unreadable slivers. */}
         <div
-          className={`flex h-full flex-col ${days.length > 1 ? "min-w-[560px]" : ""}`}
+          className="flex h-full flex-col"
+          style={
+            days.length > 1
+              ? ({ "--cal-day-min": "132px" } as React.CSSProperties)
+              : undefined
+          }
         >
           {/* A flex row, not the month's seven-column grid: the day view draws
               one column beside a 56px gutter, and a 7-track grid would leave
@@ -139,6 +160,12 @@ export default function TimeGrid({
                   type="button"
                   data-column-head={day}
                   aria-current={isToday ? "date" : undefined}
+                  /* The same minimum the body's columns carry (`--cal-day-min`),
+                     so a day name never drifts off the column it names. The head
+                     rows are buttons rather than `.cal-column` divs — they open
+                     the day view — so the rule is repeated here through the same
+                     custom property rather than through a shared class. */
+                  style={{ minWidth: "var(--cal-day-min, 0)" }}
                   className="flex flex-1 items-baseline justify-center gap-1.5 py-1.5 transition-colors duration-[var(--t-fast)]"
                   onClick={() => actions.openDay(day)}
                 >

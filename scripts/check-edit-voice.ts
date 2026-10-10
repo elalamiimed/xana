@@ -38,7 +38,7 @@ writeFileSync(path.join(DATA_DIR, "settings.json"), "{}\n", { encoding: "utf8", 
 const { getStore, closeStore } = await import("../src/lib/core/store");
 const { buildLifeState, invalidateContext } = await import("../src/lib/context/gateway");
 const { localMind } = await import("../src/lib/mind/local");
-const { actionRule, claimsAChange, guardUnmadeClaim, looksLikeChangeRequest, NOTHING_CHANGED } =
+const { actionRule, claimsAChange, deniesAnActionThatRan, guardUnmadeClaim, looksLikeChangeRequest, NOTHING_CHANGED } =
   await import("../src/lib/mind/claims");
 
 /* ------------------------------------------------------------------ */
@@ -241,6 +241,153 @@ await group("The rule the model reads", () => {
   check("and forbids the claim", /Never say or imply that you added/.test(none));
   check("with an action it limits the claim to it", /Describe it and nothing more/.test(some));
   check("the two are different", none !== some);
+});
+
+/* ------------------------------------------------------------------ */
+/* The noun decides where a thing goes                                 */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The reported bug, and the rule that answers it.
+ *
+ * The user said "add tomorrow breakfast to my calendar from 10-10:30 and gym
+ * from 10:30 to 11:30 Am and shower from 11:30 to 12:30" and was told "the
+ * action isn't firing". Nothing was broken mechanically — the sentence simply
+ * matched no intent, because `handleEvent` recognised scheduling *verbs* and
+ * never looked at the word "calendar" in it. The model, asked to voice a turn
+ * with no action behind it, invented an explanation, which is the same class of
+ * failure `claims.ts` exists for.
+ *
+ * The rule is the one the user stated: the noun they name decides the
+ * destination. "to my calendar" books an event; "to my tasks" makes a task.
+ */
+const destinationOf = async (text: string) => {
+  const lifeState = await buildLifeState({ force: true });
+  const result = localMind({ text, lifeState });
+  const effect = (result?.outcome as { effect?: string } | undefined)?.effect ?? "";
+  return {
+    where: effect.startsWith("event") ? "calendar" : effect.startsWith("task") || effect.startsWith("reminder") ? "task" : "nothing",
+    effect,
+    ids: (result?.outcome as { ids?: string[] } | undefined)?.ids?.length ?? 0,
+    text: result?.text ?? "",
+  };
+};
+
+await group("The noun the user named decides the destination", async () => {
+  const calendar = await destinationOf("add breakfast to my calendar tomorrow at 10");
+  check("to my calendar books an event", calendar.where === "calendar", JSON.stringify(calendar));
+
+  const tasks = await destinationOf("add buy milk to my tasks");
+  check("to my tasks makes a task", tasks.where === "task", JSON.stringify(tasks));
+
+  const appointment = await destinationOf("add the dentist appointment to my tasks");
+  check("even a word that sounds like a meeting obeys the named destination", appointment.where === "task", JSON.stringify(appointment));
+
+  const asked = await destinationOf("what is on my calendar today");
+  check("asking about the calendar does not book anything", asked.where === "nothing", JSON.stringify(asked));
+});
+
+await group("A booking verb on its own is still a task", async () => {
+  // The comment above `handleEvent` has always claimed this, and the code never
+  // did it: "book the flights" fell through every handler to "I didn't follow
+  // that." A rule in a comment that the code does not implement is worse than
+  // no rule, because the next person reads it and believes it.
+  const flights = await destinationOf("book the flights");
+  check("book the flights is a task", flights.where === "task", JSON.stringify(flights));
+
+  const meeting = await destinationOf("book a meeting with Sam thursday at 2");
+  check("but book a meeting is an event", meeting.where === "calendar", JSON.stringify(meeting));
+});
+
+await group("One sentence can book the whole morning", async () => {
+  // The store already holds a "breakfast" from the case above, so the entries
+  // this group checks are the ones that did not exist before it ran.
+  const before = new Set(
+    store.eventsBetween("2026-01-01T00:00:00.000Z", "2027-12-31T00:00:00.000Z").map((event) => event.id),
+  );
+
+  const reported = await destinationOf(
+    "add tomorrow breakfast to my calendar from 10-10:30 and gym from 10:30 to 11:30 Am and shower from 11:30 to 12:30",
+  );
+  check("the reported sentence creates events", reported.where === "calendar", JSON.stringify(reported));
+  check("three of them, not one", reported.ids === 3, `ids=${reported.ids}`);
+  check("and it says how many", /3/.test(reported.text), reported.text);
+
+  const drawn = store
+    .eventsBetween("2026-01-01T00:00:00.000Z", "2027-12-31T00:00:00.000Z")
+    .filter((event) => !before.has(event.id));
+
+  const minutes = (event: { start: string; end: string }) =>
+    (new Date(event.end).getTime() - new Date(event.start).getTime()) / 60_000;
+  const named = (title: string) => drawn.find((event) => event.title === title);
+
+  check("exactly the three it named", drawn.length === 3, drawn.map((event) => event.title).join(", "));
+  const breakfast = named("breakfast");
+  const gym = named("gym");
+  const shower = named("shower");
+  check("breakfast keeps its half hour", breakfast ? minutes(breakfast) === 30 : false, breakfast ? `${minutes(breakfast)}m` : "missing");
+  check("the gym keeps its hour", gym ? minutes(gym) === 60 : false, gym ? `${minutes(gym)}m` : "missing");
+  check("the shower keeps its hour", shower ? minutes(shower) === 60 : false, shower ? `${minutes(shower)}m` : "missing");
+  check("and 10-10:30 was read as ten o'clock", breakfast ? new Date(breakfast.start).getHours() === 10 : false, breakfast ? String(new Date(breakfast.start).getHours()) : "missing");
+});
+
+/**
+ * The same morning, written as a list with no conjunctions at all.
+ *
+ * The user's second report — "add the following to my calendar for tomorrow
+ * breakfast 10-10:30 am gym 10:30 to 11:30 shower 11:30 to 12:30" — beat the
+ * first version of the splitter twice over: "the following" was carried into
+ * the title, and the items were separated by nothing but spaces, so only the
+ * first range was seen and one event was booked with a title made of the whole
+ * line. Both shapes are asserted here because both are how people write.
+ */
+await group("And when it is a list with no conjunctions", async () => {
+  const before = new Set(
+    store.eventsBetween("2026-01-01T00:00:00.000Z", "2027-12-31T00:00:00.000Z").map((event) => event.id),
+  );
+
+  const listed = await destinationOf(
+    "add the following to my calendar for tomorrow breakfast 10-10:30 am gym 10:30 to 11:30 shower 11:30 to 12:30",
+  );
+  check("the list also creates events", listed.where === "calendar", JSON.stringify(listed));
+  check("all three of them", listed.ids === 3, `ids=${listed.ids}`);
+
+  const drawn = store
+    .eventsBetween("2026-01-01T00:00:00.000Z", "2027-12-31T00:00:00.000Z")
+    .filter((event) => !before.has(event.id));
+  const titles = drawn.map((event) => event.title).sort();
+  check("with the three names and nothing else", titles.join("|") === "breakfast|gym|shower", titles.join("|"));
+
+  const startMinutes = (event: { start: string }) => {
+    const when = new Date(event.start);
+    return when.getHours() * 60 + when.getMinutes();
+  };
+  const starts = drawn.map(startMinutes).sort((a, b) => a - b);
+  check("starting at ten, half ten and half eleven", starts.join("|") === "600|630|690", starts.join("|"));
+});
+
+await group("A denial of something that did happen", async () => {
+  /*
+   * The mirror of the guard above, and a real reply.
+   *
+   * The user asked for three calendar entries and got "That one landed wrong.
+   * The parser read your whole line as a single event title … and booked it as
+   * one block. It's not three entries." One event *had* been created, so the
+   * denial was false and the explanation was invented — a model cannot see a
+   * parser, only the ACTION RESULT it is handed.
+   */
+  const real =
+    'That one landed wrong. The parser read your whole line as a single event title - "following for breakfast gym 10:30 to 11:30 shower 11:30 to 12:30" - and booked it as one block at 10:00 AM. It\'s not three entries.';
+  check("the real reply is recognised", deniesAnActionThatRan(real));
+  check("and the short form too", deniesAnActionThatRan("That didn't go through - nothing was added."));
+  check("nothing was created is a denial", deniesAnActionThatRan("Nothing was created. No event."));
+  check("no events were created is a denial", deniesAnActionThatRan("No events were created."));
+
+  // It must not fire on a reply that describes a *partial* success honestly -
+  // the point is to stop the false denial, not to silence every caveat.
+  check("a description of what happened is left alone", !deniesAnActionThatRan("Booked 3 entries for tomorrow."));
+  check("and so is a statement about an empty day", !deniesAnActionThatRan("Nothing is scheduled at two, so your afternoon is clear."));
+  check("and a clarification about a title", !deniesAnActionThatRan('The title came through as "brkfst", so say the word and I will retitle it.'));
 });
 
 /* ------------------------------------------------------------------ */

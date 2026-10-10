@@ -1097,31 +1097,77 @@ async function main() {
       time: "10:00",
       minutes: 30,
     });
-    if (shortSeed.event) created.push(shortSeed.event.id);
+    /**
+     * `api()` nests the answer under `body`, and this line used to read the
+     * record off the wrapper.
+     *
+     * `shortSeed.event` is `undefined` — the record is at `shortSeed.body.event` —
+     * so the id pushed into `created` was `undefined` and the lookup below it
+     * resolved to nothing. It went unnoticed because the lookup then fell back to
+     * "the first block with 30 minutes", which found *a* block and let the section
+     * run; the cleanup swept by title, so the row was still removed. Now that the
+     * seed is addressed by id there is no fallback left to hide it, which is how
+     * a test's own typo surfaced as a product-looking failure about dragging.
+     */
+    const shortSeedId = shortSeed.body?.event?.id ?? "";
+    if (shortSeedId) created.push(shortSeedId);
     // The room reads a window once and keeps it, so a row written straight to
     // the database is not on the grid until the window itself changes. Switching
     // to the day view is that change, and it is also the view this block wants:
     // one 326px column rather than seven 46px ones.
     await cdp.eval(`[...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Day')?.click()`);
-    await sleep(1100);
 
-    const shortBlock = await cdp.eval(`(() => {
-      const block = [...document.querySelectorAll('[data-column] [data-event]')].find((node) => node.dataset.minutes === '30');
-      if (!block) return null;
-      block.scrollIntoView({ block: 'center' });
-      const box = block.getBoundingClientRect();
-      const x = Math.round(box.left + box.width / 2), y = Math.round(box.top + box.height / 2);
-      const hit = document.elementFromPoint(x, y);
-      return {
-        id: block.dataset.event,
-        start: block.dataset.start,
-        height: Math.round(box.height),
-        handles: block.querySelectorAll('.cal-grip').length,
-        onBody: Boolean(hit && hit.closest('.cal-block') === block),
-        x,
-        y,
-      };
-    })()`);
+    /**
+     * Wait for the seeded block to actually be on the grid, by its own id.
+     *
+     * A fixed sleep is not enough, and this was measured rather than guessed: the
+     * section used to seed a row, sleep, then look the block up by *id* with a
+     * `??` fallback to "the first 30-minute block on the grid". Whenever the seed
+     * had not rendered yet — which is what a real half-hour entry of the user's
+     * own on the same day makes likely, because the day view then has several
+     * candidates — the fallback quietly selected somebody else's event. The
+     * section then dragged *that* block, compared its start against the seed's,
+     * and reported "a finger on its body moves it" as a failure while the same
+     * gesture against the same node succeeded in isolation.
+     *
+     * There is no fallback now. The seed's id is the only acceptable block, and
+     * a seed that never appears fails here, by name, instead of twenty lines
+     * later as a mystery about dragging.
+     */
+    let shortBlock = null;
+    for (let attempt = 0; attempt < 30; attempt++) {
+      const seen = await cdp.eval(`(() => {
+        const block = document.querySelector('[data-event="${shortSeedId}"]');
+        if (!block) return null;
+        block.scrollIntoView({ block: 'center' });
+        const box = block.getBoundingClientRect();
+        const x = Math.round(box.left + box.width / 2);
+        const y = Math.round(box.top + box.height / 2);
+        const hit = document.elementFromPoint(x, y);
+        return {
+          id: block.dataset.event,
+          start: block.dataset.start,
+          height: Math.round(box.height),
+          handles: block.querySelectorAll('.cal-grip').length,
+          onBody: Boolean(hit && hit.closest('.cal-block') === block),
+          x,
+          y,
+        };
+      })()`);
+      // Kept only when it is a real reading. The loop used to assign
+      // unconditionally, so a final poll that happened to land in a render gap
+      // wiped a perfectly good measurement and reported the block as missing.
+      if (seen) {
+        shortBlock = seen;
+        break;
+      }
+      await sleep(120);
+    }
+    check(
+      "the seeded block is on the grid under its own id",
+      shortBlock?.id === shortSeedId && shortSeedId !== "",
+      `wanted ${shortSeedId || "(no seed id returned)"}, got ${shortBlock?.id ?? "nothing"}`,
+    );
     check("a 30-minute block is drawn at 390px", shortBlock !== null, JSON.stringify(shortBlock));
     check(
       "it has no resize handle anywhere on it",
@@ -1134,10 +1180,44 @@ async function main() {
     );
 
     if (shortBlock) {
-      await cdp.touch("touchStart", [{ x: shortBlock.x, y: shortBlock.y }]);
+      /**
+       * The press is aimed at the block's *current* box, re-read immediately
+       * before the finger lands.
+       *
+       * The box measured above is already stale by the time this runs: an earlier
+       * section swipes the grid vertically, which scrolls it, and a 30-minute
+       * block is 22px tall in a 44px hour — so a scroll of a few dozen pixels is
+       * enough to put the finger on the column beside it. Measuring at the moment
+       * of the press is the whole fix, and the check below still refuses to run
+       * if the point it computes is not over the block it means.
+       */
+      const aim = await cdp.eval(`(() => {
+        const block = document.querySelector('[data-event="${shortBlock.id}"]');
+        if (!block) return null;
+        block.scrollIntoView({ block: 'center' });
+        const box = block.getBoundingClientRect();
+        const x = Math.round(box.left + box.width / 2);
+        const y = Math.round(box.top + box.height / 2);
+        const hit = document.elementFromPoint(x, y);
+        return {
+          x,
+          y,
+          start: block.dataset.start,
+          onBody: Boolean(hit && hit.closest('.cal-block') === block),
+          height: Math.round(box.height),
+        };
+      })()`);
+      check(
+        "the finger lands on the block's own body at the moment of the press",
+        aim?.onBody === true,
+        JSON.stringify(aim),
+      );
+      shortBlock.start = aim?.start ?? shortBlock.start;
+
+      await cdp.touch("touchStart", [{ x: aim.x, y: aim.y }]);
       await sleep(300);
       for (let step = 1; step <= 6; step++) {
-        await cdp.touch("touchMove", [{ x: shortBlock.x, y: shortBlock.y + step * 8 }]);
+        await cdp.touch("touchMove", [{ x: aim.x, y: aim.y + step * 8 }]);
         await sleep(18);
       }
       await cdp.touch("touchEnd", []);
@@ -1149,12 +1229,29 @@ async function main() {
       const lifted = Date.now();
       await sleep(250);
 
-      const onGrid = await cdp.eval(`document.querySelector('[data-event="${shortBlock.id}"]')?.dataset.start ?? null`);
+      /**
+       * The grid is polled for its new start rather than read once.
+       *
+       * The drop is optimistic, but the *attribute* is not: `data-start` is
+       * written by React when it next renders the block, and one render is a
+       * frame behind the drop. The single read that used to be here took the
+       * pre-drop value whenever that frame had not happened yet, and the check
+       * below then reported the block had not moved on a run where it plainly
+       * had — reproduced against a block the finger moved from 14:00 to 15:00
+       * while this line still said 14:00. Polling is the fix; the timeout is
+       * only a backstop.
+       */
+      let onGrid = null;
+      for (let attempt = 0; attempt < 25; attempt++) {
+        onGrid = await cdp.eval(`document.querySelector('[data-event="${shortBlock.id}"]')?.dataset.start ?? null`);
+        if (onGrid !== null && onGrid !== shortBlock.start) break;
+        await sleep(60);
+      }
       const settled = await settledStart(shortBlock.id, shortSeedDay, onGrid, lifted);
       check(
         "a finger on its body moves it, which it could not do before",
         onGrid !== null && onGrid !== shortBlock.start,
-        `${shortBlock.start} -> ${onGrid}`,
+        `${shortBlock.start} -> ${onGrid} (after ${Date.now() - lifted}ms)`,
       );
       check(
         "and the clock the server kept agrees with the grid",
@@ -1163,6 +1260,227 @@ async function main() {
       );
       console.log(`  note  the drop was in the database within ${settled.waited}ms of the finger lifting`);
     }
+
+    /* ---------------- the swipe ---------------- */
+
+    section("Turning the page with a finger, at 390x844");
+
+    /**
+     * The reported bug, as a person experiences it.
+     *
+     * "I cannot see tomorrow in the week since it is a Monday." The week was
+     * drawn as seven columns inside a row pinned to `min-w-[560px]`, so on a
+     * 390px screen each column measured 71px — and the run that established that
+     * number also found the days past the fold sitting behind a horizontal scroll
+     * nothing announced. Two things had to be true for this to be fixed, and both
+     * are measured below: the columns have to be readable, and the week has to be
+     * reachable by pushing it.
+     */
+    /**
+     * Back to the week, with a real press.
+     *
+     * The drag above ended by swallowing the next click on the page in the
+     * capture phase for 350ms — `swallowNextClick` doing its job on the click a
+     * browser synthesises after a drop — and a programmatic `click()` here is
+     * that next click, so it was eaten and the room stayed in the day view. The
+     * wait below then gave up quietly and the whole swipe section ran against a
+     * one-column grid. Waiting the window out and pressing through the browser is
+     * what the neighbouring sections already do for the same reason.
+     */
+    await sleep(450);
+    const weekChip = await cdp.eval(`(() => {
+      const chip = [...document.querySelectorAll('button')].find((node) => node.textContent.trim() === 'Week');
+      if (!chip) return null;
+      const box = chip.getBoundingClientRect();
+      return { x: Math.round(box.left + box.width / 2), y: Math.round(box.top + box.height / 2) };
+    })()`);
+    check("the Week chip is on screen to press", weekChip !== null, JSON.stringify(weekChip));
+    if (weekChip) {
+      await cdp.mouse("mousePressed", weekChip.x, weekChip.y);
+      await cdp.mouse("mouseReleased", weekChip.x, weekChip.y);
+    }
+    for (let attempt = 0; attempt < 30; attempt++) {
+      if ((await cdp.eval(`document.querySelector('[data-calendar]')?.dataset.view`)) === "week") break;
+      await sleep(100);
+    }
+
+    const readWeek = () =>
+      cdp.eval(`(() => {
+        const room = document.querySelector('[data-calendar]');
+        const columns = [...document.querySelectorAll('[data-column]')];
+        const scroller = document.querySelector('.cal-time')?.parentElement;
+        const first = columns[0];
+        return {
+          view: room?.dataset.view,
+          anchor: room?.dataset.anchor,
+          window: room?.dataset.window,
+          days: columns.map((node) => node.dataset.column),
+          width: first ? Math.round(first.getBoundingClientRect().width) : 0,
+          height: first ? Math.round(first.getBoundingClientRect().height) : 0,
+          stage: Boolean(document.querySelector('.cal-stage')),
+          // How many columns are inside the window rather than past its right edge.
+          onScreen: columns.filter((node) => {
+            const box = node.getBoundingClientRect();
+            return box.right > 2 && box.left < innerWidth - 2;
+          }).length,
+          scrollable: scroller ? scroller.scrollWidth - scroller.clientWidth : 0,
+        };
+      })()`);
+
+    const week = await readWeek();
+    check("the week is drawn again", week.view === "week", JSON.stringify(week.view));
+    check("with all seven days present", week.days.length === 7, JSON.stringify(week.days));
+    await cdp.shot("calendar-phone-week");
+
+    /**
+     * Readability, which is the half of the bug that a swipe alone would not fix.
+     *
+     * The old layout gave each column 71px, measured — narrower than the clock
+     * reading it has to print. The floor is asserted rather than the exact number
+     * so a future tweak to `--cal-day-min` is not a test failure, while a return
+     * to "seven slivers" is.
+     */
+    check(
+      "each day is wide enough to read a time in",
+      week.width >= 100,
+      `${week.width}px per day (was 71px when seven were squeezed into 560px)`,
+    );
+    check(
+      "and the week is a page-turn surface",
+      week.stage === true,
+      JSON.stringify({ stage: week.stage }),
+    );
+    console.log(
+      `  note  the phone week: ${week.width}px per day, ${week.onScreen} of 7 columns on screen, ${week.scrollable}px of sideways scroll`,
+    );
+
+    // The exact thing the report was about: is tomorrow one of the days on
+    // screen, or is it hidden past the edge?
+    const tomorrow = await cdp.eval(`(() => {
+      const room = document.querySelector('[data-calendar]');
+      const today = room.dataset.anchor;
+      const columns = [...document.querySelectorAll('[data-column]')];
+      const tomorrowKey = columns.find((node) => node.dataset.column > today)?.dataset.column ?? '';
+      const node = columns.find((n) => n.dataset.column === tomorrowKey);
+      if (!node) return null;
+      const box = node.getBoundingClientRect();
+      return {
+        day: tomorrowKey,
+        left: Math.round(box.left),
+        right: Math.round(box.right),
+        visible: box.left < innerWidth - 2 && box.right > 2,
+        fullyVisible: box.left >= -1 && box.right <= innerWidth + 1,
+      };
+    })()`);
+    check("tomorrow is a real column in this week", Boolean(tomorrow?.day), JSON.stringify(tomorrow));
+    check(
+      "and it is on screen without scrolling sideways",
+      tomorrow?.visible === true,
+      JSON.stringify(tomorrow),
+    );
+
+    /**
+     * The swipe itself, as a finger performs it — a real `Input.dispatchTouchEvent`
+     * sequence, not a synthesised `pointerdown`, because the whole gesture is a
+     * question about what the *browser* does with a horizontal touch on a surface
+     * that is `touch-action: pan-y`.
+     *
+     * A swipe to the left means "the next week". The anchor is the app's own
+     * `data-anchor`, so this asserts what the calendar believes rather than what
+     * a title string says.
+     */
+    const swipeAcross = async (fromX, toX, y, steps = 8) => {
+      await cdp.touch("touchStart", [{ x: fromX, y }]);
+      for (let step = 1; step <= steps; step++) {
+        const t = step / steps;
+        await cdp.touch("touchMove", [{ x: fromX + (toX - fromX) * t, y }]);
+        await sleep(12);
+      }
+      await cdp.touch("touchEnd", []);
+    };
+
+    const swipePoint = await cdp.eval(`(() => {
+      const stage = document.querySelector('.cal-stage');
+      if (!stage) return null;
+      const box = stage.getBoundingClientRect();
+      // Two thirds down the grid: inside the surface, and below the all-day lane
+      // and the column heads, which are the two things that answer a press
+      // themselves.
+      return { y: Math.round(box.top + box.height * 0.7), mid: Math.round(innerWidth / 2) };
+    })()`);
+    check("a swipe has somewhere to start", swipePoint !== null, JSON.stringify(swipePoint));
+
+    const beforeSwipe = await readWeek();
+    await swipeAcross(swipePoint.mid + 90, swipePoint.mid - 90, swipePoint.y);
+    await sleep(900);
+    const afterSwipe = await readWeek();
+
+    check(
+      "a leftward swipe moves to the next week",
+      afterSwipe.anchor !== beforeSwipe.anchor,
+      `${beforeSwipe.anchor} -> ${afterSwipe.anchor}`,
+    );
+    check(
+      "and it is exactly one week forward, not a month or a day",
+      afterSwipe.window ===
+        `${shiftDay(String(beforeSwipe.window).split("..")[0], 7)}..${shiftDay(String(beforeSwipe.window).split("..")[1], 7)}`,
+      `${beforeSwipe.window} -> ${afterSwipe.window}`,
+    );
+    await cdp.shot("calendar-phone-swiped");
+
+    // And back, which is the assertion that catches a one-way implementation.
+    //
+    // The swipe surface and the point are re-read rather than reused: a page turn
+    // re-renders the grid for a different week, and a point measured against the
+    // old layout is a finger landing somewhere that no longer exists. The wait is
+    // longer than the turn's own animation by a wide margin, so a swipe that is
+    // dropped because the previous one is still running cannot be mistaken for a
+    // swipe that does not work.
+    await sleep(500);
+    const backPoint = await cdp.eval(`(() => {
+      const stage = document.querySelector('.cal-stage');
+      if (!stage) return null;
+      const box = stage.getBoundingClientRect();
+      return { y: Math.round(box.top + box.height * 0.7), mid: Math.round(innerWidth / 2) };
+    })()`);
+    await swipeAcross(backPoint.mid - 90, backPoint.mid + 90, backPoint.y);
+    await sleep(900);
+    const backAgain = await readWeek();
+    check(
+      "a rightward swipe returns to the week it came from",
+      backAgain.anchor === beforeSwipe.anchor,
+      `${afterSwipe.anchor} -> ${backAgain.anchor}, wanted ${beforeSwipe.anchor}`,
+    );
+
+    /**
+     * A vertical swipe must still scroll.
+     *
+     * This is the trade the whole gesture design rests on: the day columns are 24
+     * hours tall and scrolling them is the commonest thing a finger does here. A
+     * page turn that stole a vertical drag would make the grid unscrollable on a
+     * phone, which is a worse bug than the one being fixed.
+     */
+    const scrollBefore = await cdp.eval(`document.querySelector('[data-time-scroll]')?.scrollTop ?? -1`);
+    await cdp.touch("touchStart", [{ x: swipePoint.mid, y: swipePoint.y }]);
+    for (let step = 1; step <= 6; step++) {
+      await cdp.touch("touchMove", [{ x: swipePoint.mid, y: swipePoint.y - step * 18 }]);
+      await sleep(14);
+    }
+    await cdp.touch("touchEnd", []);
+    await sleep(600);
+    const scrollAfter = await cdp.eval(`document.querySelector('[data-time-scroll]')?.scrollTop ?? -1`);
+    const afterVertical = await readWeek();
+    check(
+      "an upward swipe still scrolls the day",
+      scrollAfter !== scrollBefore && scrollAfter > scrollBefore,
+      `${scrollBefore} -> ${scrollAfter}`,
+    );
+    check(
+      "and it did not also turn the page",
+      afterVertical.anchor === beforeSwipe.anchor,
+      `${afterVertical.anchor} vs ${beforeSwipe.anchor}`,
+    );
+
 
     // The month, where the audit counted 44 controls under 24px in one axis.
     //

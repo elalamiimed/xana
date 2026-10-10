@@ -54,6 +54,7 @@ const { runCaveOperation } = await import("../src/lib/cave/ops");
 const zone = await import("../src/lib/core/zone");
 const geometry = await import("../src/lib/calendar/geometry");
 const pointerDrag = await import("../src/components/xana/cave/calendar/pointerDrag");
+const swipe = await import("../src/components/xana/cave/calendar/useSwipePage");
 
 /* ------------------------------------------------------------------ */
 /* Harness                                                             */
@@ -1131,9 +1132,184 @@ group("The calendar's shared module stays client safe", () => {
 });
 
 /* ------------------------------------------------------------------ */
+/* What a phrase says the entry's length is                            */
+/* ------------------------------------------------------------------ */
 
-closeStore();
-rmSync(DATA_DIR, { recursive: true, force: true });
+/**
+ * A stated range is the length, and it used to be thrown away.
+ *
+ * The calendar stores a start and an end, and the only thing a person says
+ * about the end is a range: "10:00 to 10:30". The parser read the first time
+ * and discarded the second, so every entry took the caller's default hour —
+ * "breakfast 10:00 to 10:30" was stored as 10:00 to 11:00, and a half-hour
+ * breakfast quietly became an hour on the grid. Nothing looks broken about
+ * that, which is why it needs an assertion rather than an eye.
+ */
+await groupAsync("A range states the length", async () => {
+  const nlp = await import("../src/lib/core/nlp");
+  const at = (date: Date | undefined) =>
+    date ? `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}` : "—";
+
+  const cases: [string, string, string, string][] = [
+    // phrase, start, end, title
+    ["breakfast tomorrow 10:00 to 10:30", "10:00", "10:30", "breakfast"],
+    ["gym tomorrow from 10:30 to 11:30 am", "10:30", "11:30", "gym"],
+    ["shower tomorrow 11:30 to 12:30", "11:30", "12:30", "shower"],
+    ["lunch tomorrow 12:00-13:00", "12:00", "13:00", "lunch"],
+    ["meeting friday 9am to 10am", "09:00", "10:00", "meeting"],
+    ["brunch sunday 11 to 12:30", "11:00", "12:30", "brunch"],
+    // The reported sentence's own shape: a bare hour on the left of a dash.
+    ["add tomorrow breakfast to my calendar from 10-10:30", "10:00", "10:30", "add breakfast to my calendar"],
+  ];
+
+  for (const [phrase, wantStart, wantEnd, wantTitle] of cases) {
+    const when = nlp.parseWhen(phrase);
+    check(`"${phrase}" has a start`, at(when?.date) === wantStart, `${at(when?.date)} wanted ${wantStart}`);
+    check(`"${phrase}" has an end`, at(when?.end) === wantEnd, `${at(when?.end)} wanted ${wantEnd}`);
+    const title = when ? nlp.stripWhen(phrase, when.matched) : "";
+    check(`"${phrase}" leaves the title`, title === wantTitle, `"${title}" wanted "${wantTitle}"`);
+  }
+
+  // A range that reads backwards is refused rather than wrapped through
+  // midnight: "10 to 9" is a parse failure, not an eleven-hour booking.
+  const backwards = nlp.parseWhen("review tomorrow 10 to 9");
+  check("a backwards range is not treated as overnight", backwards?.end === undefined, at(backwards?.end));
+
+  // A single time still has no end, so a duration or the default can apply.
+  const single = nlp.parseWhen("standup tomorrow at 9:15");
+  check("a single time states no end", single?.end === undefined, at(single?.end));
+  check("and it is still a clock time", single?.hasTime === true);
+
+  // A bare numeral is not a time, and must not become one by accident.
+  const notATime = nlp.parseWhen("review 5 PRs tomorrow");
+  check("a bare numeral in a title is not a clock time", notATime?.hasTime === false, String(notATime?.hasTime));
+});
+
+/*
+ * Turning the page with a finger.
+ *
+ * The decision function is pure and exported for exactly this reason: the
+ * thresholds *are* the behaviour, and a gesture recogniser whose edges are only
+ * ever found by a person using it is one whose edges are wrong for a year
+ * before anyone says so. Everything below is a fixed dx/dy/time, so these
+ * assertions are the same numbers on every machine.
+ *
+ * A note on the signs, because they are the easiest thing here to get backwards:
+ * `dx` is the finger's travel and the returned step is the *content's*, so a
+ * finger moving right (positive dx) returns `-1` — the previous period arrives
+ * from the left. A test written the other way round passes while the calendar
+ * pages backwards, which is why the direction is asserted both ways below.
+ */
+group("A swipe decides which way the page turns", () => {
+  const WIDE = 390;
+  const DESKTOP = 1440;
+
+  // 22% of 390 is 85.8, and the floor is 48.
+  const phone = swipe.thresholdFor(WIDE);
+  check("a phone asks for a fifth of its width", Math.round(phone) === 86, String(phone));
+  check("a swipe is never a hair-trigger", swipe.thresholdFor(120) === 48, String(swipe.thresholdFor(120)));
+
+  /*
+   * The cap, which a probe of the real function found rather than a reading of
+   * it: the share alone asks for 316px at 1440px, so a touchscreen laptop would
+   * have had to drag a third of the window to change week. A hand does not get
+   * longer because the screen did.
+   */
+  check("and a wide window does not ask for a longer arm", swipe.thresholdFor(DESKTOP) === 160, String(swipe.thresholdFor(DESKTOP)));
+
+  // A deliberate drag, past the distance.
+  check("a finger dragged right turns back a period", swipe.pageStep(120, 0, 600, WIDE) === -1);
+  check("a finger dragged left turns forward one", swipe.pageStep(-120, 0, 600, WIDE) === 1);
+
+  // A flick, which is short but fast — the case the distance test alone misses.
+  check("a quick short flick still turns the page", swipe.pageStep(-30, 0, 40, WIDE) === 1, String(swipe.pageStep(-30, 0, 40, WIDE)));
+  check("and a quick flick the other way turns it back", swipe.pageStep(30, 0, 40, WIDE) === -1);
+
+  // Scrolling wins the vertical axis outright: a day is 24 hours tall.
+  check("a mostly vertical move is a scroll, not a page turn", swipe.pageStep(20, 90, 200, WIDE) === null);
+  check("and a diagonal drag that is mostly down is still a scroll", swipe.pageStep(40, 120, 300, WIDE) === null);
+
+  // A tap is a tap: the grid's own "put something here" must survive.
+  check("a tap turns nothing", swipe.pageStep(2, 0, 100, WIDE) === null);
+  check("and neither does a press that never moved", swipe.pageStep(0, 0, 400, WIDE) === null);
+
+  /*
+   * The time limit, which is the difference between a swipe and a drag that
+   * happens to be sideways. Somebody slowly repositioning something across a
+   * week is not asking for next week, and at 120px it would otherwise pass the
+   * distance test.
+   */
+  check("a slow crawl across the grid is not a page turn", swipe.pageStep(120, 0, 900, WIDE) === null);
+  check("but the same distance quickly is", swipe.pageStep(120, 0, 400, WIDE) === -1);
+
+  // Below the distance floor and too slow to flick: nothing.
+  check("a short slow nudge turns nothing", swipe.pageStep(40, 0, 500, WIDE) === null);
+
+  // An explicit distance wins, which is what the option is for.
+  check("an explicit distance overrides the share", swipe.thresholdFor(WIDE, 200) === 200);
+  check("and it is honoured by the decision", swipe.pageStep(120, 0, 600, WIDE, 200) === null);
+
+  // A nonsense width must not become a nonsense threshold.
+  check("a zero width falls back rather than dividing by nothing", swipe.thresholdFor(0) === 120, String(swipe.thresholdFor(0)));
+  check("and so does a NaN", swipe.thresholdFor(Number.NaN) === 120, String(swipe.thresholdFor(Number.NaN)));
+});
+
+/*
+ * The page turn must survive a finger that lifted without asking for one, and
+ * must never leave the grid nudged sideways.
+ *
+ * This is the contract `pointerDrag` spells out and this hook had to be written
+ * to as well: any preview drawn during a gesture is taken down on *every* path
+ * out of it. Asserted here as the totality of the ending rather than by driving
+ * the DOM, because what can go wrong is a path that reaches neither branch.
+ */
+group("A swipe ends exactly once, on every path", () => {
+  const source = readFileSync(
+    path.join(process.cwd(), "src/components/xana/cave/calendar/useSwipePage.ts"),
+    "utf8",
+  );
+
+  check(
+    "the gesture is marked finished before anything else can run",
+    /if \(finished\) return;\s*\n\s*finished = true;/.test(source),
+  );
+  check(
+    "every ending funnels through one release",
+    (source.match(/release\(/g) ?? []).length >= 4,
+    String((source.match(/release\(/g) ?? []).length),
+  );
+  check("a cancelled pointer is an ending, not silence", /pointercancel/.test(source));
+  check("a lost window focus is an ending too", /addEventListener\("blur"/.test(source));
+
+  /*
+   * The interrupt that matters most: a block drag arms on a hold and captures the
+   * pointer, so this listener stops hearing `pointermove` while the `pointerup`
+   * still arrives. Without the capture test, dragging a block sideways would also
+   * turn the page underneath it — the block moved *and* the grid changed, from
+   * one gesture.
+   */
+  check("a block that captured the pointer silences the swipe", /capturedByABlock/.test(source));
+  check("and the test asks about capture, not about what is under the finger", /hasPointerCapture/.test(source));
+
+  // Reduced motion is honoured in the path that does the work, not only in CSS,
+  // because the page-turn delay is a timer and no media query can reach a timer.
+  check("the OS's reduced-motion setting is read for the turn", /prefers-reduced-motion/.test(source));
+  check("and with it the page turns without travel", /duration > 0/.test(source));
+});
+
+/*
+ * A failed cleanup must not be reported as a failed suite.
+ *
+ * On Windows the store still holds the SQLite file's handle for a moment after
+ * `closeStore()`, and a sandbox can refuse the delete outright, so this threw
+ * EPERM *after* every assertion had run and exited 1 on a green suite. The temp
+ * directory is disposable; the verdict is not its business.
+ */
+try {
+  rmSync(DATA_DIR, { recursive: true, force: true });
+} catch {
+  /* the OS will collect it */
+}
 
 console.log(`\n${passed} passed, ${failed} failed\n`);
 process.exit(failed === 0 ? 0 : 1);

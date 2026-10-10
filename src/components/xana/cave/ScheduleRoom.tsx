@@ -69,6 +69,7 @@ import MonthGrid from "./calendar/MonthGrid";
 import TimeGrid from "./calendar/TimeGrid";
 import { useCalendarWindow, withRecord, withoutRecord } from "./calendar/useCalendarWindow";
 import { useMonthDrag } from "./calendar/useMonthDrag";
+import { useSwipePage } from "./calendar/useSwipePage";
 import { useTimeGridDrag } from "./calendar/useTimeGridDrag";
 import type {
   AnchorBox,
@@ -105,6 +106,15 @@ export default function ScheduleRoom({ controller }: ScheduleRoomProps) {
 
   const viewRef = useRef<HTMLDivElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  /**
+   * The element a swipe slides.
+   *
+   * A wrapper *inside* the room rather than the room itself: the room's own box
+   * also holds the header, the quick-add line and the note, and sliding those
+   * would move the controls the page turn is being asked for. This is the grid
+   * and nothing else, which is also exactly what changes when the period does.
+   */
+  const stageRef = useRef<HTMLDivElement | null>(null);
 
   const data = useCalendarWindow(controller, view, anchor);
   const events = data.events;
@@ -297,6 +307,28 @@ export default function ScheduleRoom({ controller }: ScheduleRoomProps) {
     onMove: move,
     onResize: resize,
     onCreate: createFromDrag,
+  });
+
+  /**
+   * Turning the page with a finger.
+   *
+   * The direction is the content's, not the finger's: `pageStep` returns `1` for
+   * "the next period arrives", which is a finger moving left. Both go through
+   * `shiftAnchor`, which is the same function the header's chevrons call — a page
+   * turn and a chevron must never be able to disagree about what "next week" is,
+   * and the only way to guarantee that is for there to be one implementation of
+   * it.
+   */
+  const swipe = useSwipePage({
+    surfaceRef: viewRef,
+    slideRef: stageRef,
+    onPage: useCallback(
+      (step: -1 | 1) => setAnchor((current) => shiftAnchor(view, current, step)),
+      [view],
+    ),
+    // A form on screen owns the gesture, and a page turn under a drag would move
+    // the grid the user is dropping into.
+    enabled: open === null,
   });
 
   /* ---------------- the editor's two endings ---------------- */
@@ -513,34 +545,47 @@ export default function ScheduleRoom({ controller }: ScheduleRoomProps) {
       </form>
 
       {/* ---------------- the grid ---------------- */}
-      <div ref={viewRef} className="min-h-0 flex-1 px-2 py-3 sm:px-6">
-        {view === "month" ? (
-          <MonthGrid
-            days={days}
-            anchor={anchor}
-            today={today}
-            events={events}
-            actions={actions}
-            drag={monthDrag}
-            canEdit={canEdit}
-            onOpenDay={openDay}
-            landed={landed}
-          />
-        ) : (
-          <TimeGrid
-            days={days}
-            today={today}
-            events={events}
-            hourHeight={hourHeight}
-            scrollRef={scrollRef}
-            drag={gridDrag}
-            allDayDrag={monthDrag}
-            actions={actions}
-            canEdit={canEdit}
-            landed={landed}
-            coarse={coarse}
-          />
-        )}
+      {/* The swipe surface is the whole room, so a finger that lands on the
+          header or the quick-add line can turn the page too — that is what a
+          person expects of a sheet they are pushing sideways, and the alternative
+          (only the grid responds) makes the gesture work in some places and not
+          others for no reason anyone can see. A control that wants the press for
+          itself stops it before it gets here, which the chevrons, the chips and
+          the quick-add field all already do. */}
+      <div
+        ref={viewRef}
+        className="min-h-0 flex-1 px-2 py-3 sm:px-6"
+        onPointerDown={swipe.onPointerDown}
+      >
+        <div ref={stageRef} className="cal-stage flex h-full flex-col">
+          {view === "month" ? (
+            <MonthGrid
+              days={days}
+              anchor={anchor}
+              today={today}
+              events={events}
+              actions={actions}
+              drag={monthDrag}
+              canEdit={canEdit}
+              onOpenDay={openDay}
+              landed={landed}
+            />
+          ) : (
+            <TimeGrid
+              days={days}
+              today={today}
+              events={events}
+              hourHeight={hourHeight}
+              scrollRef={scrollRef}
+              drag={gridDrag}
+              allDayDrag={monthDrag}
+              actions={actions}
+              canEdit={canEdit}
+              landed={landed}
+              coarse={coarse}
+            />
+          )}
+        </div>
       </div>
 
       {/* ---------------- what the room says about itself ---------------- */}

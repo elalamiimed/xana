@@ -120,9 +120,9 @@ export function useSettings(): SettingsController {
    * The earlier version waited for the panel, on the reasoning that a user who
    * never opens Settings should not pay for the request. That reasoning was wrong
    * about what this hook is for: it is called once, by the shell, and its answer
-   * is not only for the panel. `speakReplies`, `voiceName`, `wakeEnabled`,
-   * `wakePhrases` and `transcribe` decide what the app DOES, before Settings has
-   * ever been on screen.
+   * is not only for the panel. `speakReplies`, `voiceName`, `muted`,
+   * `wakeEnabled`, `wakePhrases` and `transcribe` decide what the app DOES,
+   * before Settings has ever been on screen.
    *
    * What that cost, concretely: a fresh page ran on the defaults, so
    * always-listening stayed off and replies stayed silent even with both switched

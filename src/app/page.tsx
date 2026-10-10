@@ -92,7 +92,45 @@ export default function Page() {
    * reply out loud.
    */
   const spokenRef = useRef<string | null>(null);
-  const { speakReplies, voiceName, rate, pitch, wakeEnabled, wakePhrases, transcribe, speechLang, pauseMs } = shell.voice;
+  const { speakReplies, muted, voiceName, rate, pitch, wakeEnabled, wakePhrases, transcribe, speechLang, pauseMs } = shell.voice;
+
+  /**
+   * Mute, as the speaking effect has to read it: synchronously.
+   *
+   * A reply can land between the press and the re-render that carries the new
+   * setting — the request is a round trip and the message is a fetch — and the
+   * effect below decides whether to speak from what it reads at that instant.
+   * State would still be the old value, so the reply the user just asked to
+   * silence would be read out anyway, which is the whole complaint. A ref is
+   * updated by the press itself, so there is no window at all.
+   *
+   * It is also kept in step with the stored value, so a mute that arrives any
+   * other way — the panel's own Unmute, or a settings change from somewhere
+   * else in this page — is honoured here. What this specifically does NOT do is
+   * cross tabs: nothing in this app watches the settings file, so a second tab
+   * that was already open when the first one muted will go on speaking. That is
+   * a property of the whole settings surface rather than of the mute, and
+   * claiming otherwise in a comment would be the kind of thing that gets
+   * believed.
+   */
+  const mutedRef = useRef(muted);
+  useEffect(() => {
+    mutedRef.current = muted;
+  }, [muted]);
+
+  /**
+   * Whether this browser can speak, asked after mount.
+   *
+   * Read in an effect rather than during render because `speechSynthesis` is
+   * not in Node, and a header that rendered the mute button on the server and
+   * not in the browser would be a hydration mismatch. Used for exactly one
+   * decision — whether to draw the control — so the button is never a control
+   * that cannot do anything.
+   */
+  const [speechReady, setSpeechReady] = useState(false);
+  useEffect(() => {
+    setSpeechReady(speechSynthesisAvailable());
+  }, []);
 
   /**
    * Whether she is speaking right now.
@@ -107,9 +145,27 @@ export default function Page() {
 
   useEffect(() => {
     const latest = latestXana;
-    if (!latest || !speakReplies || !speechSynthesisAvailable()) return;
+    if (!latest || !speakReplies) return;
+
+    /**
+     * The reply is CLAIMED before the mute is consulted.
+     *
+     * That order is the whole point and it was wrong in the first version. The
+     * claim is what stops a sentence being said twice, and returning above it
+     * left a muted reply still "unspoken" — so the next re-run of this effect
+     * for any reason would read it out. There is such a re-run: the deps include
+     * the voice, rate and pitch, and changing any of them in the panel re-runs
+     * this with the same `latest`. Muted, text her, then adjust the speed, and
+     * she would read the text you had already silenced, seconds later, with the
+     * mute showing in the header.
+     *
+     * A muted reply is *done*: written, not spoken, never to be spoken. That is
+     * what `spokenRef` means — this reply has been dealt with.
+     */
     if (spokenRef.current === latest.id) return;
     spokenRef.current = latest.id;
+
+    if (mutedRef.current || !speechSynthesisAvailable()) return;
 
     const line = speakable(latest.text);
     if (!line) return;
@@ -125,6 +181,37 @@ export default function Page() {
     const started = speak(line, { voiceName, rate, pitch, onDone: () => setSpeaking(false) });
     setSpeaking(started);
   }, [latestXana, speakReplies, voiceName, rate, pitch]);
+
+  /**
+   * Silence her, or let her speak again.
+   *
+   * Three things happen on one press, and the order is the part that matters:
+   *
+   *   1. The ref is written first, so a reply that lands mid-fetch is already
+   *      covered. Nothing between here and the store can let one through.
+   *   2. `speaking` is cleared with it, and not merely because the sentence
+   *      stopped. Always-listening holds the microphone shut for exactly as long
+   *      as she is talking (see the wake listener's `paused`), so a mute that
+   *      left this true would leave the microphone closed until she happened to
+   *      speak again — a control that silences her and deafens her at once.
+   *      Chromium does not reliably fire `onend` for a cancellation, so this
+   *      cannot be left to the utterance's own callback.
+   *   3. The setting is written, so the mute survives the next page load. It is
+   *      deliberately not awaited: the reply is silenced already, and a control
+   *      that waited on the network would be a mute with a pause in it.
+   *
+   * Unmuting goes through the same path. There is nothing to resume — the
+   * sentence that was cancelled is gone, and hearing it start again from the
+   * top, seconds later, would be worse than losing it — so the next reply is
+   * the first thing said aloud.
+   */
+  const toggleMuted = useCallback(() => {
+    const next = !mutedRef.current;
+    mutedRef.current = next;
+    stopSpeaking();
+    setSpeaking(false);
+    void shell.controller.save({ voice: { muted: next } });
+  }, [shell.controller]);
 
   /**
    * Hands-free: answer to her name without a button press.
@@ -208,6 +295,10 @@ export default function Page() {
         presence={presence}
         onOpenSettings={shell.openSettings}
         onOpenCave={shell.openCave}
+        speakReplies={speakReplies}
+        muted={muted}
+        speechReady={speechReady}
+        onToggleMuted={toggleMuted}
       />
 
       <main
@@ -229,7 +320,14 @@ export default function Page() {
               // Tapping her stops a sentence, or opens settings when she is
               // quiet. Two behaviours on one control, chosen by what the
               // user most likely wants at that moment.
-              if (speakReplies && speechSynthesisAvailable()) {
+              //
+              // A mute counts as quiet. While she is muted there is usually
+              // nothing playing, and the first version of this fell through to
+              // the stop branch anyway — so the one control a person taps when
+              // she is being too loud did nothing at all, in the state they had
+              // just put her in. It opens the place her voice is configured now,
+              // which is also where "Unmute now" is.
+              if (speakReplies && !muted && speechSynthesisAvailable()) {
                 stopSpeaking();
                 // `stopSpeaking` cancels the utterance, and Chromium does not
                 // reliably fire `onend` for a cancellation. Without this the

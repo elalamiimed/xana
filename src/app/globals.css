@@ -1488,6 +1488,21 @@ body {
   --cal-hour: 56px;
 }
 
+/* The box a swipe slides.
+   `touch-action: pan-y` is the whole reason a page turn and a scroll can share
+   one finger: the browser keeps the vertical pan (a day column is 24 hours tall
+   and scrolling it is the commonest thing anyone does here) and hands this
+   element the horizontal one, which no native behaviour claims. Without it the
+   page turn would fight the scroller and win about half the time.
+
+   `will-change` is deliberately absent: a promoted layer left on permanently
+   costs memory on every screen for a gesture that lasts 300ms, and the engine
+   sets it for the length of the swipe instead (`useSwipePage`). */
+.cal-stage {
+  touch-action: pan-y;
+  transform: translate3d(0, 0, 0);
+}
+
 @media (max-width: 767px) {
   .cal-time {
     --cal-hour: 44px;
@@ -1525,10 +1540,19 @@ body {
 
 /* A day column. `pan-y` and not `none`: a swipe down a column has to scroll
    the grid on a phone, which is why the drag gestures arm on a short hold
-   before they take the pointer (`useTimeGridDrag`). */
+   before they take the pointer (`useTimeGridDrag`).
+
+   `min-width` from `--cal-day-min` is what stops a seven-day week on a phone
+   being seven slivers: the tracks are `flex-1`, so they grow to fill a wide
+   window (desktop is unchanged) but never shrink past a width that can hold a
+   clock reading and a title. Past that the week scrolls sideways, which is the
+   honest answer — the alternative, tried first, was a fixed `min-w-[560px]` on
+   the row, which both squeezed the columns to 71px and pushed four days past the
+   right edge behind a scroll nothing announced. */
 .cal-column {
   position: relative;
   border-left: 1px solid var(--hairline);
+  min-width: var(--cal-day-min, 0);
   touch-action: pan-y;
 }
 

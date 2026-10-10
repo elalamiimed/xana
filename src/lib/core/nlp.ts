@@ -21,6 +21,16 @@ export interface ParsedTime {
   hasTime: boolean;
   /** 0..1 — how confident the parse is. */
   confidence: number;
+  /**
+   * The clock an *end* was stated for, when the phrase gave a range.
+   *
+   * "10:00 to 10:30" names two o'clock times and the second one is the end, not
+   * a second start. Before this existed the end was thrown away and every entry
+   * got the caller's default length, so "gym from 10 to 10:30" was stored as an
+   * hour. `end` is resolved against the same day as `date`, and only set when
+   * the phrase really stated a range.
+   */
+  end?: Date;
 }
 
 const WEEKDAYS: Record<string, number> = {
@@ -189,6 +199,123 @@ export function parseWhen(input: string, now: Date = new Date()): ParsedTime | u
   let clockHour: number | undefined;
   let clockMinute = 0;
   let clockMatched = "";
+
+  /**
+   * A stated range, matched *before* the single clock so its end is available.
+   *
+   * Three shapes people write:
+   *
+   *   "10:00 to 10:30"   two colon times around a separator
+   *   "10 to 10:30"      a bare hour on the left, which "10-10:30" also is
+   *   "10:30 to 11:30 am" the meridiem trailing the whole range
+   *
+   * The bare-hour form needs its own pattern: `10-10:30` is not read as a clock
+   * at all by the rules below, because a bare numeral counts as an hour only
+   * when something marks it as one. Inside a range, the separator is that mark —
+   * "from 10-10:30" is a time, where "review 10-10:30" was never going to be
+   * anything else either.
+   *
+   * The end is only taken when it is *after* the start within a plausible
+   * morning/afternoon window; "11:30 to 12:30" keeps its meridiem, and a range
+   * that runs backwards ("10 to 9") is left alone rather than wrapped.
+   */
+  const range =
+    /\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s*(?:-|–|—|to|until|till)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/.exec(text) ??
+    /\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s*(?:-|–|—|to|until|till)\s*(\d{1,2})(?::(\d{2}))?\b/.exec(text) ??
+    /\b(\d{1,2})(?::(\d{2}))?\s*(?:-|–|—|to|until|till)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/.exec(text) ??
+    /\b(\d{1,2}):(\d{2})\s*(?:-|–|—|to|until|till)\s*(\d{1,2}):(\d{2})\b/.exec(text) ??
+    /\b(\d{1,2})\s*(?:-|–|—|to|until|till)\s*(\d{1,2}):(\d{2})\b/.exec(text);
+
+  /**
+   * Minutes past midnight for an hour/minute pair, honouring a meridiem.
+   *
+   * A half of a range with no meridiem of its own borrows the other half's —
+   * which is why the caller passes one meridiem for both ends. With none at all
+   * ("10-10:30"), an hour in the 1..7 band is read as the afternoon, because a
+   * range written without am/pm is a working-day range, and nobody means 3am.
+   */
+  const asMinutes = (hour: number, minute: number, meridiem?: string): number | undefined => {
+    let h = hour;
+    const mer = meridiem?.replace(/\./g, "");
+    if (mer?.startsWith("p") && h < 12) h += 12;
+    if (mer?.startsWith("a") && h === 12) h = 0;
+    if (!mer && h >= 1 && h <= 7) h += 12;
+    if (h > 24 || minute > 59) return undefined;
+    return (h % 24) * 60 + minute;
+  };
+
+  /**
+   * Split a range match into its two clock times.
+   *
+   * Reading groups by shape rather than by position is the whole job here, and
+   * getting it wrong is silent. `"9am to 10am"` yields **six** groups —
+   * `["9", undefined, "am", "10", undefined, "am"]` — and the first version of
+   * this filtered the undefineds out and mapped the rest to numbers, giving
+   * `[9, 10, 10]`: the second meridiem became the *minute* of the end time, the
+   * end landed before the start, and the whole range was discarded while every
+   * regex in the chain above had matched correctly. The groups are therefore
+   * read in place, with the optional minute kept optional.
+   *
+   * The patterns put the two clocks in a fixed order — hour, minute?, meridiem?
+   * twice — so the shape is known even though the group count varies.
+   */
+  const readRange = (match: RegExpExecArray | null): { start: number; end: number } | undefined => {
+    if (!match) return undefined;
+    const parts = match.slice(1);
+
+    /** The first clock in `parts`, as `{ hour, minute, meridiem }`. */
+    const clockAt = (offset: number, kind: "start" | "end") => {
+      if (offset >= parts.length) return undefined;
+      const hour = /^\d+$/.test(parts[offset] ?? "") ? Number(parts[offset]) : undefined;
+      if (hour === undefined) return undefined;
+      const minute = /^\d+$/.test(parts[offset + 1] ?? "") ? Number(parts[offset + 1]) : 0;
+      const meridiem = /^(am|pm)$/.test(parts[offset + 2] ?? "") ? parts[offset + 2] : undefined;
+      void kind;
+      return { hour, minute, meridiem };
+    };
+
+    /*
+     * Which of the patterns matched decides where the second clock starts.
+     *
+     * The five patterns have group counts of 6, 5, 5, 4 and 3, and only the
+     * first two carry a meridiem *before* the separator. Rather than guess, the
+     * index of the separator is found: everything before it is the first clock,
+     * everything after is the second.
+     */
+    const flat = match[0].toLowerCase();
+    const separator = /(?:-|–|—|\bto\b|\buntil\b|\btill\b)/i.exec(flat);
+    const head = separator ? flat.slice(0, separator.index) : flat;
+    const tail = separator ? flat.slice(separator.index + separator[0].length) : "";
+
+    const read = (chunk: string) => {
+      const m = /^\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/.exec(chunk);
+      if (!m) return undefined;
+      return { hour: Number(m[1]), minute: m[2] ? Number(m[2]) : 0, meridiem: m[3] };
+    };
+
+    const from = read(head);
+    const to = read(tail);
+    if (!from || !to) return undefined;
+
+    // A meridiem written on either half applies to both: "9am to 10" and
+    // "10 to 11:30 am" both mean a morning, not a morning and an evening.
+    const meridiem = from.meridiem ?? to.meridiem;
+    const start = asMinutes(from.hour, from.minute, from.meridiem ?? meridiem);
+    const end = asMinutes(to.hour, to.minute, to.meridiem ?? meridiem);
+    if (start === undefined || end === undefined || end <= start) return undefined;
+    return { start, end };
+  };
+
+  let rangeEndMinutes: number | undefined;
+  let rangeStartMinutes: number | undefined;
+  let rangeMatched = "";
+  const parsedRange = readRange(range);
+  if (parsedRange) {
+    rangeStartMinutes = parsedRange.start;
+    rangeEndMinutes = parsedRange.end;
+    rangeMatched = range![0].trim();
+  }
+
   if (clock) {
     let hour = Number(clock[1]);
     const minute = clock[2] ? Number(clock[2]) : 0;
@@ -235,12 +362,68 @@ export function parseWhen(input: string, now: Date = new Date()): ParsedTime | u
     withTime.setHours(clockHour, clockMinute, 0, 0);
     // A bare time already past means the next occurrence, not the past.
     if (!dayCandidate && withTime <= now) withTime.setDate(withTime.getDate() + 1);
+
+    /*
+     * A stated range ends when it said it ends.
+     *
+     * The end is built on `withTime`'s own day so the two cannot straddle
+     * midnight by accident, and it is dropped rather than wrapped if it lands
+     * before the start — a range that reads backwards is a parse failure worth
+     * ignoring, not a booking that runs past midnight.
+     */
+    let end: Date | undefined;
+    if (rangeEndMinutes !== undefined) {
+      const candidate = new Date(withTime);
+      candidate.setHours(Math.floor(rangeEndMinutes / 60), rangeEndMinutes % 60, 0, 0);
+      if (candidate > withTime) end = candidate;
+    }
+
+    /*
+     * `matched` is what `stripWhen` removes to leave a title, so it has to hold
+     * every piece of text that expressed the *time* — the day, the clock, and
+     * the rest of a range.
+     *
+     * The clock match alone stops after the first time ("10:00"), which left
+     * "to 10:30" in the title: "breakfast tomorrow 10:00 to 10:30" became
+     * "breakfast to 10:30". The range's own text is included when there is one,
+     * because it is unambiguously part of the time and removing it cannot touch
+     * a word of the title.
+     */
+    const matchedParts = [dayCandidate?.matched, clockMatched, rangeMatched].filter(Boolean);
+
     return {
       date: withTime,
-      matched: [dayCandidate?.matched, clockMatched].filter(Boolean).join(" ").trim(),
+      matched: [...new Set(matchedParts)].join(" ").trim(),
       hasTime: true,
       confidence: dayCandidate ? 0.95 : 0.8,
+      ...(end ? { end } : {}),
     };
+  }
+
+  /*
+   * A range with no single clock at its head: "from 10-10:30".
+   *
+   * The range match above already knows the start; it is only `clockHour` that
+   * never fired, because a bare numeral needs a mark to be read as an hour and
+   * the range's own separator is that mark. Without this branch the phrase fell
+   * through to day-only and the whole clock was lost — which is what happened to
+   * "add tomorrow breakfast from 10-10:30".
+   */
+  if (rangeEndMinutes !== undefined && rangeStartMinutes !== undefined && !clockMatched) {
+    const start = new Date(base);
+    start.setHours(Math.floor(rangeStartMinutes / 60), rangeStartMinutes % 60, 0, 0);
+    if (!dayCandidate && start <= now) start.setDate(start.getDate() + 1);
+    const end = new Date(start);
+    end.setHours(Math.floor(rangeEndMinutes / 60), rangeEndMinutes % 60, 0, 0);
+    if (end > start) {
+      return {
+        date: start,
+        matched: [dayCandidate?.matched, rangeMatched].filter(Boolean).join(" ").trim(),
+        hasTime: true,
+        confidence: dayCandidate ? 0.9 : 0.78,
+        end,
+      };
+    }
   }
 
   if (partHour !== undefined) {
@@ -277,19 +460,62 @@ export function parseDuration(input: string): number | undefined {
   return /^min/i.test(m[2]) ? n : n * 60;
 }
 
-/** Remove a parsed time span from a phrase, tidying the leftovers. */
+/**
+ * Remove a parsed time span from a phrase, tidying the leftovers.
+ *
+ * Two things had to change for the ranges people actually type.
+ *
+ * The first is the order. The span used to be stripped word by word, each word
+ * removed wherever it appeared — so a range like "10:00 to 10:30" removed the
+ * "to" from *anywhere* in the sentence, and "add breakfast to my calendar from
+ * 10-10:30" came out as "add breakfast my calendar from". The span is a
+ * contiguous thing the parser matched, so it is removed as one piece first, and
+ * the word-wise pass is left to collect the pieces that genuinely are scattered
+ * (a day and a clock time separated by other words).
+ *
+ * The second is the separators ranges leave behind: "from", and a dangling
+ * en dash or "-". "gym from 10:30 to 11:30 am" should read "gym", and
+ * "lunch 12:00-13:00" should read "lunch".
+ */
 export function stripWhen(text: string, matched: string): string {
   if (!matched) return text.trim();
+
   let out = text;
-  for (const piece of matched.split(/\s+/).filter(Boolean)) {
-    // Only strip whole words, and only the first occurrence.
-    out = out.replace(new RegExp(`\\b${escapeRegExp(piece)}\\b`, "i"), " ");
+
+  /*
+   * The longest pieces first.
+   *
+   * `matched` is a set of spans, not one string: a day and a clock are usually
+   * separated by the title ("breakfast tomorrow 10:00 to 10:30"), so they are
+   * removed individually. Removing "10:00 to 10:30" before "10:00" matters —
+   * otherwise the shorter piece leaves "to 10:30" behind, which is how a title
+   * came out as "breakfast to".
+   */
+  const pieces = [...new Set([matched, ...matched.split(/\s+/)])]
+    .map((piece) => piece.trim())
+    .filter((piece) => piece.length > 0)
+    .sort((a, b) => b.length - a.length);
+
+  for (const piece of pieces) {
+    out = out.replace(new RegExp(escapeRegExp(piece), "i"), " ");
   }
+
   return out
     .replace(/\s+/g, " ")
     .replace(/\s+([,.!?])/g, "$1")
-    .replace(/^[\s,.\-–—]+|[\s,.\-–—]+$/g, "")
-    .replace(/\b(at|on|by|for|due)\s*$/i, "")
+    /*
+     * The seam a range leaves behind.
+     *
+     * Once the times are gone, what is left is the connective tissue: "from",
+     * a dangling "to", or a bare dash. They are only removed at the *end* of
+     * what remains, so a title containing the word "to" keeps it — the failure
+     * this replaces removed every "to" in the sentence, turning "add breakfast
+     * to my calendar" into "add breakfast my calendar".
+     */
+    .replace(/[\s,\-–—]*(?:\bfrom|\bto|\buntil|\btill|-|–|—)[\s,\-–—]*$/i, " ")
+    .replace(/^[\s,\-–—]+|[\s,\-–—]+$/g, "")
+    .replace(/\b(at|on|by|for|due|from)\s*$/i, "")
+    .replace(/\s+/g, " ")
     .trim();
 }
 

@@ -130,6 +130,10 @@ export const DEFAULT_SETTINGS: XanaSettings = {
   },
   voice: {
     speakReplies: false,
+    // Not muted on a fresh install: there is nothing to interrupt yet, and a
+    // mute that arrives switched on would be a second, invisible reason for
+    // the `speakReplies` switch to do nothing.
+    muted: false,
     voiceName: "",
     rate: 1,
     pitch: 1,
@@ -307,6 +311,7 @@ export function coerceSettings(raw: unknown): XanaSettings {
     },
     voice: {
       speakReplies: bool(voice.speakReplies, false),
+      muted: bool(voice.muted, false),
       voiceName: str(voice.voiceName, "").slice(0, 120),
       rate: num(voice.rate, 1, 0.5, 1.5),
       pitch: num(voice.pitch, 1, 0, 2),
@@ -729,7 +734,42 @@ export function mergePatch(
 
   if (patch.voice) {
     const p = patch.voice;
+    /**
+     * Changing the spoken-replies preference clears the mute.
+     *
+     * A review of the first version of this found the bug it had, and it was
+     * mine: the rule was "a patch with `speakReplies: true` and no `muted` lifts
+     * the mute", which cannot tell *turning the switch on* from *saving
+     * something else while the switch was already on*. The Voice panel always
+     * sends `speakReplies`, so changing the Speed slider — or pressing Save with
+     * nothing changed at all — silently unmuted her, and the panel's own
+     * sentence said the opposite. Reproduced against this store before it was
+     * fixed.
+     *
+     * The rule is a **transition** now: `muted` is cleared when the preference
+     * MOVES, in either direction, and only then.
+     *
+     *   - off -> on  : asking for her voice is the instruction to stop being
+     *                  muted. There is no reading of "read replies aloud" that
+     *                  is satisfied by silence, and without this a user who had
+     *                  muted from the header could turn the switch off and on
+     *                  again and still be met with nothing.
+     *   - on -> off  : a mute is a mute *of the reading*, so with the reading
+     *                  switched off it says nothing and is cleared rather than
+     *                  left lying in the file as a trap for the next time the
+     *                  switch goes on.
+     *   - unchanged  : leave it. This is the case that was broken, and it
+     *                  covers every save from every panel that is not the
+     *                  switch itself.
+     *
+     * An explicit `muted` in the same patch still wins, so a scripted caller
+     * keeps full control rather than being corrected by the store.
+     */
+    const preferenceMoves =
+      typeof p.speakReplies === "boolean" && p.speakReplies !== current.voice.speakReplies;
+    if (preferenceMoves && typeof p.muted !== "boolean") next.voice.muted = false;
     if (typeof p.speakReplies === "boolean") next.voice.speakReplies = p.speakReplies;
+    if (typeof p.muted === "boolean") next.voice.muted = p.muted;
     if (typeof p.voiceName === "string") next.voice.voiceName = p.voiceName.slice(0, 120);
     if (typeof p.rate === "number") next.voice.rate = num(p.rate, current.voice.rate, 0.5, 1.5);
     if (typeof p.pitch === "number") next.voice.pitch = num(p.pitch, current.voice.pitch, 0, 2);
