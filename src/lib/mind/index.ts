@@ -28,7 +28,11 @@ import {
 } from "./llm";
 import { loadSettings } from "../settings/store";
 import { rememberUtterance } from "../derived/memory";
+import { rememberConversation } from "../derived/learning";
 import { finishAction } from "../actions/remote";
+import { runAgentTurn } from "./agent";
+import { composePersona } from "./persona";
+import { stripMarkdown } from "./voice";
 
 export interface ThinkResult {
   message: Message;
@@ -113,6 +117,68 @@ export async function think(
       started,
     );
     store.logMessage("xana", message.text, sessionId, { engine: "local", effect: local.outcome?.effect });
+    await learn(sessionId, text, message.text);
+    return { message, lifeState: refreshed };
+  }
+
+  /**
+   * THE UNMATCHED TURN, which is what the "smarter" pass added.
+   *
+   * Until now, what happened next depended entirely on whether the local engine
+   * had resolved something. If it had, the model phrased the result. If it had
+   * not, the model was asked to phrase *nothing* - handed the local engine's
+   * sentence "I didn't follow that" and forbidden from doing anything about it.
+   *
+   * That is the mechanical cause of the complaint this pass exists for. She
+   * could not hold a conversation, because a conversation is by definition a
+   * turn the intent engine does not resolve; and she could not do anything the
+   * intent engine's patterns did not already cover, which is most of what a
+   * person actually asks an assistant for.
+   *
+   * So an unmatched turn now goes to the agent loop, which may call tools. The
+   * loop runs the same `executeAction` as everything else, behind the same
+   * guard, and with an audit row and an idempotency key. What the model gains is
+   * not the ability to act - it is the ability to ask for one of a closed set of
+   * typed things, each of which was already reachable by typing a sentence.
+   *
+   * A turn that DID resolve something still takes the old path below: the local
+   * engine decided, and the model only gets to say so.
+   */
+  const unmatched = !local.outcome && !local.cards?.length;
+  if (unmatched) {
+    const agent = await runAgentTurn({
+      text,
+      lifeState: refreshed,
+      sessionId,
+      modality: request.modality,
+    });
+
+    /**
+     * `engine` stays `"llm"` when a model answered, and that is deliberate
+     * rather than an oversight: it is the field the UI and the settings screen
+     * use to mean "a model produced these words", and the agent loop is a model
+     * producing words. The distinction that matters for debugging is on the
+     * action log, where the source is recorded per write.
+     */
+    const guarded = guardUnmadeClaim(agent.text, { text, acted: Boolean(agent.outcome?.ok) });
+    const message: Message = {
+      ...toMessage(local, "llm", started),
+      text: guarded.text.trim() || local.text,
+      ...(agent.cards?.length ? { cards: agent.cards } : {}),
+      ...(agent.outcome ? { outcome: agent.outcome } : {}),
+    };
+
+    if (guarded.replaced) {
+      console.warn(`[xana] model claimed a change that did not happen; replaced with the honest line: ${agent.text.slice(0, 120)}`);
+    }
+    store.logMessage("xana", message.text, sessionId, {
+      engine: "llm",
+      route: "agent",
+      effect: agent.outcome?.effect,
+      tools: agent.toolCalls.length ? agent.toolCalls.map((c) => c.name).join(",") : undefined,
+      ...(guarded.replaced ? { guarded: "unmade-claim" } : {}),
+    });
+    await learn(sessionId, text, message.text);
     return { message, lifeState: refreshed };
   }
 
@@ -138,6 +204,7 @@ export async function think(
       effect: local.outcome?.effect,
       ...(guarded.replaced ? { guarded: "unmade-claim" } : {}),
     });
+    await learn(sessionId, text, message.text);
     return { message, lifeState: refreshed };
   } catch (err) {
     /**
@@ -163,7 +230,29 @@ export async function think(
       `I lost the connection to my own head for a moment. ${fallbackNotice(err)}`;
     message.modelError = reason;
     store.logMessage("xana", message.text, sessionId, { engine: "local-fallback" });
+    await learn(sessionId, text, message.text);
     return { message, lifeState: refreshed };
+  }
+}
+
+/**
+ * Learn what the turn was worth keeping.
+ *
+ * Called at the end of each path, once both sides of the exchange exist, because
+ * extraction reads the *pair*: "the landlord wants an answer by the 20th" is only
+ * a fact in the context of what she said back, and a fact that contradicts her
+ * own reply is one the extractor should be able to see.
+ *
+ * `rememberUtterance` has already run earlier in the turn and covers the offline
+ * patterns. This is the model half, and it is strictly additive: it returns
+ * without a model, swallows its own failures, and never changes the reply. A
+ * turn that cannot learn anything is a turn that works exactly as before.
+ */
+async function learn(sessionId: string, userText: string, xanaText: string): Promise<void> {
+  try {
+    await rememberConversation({ userText, xanaText }, { store: getStore(), sessionId });
+  } catch {
+    // Best-effort. A memory write must never cost the user their answer.
   }
 }
 
@@ -242,7 +331,15 @@ async function briefingWithAnalysis(state: LifeState): Promise<Message["cards"]>
  *  lands on the next message rather than the next restart. */
 function buildSystemPrompt(): string {
   const settings = loadSettings();
-  const parts = [systemPrompt()];
+  /**
+   * The two-tier persona, not the raw stored string.
+   *
+   * `composePersona` keeps the fixed honesty floor and lets a user-written
+   * persona replace only the guidelines tier. Before it existed, the box in
+   * Settings held the whole document, so rewriting the voice and deleting the
+   * rule that stops her claiming work she did not do were the same edit.
+   */
+  const parts = [composePersona(settings.voice.persona)];
 
   const name = settings.identity.name.trim();
   if (name) {
@@ -268,137 +365,16 @@ function buildSystemPrompt(): string {
   return parts.join("\n\n");
 }
 
-/** Render the life state compactly. Token budget matters more than completeness. */
-export function renderLifeState(state: LifeState): string {
-  const lines: string[] = [];
-
-  lines.push(`NOW: ${state.generatedAt} (${state.partOfDay}). ${state.headline}`);
-
-  if (state.calendar.today.length > 0) {
-    lines.push("CALENDAR TODAY:");
-    for (const e of state.calendar.today.slice(0, 8)) {
-      const time = e.allDay ? "all day" : clock(e.start);
-      lines.push(`  ${time} ${e.title}${e.location ? ` @ ${e.location}` : ""}${e.attendees?.length ? ` with ${e.attendees.join(", ")}` : ""}`);
-    }
-    lines.push(`  free: ${Math.round(state.calendar.freeMinutes)}m`);
-  } else {
-    lines.push("CALENDAR TODAY: clear");
-  }
-
-  if (state.calendar.next) {
-    lines.push(`NEXT: ${state.calendar.next.title} at ${clock(state.calendar.next.start)}`);
-  }
-
-  lines.push(`TASKS: ${state.tasks.openCount} open, ${state.tasks.completedThisWeek} done this week`);
-  if (state.tasks.overdue.length) {
-    lines.push(`  overdue: ${state.tasks.overdue.slice(0, 4).map((t) => t.title).join("; ")}`);
-  }
-  if (state.tasks.focus.length) {
-    lines.push("  focus order:");
-    for (const t of state.tasks.focus.slice(0, 5)) {
-      lines.push(`    - ${t.title}${t.due ? ` (due ${day(t.due)})` : ""}${t.project ? ` [${t.project}]` : ""}`);
-    }
-  }
-
-  lines.push(`ENERGY: ${state.energy.score}/100 (${state.energy.band}). ${state.energy.note}`);
-
-  if (state.habits.length) {
-    lines.push(
-      `HABITS: ${state.habits.map((h) => `${h.name} ${h.thisWeek}/${h.targetPerWeek}${h.atRisk ? " AT RISK" : ""}${h.streak > 1 ? ` (${h.streak}d streak)` : ""}`).join("; ")}`,
-    );
-  }
-
-  if (state.goals.length) {
-    lines.push("GOALS:");
-    for (const { goal, progress } of state.goals.slice(0, 6)) {
-      lines.push(
-        `  - ${goal.title} (${goal.horizon}) ${Math.round(progress.progress * 100)}% ${progress.pace}${progress.daysRemaining !== undefined ? `, ${progress.daysRemaining}d left` : ""}`,
-      );
-    }
-  }
-
-  const h = state.health;
-  const healthBits: string[] = [];
-  if (h.latest?.sleepHours !== undefined) healthBits.push(`last night ${h.latest.sleepHours.toFixed(1)}h sleep`);
-  if (h.sleepAvgHours !== undefined) healthBits.push(`7d avg ${h.sleepAvgHours.toFixed(1)}h`);
-  if (h.sleepDebtHours > 1) healthBits.push(`${h.sleepDebtHours.toFixed(1)}h debt`);
-  if (h.latest?.steps !== undefined) healthBits.push(`${h.latest.steps} steps`);
-  if (h.latest?.mood) healthBits.push(`mood ${h.latest.mood}`);
-  if (healthBits.length) lines.push(`HEALTH: ${healthBits.join(", ")}`);
-
-  if (state.weather && !state.weather.synthetic) {
-    lines.push(
-      `WEATHER: ${state.weather.temperatureC}°C ${state.weather.condition} in ${state.weather.location}, high ${state.weather.highC}° low ${state.weather.lowC}°`,
-    );
-  }
-
-  if (state.media?.nowPlaying) {
-    lines.push(`PLAYING: ${state.media.nowPlaying}${state.media.artist ? ` — ${state.media.artist}` : ""}`);
-  }
-
-  if (state.finance.length) {
-    lines.push(`MARKETS: ${state.finance.map((f) => `${f.label} ${f.value}`).join("; ")}`);
-  }
-
-  if (state.mail.length) {
-    lines.push(`MAIL: ${state.mail.map((m) => `"${m.subject}" from ${m.from}${m.needsReply ? " (needs reply)" : ""}`).join("; ")}`);
-  }
-
-  if (state.patterns.length) {
-    lines.push("PATTERNS (things you noticed, with evidence):");
-    for (const p of state.patterns.slice(0, 3)) {
-      lines.push(
-        `  - ${p.observation} [${Math.round(p.confidence * 100)}% — ${p.basis}; evidence: ${p.evidence.join("; ")}]`,
-      );
-    }
-  }
-
-  if (state.nudges.length) {
-    lines.push(`PENDING NUDGES: ${state.nudges.map((n) => `(${n.tone}) ${n.text}`).join(" | ")}`);
-  }
-
-  /**
-   * Recalled memories, split by *why* each one is here.
-   *
-   * The distinction is not cosmetic. A pinned memory was surfaced because the
-   * user marked it as important, and it may be entirely unrelated to the
-   * question asked — the spare key is under the blue pot, whatever you asked.
-   * A matched memory is here because it is relevant. Presenting them in one
-   * undifferentiated list invites a model to treat the pinned block as
-   * context for the current question, and to answer a question about budgets
-   * with a sentence about a key.
-   */
-  if (state.memory.length) {
-    const pinned = state.memory.filter((m) => m.memory.pinned);
-    const matched = state.memory.filter((m) => !m.memory.pinned);
-
-    if (matched.length) {
-      lines.push("RECALLED MEMORIES (matched to this conversation):");
-      for (const m of matched.slice(0, 5)) {
-        lines.push(`  - [${m.memory.kind}] ${m.memory.title}: ${m.memory.content.slice(0, 200)}`);
-      }
-    }
-    if (pinned.length) {
-      lines.push(
-        "STANDING FACTS (the user pinned these as always-true; they are background, not an answer to the current question. Never recite them unprompted, and never treat them as relevant just because they are here):",
-      );
-      for (const m of pinned.slice(0, 5)) {
-        lines.push(`  - [${m.memory.kind}] ${m.memory.title}: ${m.memory.content.slice(0, 200)}`);
-      }
-    }
-  }
-
-  return lines.join("\n");
-}
-
-function clock(iso: string): string {
-  const d = new Date(iso);
-  return d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
-}
-
-function day(iso: string): string {
-  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
-}
+/**
+ * Render the life state compactly. Token budget matters more than completeness.
+ *
+ * Moved to `./render` so the agent loop can share it without importing this
+ * module, which imports the agent. Re-exported here because it has always been
+ * part of this module's surface and a caller reaching for it should not have to
+ * learn that it moved.
+ */
+import { renderLifeState } from "./render";
+export { renderLifeState };
 
 /** Recent turns, so she has continuity without the whole transcript. */
 function recentTurns(limit = 8): LlmMessage[] {
@@ -460,17 +436,6 @@ async function speakWithModel(input: SpeakInput): Promise<string> {
 
   const result = await llmComplete(messages, { maxTokens: 400, temperature: 0.7 });
   return stripMarkdown(result.text);
-}
-
-/** The UI renders plain text; markdown syntax reads as noise. */
-function stripMarkdown(text: string): string {
-  return text
-    .replace(/^\s*#{1,6}\s+/gm, "")
-    .replace(/\*\*([^*]+)\*\*/g, "$1")
-    .replace(/(^|\s)\*([^*]+)\*/g, "$1$2")
-    .replace(/^\s*[-*]\s+/gm, "")
-    .replace(/`([^`]+)`/g, "$1")
-    .trim();
 }
 
 /** The greeting on first load — always local, so startup never waits on a model. */

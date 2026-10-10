@@ -64,9 +64,22 @@ export const PROVIDERS: readonly ProviderPreset[] = [
     label: "DeepSeek",
     shape: "openai",
     baseUrl: "https://api.deepseek.com/v1",
-    defaultModel: "deepseek-chat",
-    models: ["deepseek-chat", "deepseek-reasoner"],
-    note: "OpenAI-compatible, very cheap, strong at reasoning. `deepseek-reasoner` thinks before answering and is slower on purpose.",
+    defaultModel: "deepseek-flash",
+    /**
+     * Verified against `GET https://api.deepseek.com/models` on 2026-10-08,
+     * which returned exactly these two.
+     *
+     * `deepseek-chat` and `deepseek-reasoner` were dropped from this list
+     * because the provider retired them on 2026-07-24. They still answer with
+     * HTTP 200 today, which is precisely the danger: a model that keeps working
+     * after it is unlisted is one policy change away from a 404 in somebody's
+     * chat window, and nothing in the UI would have warned them. Both new models
+     * support tool calls and thinking mode; the reasoning behaviour is now a
+     * *mode* on the model rather than a separate model name, so the old
+     * reasoner-versus-chat distinction has no replacement here.
+     */
+    models: ["deepseek-flash", "deepseek-v4-pro"],
+    note: "OpenAI-compatible, very cheap. Both models think before answering by default, take tool calls, and share a 1M-token context. `deepseek-v4-pro` is dearer and slower; the provider's own notes about its future contradict each other, so treat `deepseek-flash` as the one to rely on.",
     hosts: ["api.deepseek.com", "deepseek.com"],
   },
   {
@@ -122,7 +135,7 @@ export const PROVIDERS: readonly ProviderPreset[] = [
     defaultModel: "anthropic/claude-3.5-haiku",
     models: [
       "anthropic/claude-3.5-haiku",
-      "deepseek/deepseek-chat",
+      "deepseek/deepseek-flash",
       "meta-llama/llama-3.3-70b-instruct",
     ],
     note: "One key, most models. Model ids are namespaced with a slash.",

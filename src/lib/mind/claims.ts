@@ -49,6 +49,50 @@ export function actionRule(acted: boolean): string {
 }
 
 /**
+ * A reply that denies an action which DID run.
+ *
+ * The guard below catches a model claiming a change that never happened. This
+ * catches the mirror image, and it is not hypothetical: the user asked for three
+ * calendar entries, one was created with the whole line as its title, and the
+ * reply said *"That one landed wrong. The parser read your whole line as a
+ * single event title … and booked it as one block. It's not three entries."* —
+ * an announcement of failure about a turn that had reached the database, with an
+ * explanation of *why* that the model could not possibly have known.
+ *
+ * A model can only ever see the ACTION RESULT it is given, so a claim about the
+ * mechanism of a failure is always a guess. The rule here is therefore narrow in
+ * one direction only: when an action ran and the reply says nothing happened,
+ * the false part is replaced with what actually happened.
+ *
+ * The alternatives are the phrasings a model reaches for, written from real
+ * replies rather than invented. The first version had `your line was read as`,
+ * which missed the real sentence because "The parser" sits between *read* and
+ * *your* — the check was written from the reply and still managed to paraphrase
+ * it. Each pattern is deliberately loose about the words in the middle and tight
+ * about the shape at the ends.
+ */
+const DENIES_AN_ACTION: RegExp[] = [
+  // "nothing was added", "no events were created", "nothing got saved"
+  /\b(?:nothing|no(?:thing)?)\s+(?:was|has been|had been|got|were)\s+(?:added|created|booked|saved|changed|updated|moved|deleted|removed|done)\b/i,
+  // "no events were created", "no entries were saved"
+  /\bno\s+(?:events?|entries|tasks?|items?)\s+(?:were|was|got)\s+(?:created|added|booked|saved)/i,
+  // "that didn't go through", "it did not work", "that didn't save"
+  /\b(?:did(?:n't| not)\s+(?:go through|work|save|register))\b/i,
+  // "landed wrong", "went wrong", "that one came through wrong"
+  /\b(?:landed|came through|went)\s+wrong\b/i,
+  // "the parser read your whole line as a single event" — loose in the middle
+  /\bread\s+your\s+(?:whole\s+)?(?:line|sentence|message)\s+as\b/i,
+  // "booked it as one block", "saved as a single entry"
+  /\b(?:booked|saved|created|stored)\s+it\s+as\s+(?:one|a single)\b/i,
+  // "it's not three entries", "that is not 3 events"
+  /\b(?:it'?s|that'?s|this is)\s+not\s+(?:one|two|three|four|\d+)\s+(?:entr|event|task|item)/i,
+];
+
+export function deniesAnActionThatRan(reply: string): boolean {
+  return DENIES_AN_ACTION.some((test) => test.test(reply));
+}
+
+/**
  * The check: three conditions together, each one narrow on purpose.
  *
  *   1. no action ran this turn, and

@@ -119,6 +119,32 @@ export class XanaStore {
   private readonly file: string;
   private embedder: Embedder;
 
+  /**
+   * Which embedder is writing vectors, settable after construction.
+   *
+   * A setter rather than a constructor argument at the one call site that
+   * matters, because `getStore()` lives in this module and the embedder
+   * resolver lives in `./embedder` — and importing it here to pass it in would
+   * make this file depend on the settings layer, which already depends on this
+   * one. A setter closes that cycle the same way `afterConfigChange` in
+   * `lib/plugins/automation.ts` does, and for the same reason.
+   *
+   * Every vector written from here on is stamped with `embedder.id` in the
+   * `embedding_model` column, so a later swap can find the rows that need
+   * re-embedding. Without the stamp the swap is silent: a 384-wide vector from
+   * one model compared against a query from another returns a number in the
+   * same range as a real similarity, and recall gets quietly worse instead of
+   * visibly breaking.
+   */
+  setEmbedder(embedder: Embedder): void {
+    this.embedder = embedder;
+  }
+
+  /** The id of the embedder currently writing vectors. */
+  embedderId(): string {
+    return this.embedder.id;
+  }
+
   constructor(filename?: string, embedder: Embedder = localEmbedder) {
     const file = filename ?? defaultDbPath();
     if (file !== ":memory:") mkdirSync(path.dirname(file), { recursive: true });
@@ -300,6 +326,15 @@ export class XanaStore {
       // as a JSON array, where NULL means "this door did not touch meals" and
       // "[]" means "nothing logged today" — a distinction the upsert needs.
       { table: "health_samples", column: "meal_names", definition: "TEXT" },
+      // Which embedder wrote this row's vector.
+      //
+      // Deliberately added BEFORE anything can swap the embedder, because the
+      // failure it prevents is silent: a 384-wide BLOB from one model compared
+      // against a query vector from another returns a number in the same range
+      // as a real similarity, so recall keeps working and quietly gets worse.
+      // NULL means the row predates this column, which can only mean the
+      // original hashing embedder wrote it.
+      { table: "memories", column: "embedding_model", definition: "TEXT" },
     ];
 
     for (const { table, column, definition } of additions) {
@@ -484,7 +519,245 @@ export class XanaStore {
         deleted_at TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_trash_deleted ON trash(deleted_at DESC);
+
+      /*
+       * The action log: an append-only record of every write-back, and the
+       * reason a model is allowed to propose one at all.
+       *
+       * Two jobs, and they are different jobs.
+       *
+       * 1. Evidence. The claim guard used to be told a boolean: "did anything
+       *    happen this turn". That cannot distinguish a turn where the right
+       *    thing happened from one where a different thing did, so a partial
+       *    failure reads as a success. A row per action makes the question "did
+       *    THIS happen", which is the question the user is actually asking when
+       *    they read the reply.
+       *
+       * 2. Idempotency. The idempotency_key column carries a UNIQUE index, so
+       *    the database itself refuses a second write for the same tool call. A
+       *    model that repeats itself in a retry, or a loop that re-sends a
+       *    round trip after a timeout, cannot double-book the calendar. The
+       *    check in executeAction is the fast path; this index is what makes
+       *    the guarantee true rather than merely likely.
+       *
+       * The partial index (WHERE idempotency_key IS NOT NULL) exists because
+       * every locally-resolved write has no key, and SQLite would otherwise
+       * treat all those NULLs as distinct rows to index for no benefit.
+       */
+      CREATE TABLE IF NOT EXISTS action_log (
+        id TEXT PRIMARY KEY,
+        session_id TEXT,
+        source TEXT NOT NULL DEFAULT 'local',
+        tool TEXT NOT NULL,
+        intent TEXT NOT NULL DEFAULT '{}',
+        ok INTEGER NOT NULL DEFAULT 0,
+        effect TEXT NOT NULL DEFAULT '',
+        detail TEXT,
+        idempotency_key TEXT,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_action_log_created ON action_log(created_at DESC);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_action_log_idem
+        ON action_log(idempotency_key) WHERE idempotency_key IS NOT NULL;
+
+      /*
+       * Implementation intentions — the if/then half of a goal.
+       *
+       * A goal says what; this says when and how, which is the part that
+       * actually predicts follow-through. It hangs off a goal rather than
+       * standing alone because an intention with nothing above it is a wish.
+       */
+      CREATE TABLE IF NOT EXISTS intentions (
+        id TEXT PRIMARY KEY,
+        goal_id TEXT NOT NULL,
+        trigger TEXT NOT NULL,
+        action TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_intentions_goal ON intentions(goal_id);
+
+      /*
+       * Rolling conversation summaries, so a long session does not have to be
+       * replayed turn by turn to be remembered. from_seq and to_seq are
+       * conversation row ordinals rather than timestamps: two turns can share a
+       * millisecond, and a summary that covers "the last twenty turns" needs a
+       * boundary that cannot tie.
+       */
+      CREATE TABLE IF NOT EXISTS conversation_summaries (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        from_seq INTEGER NOT NULL,
+        to_seq INTEGER NOT NULL,
+        text TEXT NOT NULL,
+        topics TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_summaries_session
+        ON conversation_summaries(session_id, to_seq DESC);
+
+      /*
+       * What she has already volunteered, and when.
+       *
+       * The daily budget in derived/proactive.ts is only a budget if something
+       * remembers what was spent. Held in memory it would reset on every reload,
+       * which turns "at most three a day" into "at most three per restart" - and
+       * the failure that produces is the one that matters most here: she becomes
+       * a notification stream and the user learns to dismiss her.
+       *
+       * dedupe_key is a hash of the *text*, not the nudge id. The derived layer
+       * mints a fresh id on every rebuild, so keying on id would make every
+       * nudge look new every time the life state was assembled - which is
+       * several times an hour.
+       *
+       * day is a local date string, because the budget is a day and a day here
+       * is Beijing's (see core/zone.ts). A UTC day boundary would hand her a
+       * second budget at 08:00 local.
+       */
+      CREATE TABLE IF NOT EXISTS proactive_log (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        dedupe_key TEXT NOT NULL,
+        text TEXT NOT NULL,
+        utility REAL NOT NULL DEFAULT 0,
+        day TEXT NOT NULL,
+        delivered_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_proactive_day ON proactive_log(day DESC);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_proactive_dedupe
+        ON proactive_log(dedupe_key, day);
+
+      /*
+       * The lexical half of memory recall.
+       *
+       * The recall method has always scored memories by a hashing embedder
+       * blended with a Jaccard overlap and a salience - four numbers on four
+       * different scales added together, so the weights (0.52/0.26/0.14/0.08)
+       * never meant what they looked like they meant. BM25 through FTS5 fixes
+       * the lexical half properly: it is a real ranking function, it is
+       * negative-where-better, and it is rank-compatible with the vector
+       * channel, which is what lets core/fusion.ts combine them without
+       * normalising anything.
+       *
+       * An external-content table rather than a copy, so the text lives once.
+       * The triggers keep it in step with every insert, update and delete that
+       * goes through SQL, including the ones in moveToTrash and restore - which
+       * is the whole reason to use triggers instead of maintaining the index in
+       * application code. A restore that forgot to re-index would make a
+       * recovered memory unfindable, and scripts/check-trash.ts asserts exactly
+       * that a restored memory is findable again.
+       *
+       * FTS5 is compiled into the better-sqlite3 build this project ships
+       * (verified on SQLite 3.53.4). The whole block is wrapped in a try at the
+       * call site, so a build without it degrades to the vector channel rather
+       * than refusing to open the database.
+       */
+      CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+        title, content,
+        content='memories',
+        content_rowid='rowid',
+        tokenize='porter unicode61'
+      );
+      CREATE TRIGGER IF NOT EXISTS memories_fts_ai AFTER INSERT ON memories BEGIN
+        INSERT INTO memories_fts(rowid, title, content) VALUES (new.rowid, new.title, new.content);
+      END;
+      CREATE TRIGGER IF NOT EXISTS memories_fts_ad AFTER DELETE ON memories BEGIN
+        INSERT INTO memories_fts(memories_fts, rowid, title, content)
+          VALUES ('delete', old.rowid, old.title, old.content);
+      END;
+      CREATE TRIGGER IF NOT EXISTS memories_fts_au AFTER UPDATE ON memories BEGIN
+        INSERT INTO memories_fts(memories_fts, rowid, title, content)
+          VALUES ('delete', old.rowid, old.title, old.content);
+        INSERT INTO memories_fts(rowid, title, content) VALUES (new.rowid, new.title, new.content);
+      END;
     `);
+
+    /**
+     * Bring the lexical index up to date with the memories already there.
+     *
+     * The triggers only fire on rows written *after* the index exists. A
+     * database that has been in use for months has hundreds of memories and an
+     * empty index, and every one of them would silently stop matching on the
+     * lexical channel - a regression that looks exactly like "recall got worse"
+     * with no error anywhere.
+     *
+     * A row count against the index is the cheap check, and `rebuild` is the
+     * documented way to repopulate an external-content index from its source
+     * table. It runs once, on the boot that creates the index, and is a single
+     * statement on every boot after that.
+     */
+    try {
+      const memories = (this.db.prepare(`SELECT COUNT(*) AS n FROM memories`).get() as Row).n;
+      const indexed = (this.db.prepare(`SELECT COUNT(*) AS n FROM memories_fts`).get() as Row).n;
+      if (memories !== indexed) {
+        this.db.exec(`INSERT INTO memories_fts(memories_fts) VALUES('rebuild')`);
+      }
+    } catch {
+      // No FTS5 in this build: the vector channel still answers.
+    }
+  }
+
+  /**
+   * Memories matching a query lexically, best first, by BM25.
+   *
+   * `bm25()` returns a **negative** score where more negative is better, which
+   * is why the results are ordered ascending. Callers that fuse this with
+   * another channel should not look at the score at all - `core/fusion.ts` uses
+   * ranks precisely so the two channels never have to agree on a scale.
+   */
+  recallLexical(query: string, limit = 20): Array<{ memory: MemoryRecord; bm25: number }> {
+    const match = toFtsQuery(query);
+    if (!match) return [];
+    try {
+      const rows = this.db
+        .prepare(
+          `SELECT m.*, bm25(memories_fts, 4.0, 1.0) AS rank
+             FROM memories_fts
+             JOIN memories m ON m.rowid = memories_fts.rowid
+            WHERE memories_fts MATCH ? AND m.superseded_by IS NULL
+            ORDER BY rank
+            LIMIT ?`,
+        )
+        .all(match, limit) as Row[];
+      return rows.map((r) => ({ memory: rowToMemory(r), bm25: Number(r.rank) }));
+    } catch {
+      // A malformed MATCH is a query problem, not a data problem: an empty
+      // result lets the vector channel answer instead of failing the turn.
+      return [];
+    }
+  }
+
+  /** True when the lexical index exists and is usable. */
+  hasLexicalIndex(): boolean {
+    try {
+      this.db.prepare(`SELECT COUNT(*) AS n FROM memories_fts`).get();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Embed a query with the store's own embedder.
+   *
+   * Exposed so a caller fusing channels never reaches for a different embedder
+   * than the one that wrote the stored vectors. That mismatch is the failure
+   * this accessor exists to make impossible: two models produce vectors in the
+   * same numeric range, so comparing across them returns a plausible number and
+   * quietly degrades recall instead of breaking it.
+   */
+  embedQuery(text: string): number[] {
+    return this.embedder.embed(text);
+  }
+
+  /** The stored vector for a memory, or undefined if it has none. */
+  vectorOf(id: string): ArrayLike<number> | undefined {
+    const row = this.db.prepare(`SELECT vector FROM memories WHERE id = ?`).get(id) as Row | undefined;
+    if (!row || row.vector === null || row.vector === undefined) return undefined;
+    try {
+      return decodeVector(row.vector as Buffer);
+    } catch {
+      return undefined;
+    }
   }
 
   /* ---------------- the trash ---------------- */
@@ -724,9 +997,9 @@ export class XanaStore {
     this.db
       .prepare(
         `INSERT INTO memories (id, kind, title, content, entities, tags, salience, source,
-           session_id, created_at, access_count, vector)
+           session_id, created_at, access_count, vector, embedding_model)
          VALUES (@id, @kind, @title, @content, @entities, @tags, @salience, @source,
-           @sessionId, @createdAt, 0, @vector)`,
+           @sessionId, @createdAt, 0, @vector, @embeddingModel)`,
       )
       .run({
         id: rec.id,
@@ -740,6 +1013,7 @@ export class XanaStore {
         sessionId: rec.sessionId ?? null,
         createdAt: rec.createdAt,
         vector: encodeVector(vec),
+        embeddingModel: this.embedder.id,
       });
     return rec;
   }
@@ -916,7 +1190,7 @@ export class XanaStore {
       .prepare(
         `UPDATE memories
             SET title = ?, content = ?, kind = ?, tags = ?
-                ${vector ? ", vector = ?" : ""}
+                ${vector ? ", vector = ?, embedding_model = ?" : ""}
           WHERE id = ?`,
       )
       .run(
@@ -925,7 +1199,7 @@ export class XanaStore {
           content,
           kind,
           JSON.stringify(tags),
-          ...(vector ? [encodeVector(vector)] : []),
+          ...(vector ? [encodeVector(vector), this.embedder.id] : []),
           id,
         ],
       );
@@ -1889,6 +2163,281 @@ export class XanaStore {
     }
     return out;
   }
+
+  /* ---------------- the action log ---------------- */
+
+  /**
+   * Record a write-back.
+   *
+   * Called from inside `executeAction`'s transaction, which is what makes the
+   * row and the effect atomic: if the handler throws, both roll back, so there
+   * is no state in which the log says something happened that did not.
+   *
+   * A duplicate key does not throw. The unique index would reject it, and a
+   * guard that turns a harmless repeat into an exception is a guard that takes
+   * the conversation down with it. `INSERT OR IGNORE` makes the repeat a no-op
+   * at the storage layer, which is the same answer `seenIdempotencyKey` gives a
+   * moment earlier — belt and braces, because the check and the insert are two
+   * statements and only one of them is atomic.
+   */
+  logAction(entry: {
+    sessionId?: string;
+    source: "local" | "model" | "system";
+    tool: string;
+    intent: unknown;
+    ok: boolean;
+    effect: string;
+    detail?: string;
+    idempotencyKey?: string;
+  }): void {
+    this.db
+      .prepare(
+        `INSERT OR IGNORE INTO action_log
+           (id, session_id, source, tool, intent, ok, effect, detail, idempotency_key, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        uid("act"),
+        entry.sessionId ?? null,
+        entry.source,
+        entry.tool,
+        safeJson(entry.intent),
+        entry.ok ? 1 : 0,
+        entry.effect,
+        entry.detail ?? null,
+        entry.idempotencyKey ?? null,
+        nowIso(),
+      );
+  }
+
+  /**
+   * Has this exact key already produced a *successful* write?
+   *
+   * Only successes count. A failed attempt must not consume the key, or a user
+   * whose first try was refused could never retry it: the second attempt would
+   * be silently reported as done while nothing had happened. That is the exact
+   * class of lie this whole file's audit trail exists to prevent.
+   */
+  seenIdempotencyKey(key: string): boolean {
+    if (!key) return false;
+    const row = this.db
+      .prepare(`SELECT 1 AS hit FROM action_log WHERE idempotency_key = ? AND ok = 1 LIMIT 1`)
+      .get(key) as Row | undefined;
+    return row !== undefined;
+  }
+
+  /** Recent write-backs, newest first — what the claim guard reads as evidence. */
+  recentActions(limit = 20): Array<{
+    tool: string;
+    effect: string;
+    ok: boolean;
+    createdAt: string;
+    detail?: string;
+  }> {
+    return (
+      this.db
+        .prepare(
+          `SELECT tool, effect, ok, created_at, detail FROM action_log ORDER BY created_at DESC LIMIT ?`,
+        )
+        .all(limit) as Row[]
+    ).map((r) => ({
+      tool: String(r.tool),
+      effect: String(r.effect),
+      ok: Number(r.ok) === 1,
+      createdAt: String(r.created_at),
+      detail: r.detail === null || r.detail === undefined ? undefined : String(r.detail),
+    }));
+  }
+
+  /* ---------------- conversation summaries ---------------- */
+
+  saveSummary(s: {
+    sessionId: string;
+    fromSeq: number;
+    toSeq: number;
+    text: string;
+    topics: string[];
+    createdAt: string;
+  }): void {
+    this.db
+      .prepare(
+        `INSERT INTO conversation_summaries (id, session_id, from_seq, to_seq, text, topics, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(uid("sum"), s.sessionId, s.fromSeq, s.toSeq, s.text, JSON.stringify(s.topics), s.createdAt);
+  }
+
+  recentSummaries(
+    sessionId: string,
+    limit = 3,
+  ): Array<{ text: string; topics: string[]; createdAt: string }> {
+    return (
+      this.db
+        .prepare(
+          `SELECT text, topics, created_at FROM conversation_summaries
+            WHERE session_id = ? ORDER BY to_seq DESC LIMIT ?`,
+        )
+        .all(sessionId, limit) as Row[]
+    ).map((r) => ({
+      text: String(r.text),
+      topics: safeJsonArray(r.topics),
+      createdAt: String(r.created_at),
+    }));
+  }
+
+  /** How many turns a session has, used as the summary boundary. */
+  conversationCount(sessionId?: string): number {
+    const row = sessionId
+      ? (this.db
+          .prepare(`SELECT COUNT(*) AS n FROM conversation WHERE session_id = ?`)
+          .get(sessionId) as Row)
+      : (this.db.prepare(`SELECT COUNT(*) AS n FROM conversation`).get() as Row);
+    return Number(row.n);
+  }
+
+  /* ---------------- implementation intentions ---------------- */
+
+  listIntentions(goalId?: string): Array<{ id: string; goalId: string; trigger: string; action: string; createdAt: string }> {
+    const rows = goalId
+      ? (this.db
+          .prepare(`SELECT * FROM intentions WHERE goal_id = ? ORDER BY created_at`)
+          .all(goalId) as Row[])
+      : (this.db.prepare(`SELECT * FROM intentions ORDER BY created_at`).all() as Row[]);
+    return rows.map(rowToIntention);
+  }
+
+  upsertIntention(i: {
+    id?: string;
+    goalId: string;
+    trigger: string;
+    action: string;
+    createdAt?: string;
+  }): { id: string; goalId: string; trigger: string; action: string; createdAt: string } {
+    const id = i.id ?? uid("int");
+    const createdAt = i.createdAt ?? nowIso();
+    this.db
+      .prepare(
+        `INSERT INTO intentions (id, goal_id, trigger, action, created_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET goal_id = excluded.goal_id,
+           trigger = excluded.trigger, action = excluded.action`,
+      )
+      .run(id, i.goalId, i.trigger, i.action, createdAt);
+    return { id, goalId: i.goalId, trigger: i.trigger, action: i.action, createdAt };
+  }
+
+  deleteIntention(id: string): boolean {
+    return this.db.prepare(`DELETE FROM intentions WHERE id = ?`).run(id).changes > 0;
+  }
+
+  /* ---------------- what she has already said ---------------- */
+
+  /**
+   * How much of today's budget is spent, and on what.
+   *
+   * `day` is a Beijing date key supplied by the caller rather than computed
+   * here, because this module must not know about timezones - `core/zone.ts`
+   * owns that, and a second place that decides what "today" means is how the
+   * briefing bug happened the first time.
+   */
+  proactiveToday(day: string): Array<{ kind: string; dedupeKey: string; text: string; utility: number; deliveredAt: string }> {
+    return (
+      this.db
+        .prepare(
+          `SELECT kind, dedupe_key, text, utility, delivered_at FROM proactive_log
+            WHERE day = ? ORDER BY delivered_at DESC`,
+        )
+        .all(day) as Row[]
+    ).map((r) => ({
+      kind: String(r.kind),
+      dedupeKey: String(r.dedupe_key),
+      text: String(r.text),
+      utility: Number(r.utility),
+      deliveredAt: String(r.delivered_at),
+    }));
+  }
+
+  /**
+   * Record something she said unprompted.
+   *
+   * `INSERT OR IGNORE` against the unique (dedupe_key, day) index, so a
+   * concurrent pass - a cron entry and a manual run landing together - cannot
+   * record the same sentence twice. Returns whether the row was actually new,
+   * which is the honest answer to "did this just get said".
+   */
+  logProactive(entry: {
+    kind: string;
+    dedupeKey: string;
+    text: string;
+    utility: number;
+    day: string;
+  }): boolean {
+    const result = this.db
+      .prepare(
+        `INSERT OR IGNORE INTO proactive_log (id, kind, dedupe_key, text, utility, day, delivered_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(uid("pro"), entry.kind, entry.dedupeKey, entry.text, entry.utility, entry.day, nowIso());
+    return result.changes > 0;
+  }
+}
+
+/** JSON that never throws — the log must not be able to break a write. */
+function safeJson(value: unknown): string {
+  try {
+    return JSON.stringify(value) ?? "{}";
+  } catch {
+    return "{}";
+  }
+}
+
+/**
+ * Turn a sentence into an FTS5 MATCH expression.
+ *
+ * FTS5's query language is not a search box: `AND`, `OR`, `NOT`, `NEAR`, `*` and
+ * `"` all mean something, and a user's sentence routinely contains them ("notes
+ * on AND or NOT", a title with a quote in it). Passing the raw utterance through
+ * would make those operators live, so a memory titled "cats AND dogs" would
+ * match differently from one titled "cats or dogs" - and worse, an unbalanced
+ * quote is a syntax error that throws.
+ *
+ * So every token is quoted, which makes it a literal in FTS5's grammar, and the
+ * terms are OR-ed: a memory that matches two of the user's words should outrank
+ * one that matches a single word, and BM25 already scores it that way. Terms of
+ * one character are dropped because they match almost everything.
+ */
+function toFtsQuery(text: string): string {
+  const terms = text
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((t) => t.length > 1);
+  if (terms.length === 0) return "";
+  return terms.map((t) => `"${t}"`).join(" OR ");
+}
+
+function safeJsonArray(value: unknown): string[] {
+  try {
+    const parsed = typeof value === "string" ? JSON.parse(value) : value;
+    return Array.isArray(parsed) ? parsed.map(String) : [];
+  } catch {
+    return [];
+  }
+}
+
+function rowToIntention(r: Row): {
+  id: string;
+  goalId: string;
+  trigger: string;
+  action: string;
+  createdAt: string;
+} {
+  return {
+    id: String(r.id),
+    goalId: String(r.goal_id),
+    trigger: String(r.trigger),
+    action: String(r.action),
+    createdAt: String(r.created_at),
+  };
 }
 
 /* ------------------------------------------------------------------ */
@@ -2181,10 +2730,46 @@ export function defaultDbPath(): string {
 
 let singleton: XanaStore | undefined;
 
-/** Process-wide store. Next.js hot-reloads modules; keep one connection. */
+/**
+ * Process-wide store. Next.js hot-reloads modules; keep one connection.
+ *
+ * The embedder is resolved here, once, rather than defaulted in the
+ * constructor, so that the store the whole app shares is the same one the
+ * retrieval layer believes it is talking to. Resolution is deliberately
+ * best-effort: a settings file that cannot be read must leave the working
+ * hashing embedder in place rather than stop the database from opening, because
+ * "memory recall is slightly worse" is a far better failure than "Xana will not
+ * start".
+ */
 export function getStore(): XanaStore {
-  if (!singleton) singleton = new XanaStore();
-  return singleton;
+  return (singleton ??= new XanaStore());
+}
+
+/**
+ * Point the shared store at a different embedder.
+ *
+ * A setter rather than a constructor argument, and deliberately *not* called
+ * from `getStore()`.
+ *
+ * The tempting design is for `getStore()` to resolve the configured embedder
+ * itself. It cannot be done cleanly from here: the resolver lives in
+ * `./embedder`, which reads settings, and the settings layer imports this file —
+ * so reaching for it at construction time closes a cycle, and the only ways out
+ * are a `require` (this project is ESM) or an `await import` (which opens a
+ * window where the first `remember()` writes a vector with the *default*
+ * embedder to a store the caller already holds).
+ *
+ * So the default stays `localEmbedder`, and the read and write sides stay
+ * consistent for a simpler reason: there is exactly one store instance, its
+ * embedder is fixed for the life of the process, and both `remember()` and
+ * `recall()` use that same field. The failure this guards against is a query
+ * vector from one model compared against stored vectors from another, and with
+ * one embedder per process that cannot happen by accident — only by calling
+ * this function, which stamps `embedding_model` on every subsequent write so the
+ * rows written before and after a deliberate swap are distinguishable.
+ */
+export function setStoreEmbedder(embedder: Embedder): void {
+  singleton?.setEmbedder(embedder);
 }
 
 /**

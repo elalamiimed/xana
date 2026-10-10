@@ -23,8 +23,102 @@ This is the single most important structural choice in the project. It means:
 - Hallucination is contained to wording, where it is a style problem, rather
   than to state, where it is a trust problem.
 
-If you ever add a tool-calling loop that lets the model dispatch actions, you
+#### 1a. The amendment: a closed catalog, behind the same gate
+
+The rule above has a cost, and it was the cost the user actually complained
+about. Because intent resolution was local *and only local*, anything the
+patterns did not cover produced a refusal — and the model, forbidden from doing
+anything about it, was asked to phrase that refusal. "I didn't follow that. I'm
+better with concrete things" was therefore the answer to every conversation, to
+every question about stored data, and to every request whose wording the
+detector had not anticipated. The rule preserved trust and capped usefulness.
+
+`runAgentTurn()` in `src/lib/mind/agent.ts` is the narrow amendment. It runs
+**only** when the local engine matched nothing and a model is configured, and it
+gives the model a **closed catalog of typed tools** rather than the ability to
+act:
+
+    model proposes -> guard.validateActionIntent -> executeAction
+                      (closed catalog, schema,        (the one commit path,
+                       name resolution, untrusted      audit row, idempotency
+                       refusal)                        key, remote mirror)
+
+Every property that mattered survives, and the reason is that the catalog is
+*closed*: there is no tool taking a query, a URL, a path or a command, so the
+model is not being handed a way to act — it is being handed a way to ask for one
+of thirty-odd specific things, **each of which was already reachable by typing a
+sentence**. A write is byte-identical whether the local engine or the model asked
+for it, because there is still exactly one commit path.
+
+What would break the property, and is therefore not in the catalog:
+
+- a generic SQL / HTTP / shell tool (remote code execution with extra steps);
+- a web-fetch tool. This app already holds private data, so adding untrusted
+  content plus a channel that can carry it out assembles the whole lethal
+  trifecta in one commit. `ToolContext.untrustedSource` exists so the refusal is
+  already written and tested on the day a plugin supplies third-party text.
+  Nothing sets it today.
+
+Two smaller decisions inside the loop, both of which have already caught a real
+bug:
+
+- **The model passes a name, never an id** (`src/lib/mind/resolve.ts`). A model
+  that can supply an id can supply a *wrong* id, and a wrong id is a silent edit
+  to somebody else's record. An unmatched name is a refusal the user can see.
+- **`executeAction` is idempotent by key.** The key is derived server-side from
+  `sessionId + toolCallId`, so the model cannot choose to collide with — or dodge
+  — a write that already landed. A retried round trip cannot double-book.
+
+The audit trail (`action_log`) exists so the claim guard can ask "did *this*
+happen" instead of "did *anything* happen". The old boolean could not tell a turn
+where the right thing happened from one where a different thing did, which is
+exactly how a partial failure reads as a success.
+
+If you ever add a tool that takes a free-form query or reaches the network, you
 are trading this property away. Do it deliberately or not at all.
+
+#### 1b. She may speak first, but never write first
+
+The same rule extends to the one thing a personal assistant is expected to do
+that nothing here did until now: say something nobody asked for.
+
+The temptation is to build a nightly job that generates a paragraph with a model
+and shows it in the morning. It is rejected, and the reason is the same one that
+governs every other write in this project: **with nobody watching, an invented
+sentence is indistinguishable from a measured one.** At 3am there is no user to
+notice that the tasks it mentioned were not real.
+
+So the split is strict, and it is three files:
+
+| | |
+|---|---|
+| `derived/proactive.ts` | *Whether* to speak. Horvitz's expected-value rule, quiet hours, a daily budget, suppression during a meeting or a focus session, and a reason for every verdict. Pure, and separately tested. |
+| `derived/checkin.ts` | *What* to say and *what has been said*. It reads sentences the rest of the app already wrote from measured data - `state.nudges`, overdue tasks, stalled goals, at-risk habits - scores them, and records them. **It composes nothing.** |
+| `scripts/schedule.ts` | *When*. Supplied by the user's own cron or Task Scheduler. |
+
+Three consequences worth keeping:
+
+- **The budget is persisted, not remembered.** `proactive_log` holds a row per
+  sentence with a hash of its *text* and a Beijing date key. A budget held in
+  memory would reset on every reload, which turns "three a day" into "three per
+  restart" - and the failure that produces is the one that gets an assistant
+  switched off. Keying on the derived nudge's `id` would be worse than useless:
+  the derived layer mints a fresh id on every rebuild, so everything would look
+  new several times an hour.
+- **The day is Beijing's.** `dateKeyInZone`, not `toISOString().slice(0,10)`. A
+  UTC day boundary gives her a second allowance at 08:00 local, which is exactly
+  when the morning pass runs.
+- **Silence is not an error.** `scripts/schedule.ts` exits 0 when there is nothing
+  to say and 1 only when the pass itself failed. A scheduled job that alerts on
+  silence is a job the user mutes on day two, and then real failures go unseen
+  too.
+
+And the piece that is deliberately still missing: the **`ignored` signal**. A
+suggestion shown and never acted on is the only feedback that would let the
+budget tune itself, and measuring it needs a sweep that notices an unanswered
+nudge. Until that exists the budget is fixed and conservative rather than
+adaptive, because an authority that has to interrupt in order to learn when not
+to is an authority that interrupts too much.
 
 ### 2. Adapters never throw, and never lie about their mode
 
@@ -528,10 +622,10 @@ a message that should have been code.
 `useSettings` fetched `/api/settings` when the settings panel was opened, and not
 before. The reasoning was stated in the file — "the values are only needed when
 the panel is on screen" — and it was simply false. The shell reads
-`speakReplies`, `voiceName`, `wakeEnabled`, `wakePhrases` and `transcribe` on
-every render, so until someone opened Settings, the app ran on **defaults**: replies
-silent, always-listening off, and `transcribe` reported as `"browser"` no matter
-what was saved.
+`speakReplies`, `voiceName`, `muted`, `wakeEnabled`, `wakePhrases` and
+`transcribe` on every render, so until someone opened Settings, the app ran on
+**defaults**: replies silent, always-listening off, and `transcribe` reported as
+`"browser"` no matter what was saved.
 
 That is how a user who had already switched to the local Whisper service, to
 escape the browser's speech service entirely, kept meeting that service's errors:
@@ -1151,6 +1245,75 @@ from every angle except the user's.
   The general shape: when a heuristic has a legitimate counterexample, give the
   counterexample a way to *say so*, rather than widening the heuristic until it
   stops noticing.
+
+---
+
+## The model provider, measured rather than assumed
+
+Everything below was probed live against `api.deepseek.com` with a real key on
+2026-10-08. Two of these **contradict the vendor's own documentation**, which is
+why they are written down: the next person will read the docs first, and the docs
+are wrong.
+
+### `deepseek-chat` and `deepseek-reasoner` are retired, and still answer
+
+The change log says both names were discontinued on 2026-07-24. `GET /models`
+lists exactly two models: `deepseek-flash` (V4.1-Flash) and `deepseek-v4-pro`.
+A `POST /chat/completions` with `model: "deepseek-chat"` still returns **HTTP
+200** today, and `deepseek-reasoner` still returns `reasoning_content`.
+
+So the project's stored default is not *broken* — it is *unlisted*, aliased to
+something the provider no longer documents, and one quiet policy change away from
+a 404 in a user's chat window. `deepseek-flash` is the documented name and is
+what a fresh setup should get.
+
+### Thinking mode is on by default, and it changes the request
+
+`thinking` is not an OpenAI parameter. With it on, `temperature` has no effect,
+`top_p` is clamped to 0.95-1.0, and — the one that bites —
+
+**`tool_choice: "required"` returns HTTP 400**:
+`Thinking mode does not support this tool_choice`.
+
+`buildRequest` therefore downgrades `required` to `auto` when thinking is on
+rather than spending a round trip discovering the 400. Nothing here needs a
+forced call badly enough to pay for it in reliability. `thinking` is only sent
+when the caller asked for a specific mode, so a strict OpenAI-compatible server
+(a local Ollama) is never handed an unknown key.
+
+### Two documentation claims that are false
+
+- **Replaying `reasoning_content` is NOT required.** The docs say a request
+  carrying `tools` must echo it back or receive a 400. A four-step probe with a
+  real tool call returned **200 with and without** it. The field is captured for
+  logging and deliberately not replayed: a few hundred tokens of chain-of-thought
+  per round of every turn is pure input cost for nothing.
+- **`parallel_tool_calls` is accepted** (HTTP 200) although it appears nowhere in
+  the documented request schema. Not relied on — a turn asking for two things
+  produced two calls in one response, which is handled by iterating the array
+  rather than by the parameter.
+
+### Prompt caching is automatic, and it decides the prompt layout
+
+`usage.prompt_cache_hit_tokens` reports the cached half, and a cache hit costs
+about a **fiftieth** of a miss. A hit requires the request prefix to match
+exactly, which is why:
+
+- `toolsJsonSchema()` returns a **fixed order** and must never be built from
+  anything dynamic — the tool definitions are part of the cached prefix.
+- The agent's system prompt is assembled from stable parts, and the volatile
+  `LIFE STATE` goes in the **user** message, after everything reusable.
+
+`LlmUsage` carries `cachedTokens` for exactly this reason: it is the only way to
+notice that the prefix has stopped being stable, which shows up as a cost change
+and nothing else.
+
+### The window is 1M tokens in, 384K out
+
+Large enough that the earlier instinct to keep the life state terse "for the
+context window" is no longer the constraint. It is still rendered compactly,
+because a model given a wall of text attends to the wrong part of it — the
+reason changed, the behaviour did not.
 
 ---
 

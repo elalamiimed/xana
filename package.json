@@ -44,6 +44,8 @@
     "verify:dictation": "node --import ./scripts/ts-loader.mjs scripts/check-dictation.ts",
     "verify:speech": "node --import ./scripts/ts-loader.mjs scripts/check-speech-language.ts",
     "verify:pause": "node --import ./scripts/ts-loader.mjs scripts/check-pause.ts",
+    "verify:mute": "node --import ./scripts/ts-loader.mjs scripts/check-mute.ts",
+    "verify:mute-browser": "node scripts/verify-mute-browser.mjs",
     "verify:zone": "node --import ./scripts/ts-loader.mjs scripts/check-zone.ts",
     "verify:transcriber": "node --import ./scripts/ts-loader.mjs scripts/check-stt-supervisor.ts",
     "verify:trash": "node --import ./scripts/ts-loader.mjs scripts/check-trash.ts",
@@ -56,6 +58,15 @@
     "verify:stt": "node scripts/check-stt.mjs",
     "verify:transcribe": "node scripts/check-transcribe-live.mjs",
     "verify:durability": "node --import ./scripts/ts-loader.mjs scripts/check-durability.ts",
+    "verify:retrieval": "node --import ./scripts/ts-loader.mjs scripts/check-retrieval.ts",
+    "verify:mind-loop": "node --import ./scripts/ts-loader.mjs scripts/check-mind-loop.ts",
+    "verify:contracts": "node --import ./scripts/ts-loader.mjs scripts/check-contracts.ts",
+    "verify:persona": "node --import ./scripts/ts-loader.mjs scripts/check-persona.ts",
+    "verify:planning": "node --import ./scripts/ts-loader.mjs scripts/check-planning.ts",
+    "verify:checkin": "node --import ./scripts/ts-loader.mjs scripts/check-checkin.ts",
+    "verify:learning": "node --import ./scripts/ts-loader.mjs scripts/check-learning.ts",
+    "schedule": "node --import ./scripts/ts-loader.mjs scripts/schedule.ts",
+    "schedule:dry": "node --import ./scripts/ts-loader.mjs scripts/schedule.ts --dry-run",
     "backup": "node --import ./scripts/ts-loader.mjs scripts/backup.ts",
     "verify:crypto": "node --import ./scripts/ts-loader.mjs scripts/check-crypto.ts",
     "verify:health-bridge": "node --import ./scripts/ts-loader.mjs scripts/check-health-bridge.ts",
@@ -68,7 +79,7 @@
     "debug:key": "node scripts/debug-key.mjs",
     "debug:engine": "node scripts/debug-engine.mjs",
     "inspect": "node --import ./scripts/ts-loader.mjs scripts/inspect.ts",
-    "check": "npm run check:encoding && npm run check:secrets && npm run typecheck && npm run verify:wake && npm run verify:vad && npm run verify:pause && npm run verify:dictation && npm run verify:speech && npm run verify:transcriber && npm run verify:trash && npm run verify:health-log && npm run verify:energy && npm run verify:zone && npm run verify:cave-load && npm run verify:task-edit && npm run verify:calendar && npm run verify:edit-voice && npm run demo && npm run smoke && npm run verify:orb && npm run verify:providers && npm run check:design && npm run check:palette"
+    "check": "npm run check:encoding && npm run check:secrets && npm run typecheck && npm run verify:wake && npm run verify:vad && npm run verify:pause && npm run verify:mute && npm run verify:dictation && npm run verify:speech && npm run verify:transcriber && npm run verify:trash && npm run verify:health-log && npm run verify:energy && npm run verify:zone && npm run verify:cave-load && npm run verify:task-edit && npm run verify:calendar && npm run verify:edit-voice && npm run verify:retrieval && npm run verify:persona && npm run verify:planning && npm run verify:checkin && npm run verify:learning && npm run verify:mind-loop && npm run verify:contracts && npm run demo && npm run smoke && npm run verify:orb && npm run verify:providers && npm run check:design && npm run check:palette"
   },
   "dependencies": {
     "better-sqlite3": "^13.0.3",

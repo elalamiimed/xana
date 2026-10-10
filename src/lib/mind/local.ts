@@ -233,14 +233,45 @@ const handleReminder: Handler = ({ text, sessionId }) => {
   return { text: "", outcome };
 };
 
-/** "add a task to X", "todo: X", "I need to X" */
+/** "add a task to X", "todo: X", "I need to X", "add X to my tasks" */
 const handleTask: Handler = ({ text, lifeState, sessionId }) => {
   const explicit = /(?:add (?:a )?task(?: to)?|new task[:\s]+|todo[:\s]+|to-?do[:\s]+|task[:\s]+)\s*(.+)/i.exec(text);
   const implicit = /^(?:i (?:need|have|ought) to|i should|i must|don'?t forget to)\s+(.+)/i.exec(text);
-  const m = explicit ?? implicit;
+
+  /*
+   * "add X to my tasks", which is the phrasing the destination rule promises.
+   *
+   * The same verb as "add X to my calendar", so the noun is what separates
+   * them — and this is the half of that rule that was missing. The capture
+   * verbs are narrow on purpose: "book X to my tasks" is not something anyone
+   * says, and matching every verb here would steal sentences from the calendar.
+   */
+  const intoList = /^(?:add|put|save|create)\s+(?:me\s+)?(?:an?\s+)?(?:new\s+)?(.+?)\s+(?:to|in|into|on)\s+(?:my\s+|the\s+)?(?:tasks?|to-?dos?|list|checklist)\b(.*)$/i.exec(text);
+
+  /*
+   * "book the flights", "book a table".
+   *
+   * The comment above `handleEvent` has always said a booking verb alone is a
+   * task rather than an appointment, and the code never implemented it: the
+   * `book` pattern in `handleEvent` demands a scheduling noun (meeting, call,
+   * appointment, lunch, dinner, room, table), "book the flights" has none, and
+   * `handleTask` had no pattern for it either — so the sentence fell all the way
+   * through to "I didn't follow that." A gap between a stated rule and the code
+   * is exactly what the calendar branch was added to fix, so it is fixed here
+   * too: booking something that is not an appointment is a thing to do.
+   *
+   * Narrow on purpose — "book" plus a determiner, and nothing that reads as a
+   * meeting noun, which `handleEvent` has already claimed by this point because
+   * it runs first.
+   */
+  const booking = /^book\s+(?:a\s+|an\s+|the\s+|my\s+)?(.+)$/i.exec(text);
+
+  const m = explicit ?? intoList ?? booking ?? implicit;
   if (!m) return undefined;
 
-  const body = m[1].trim();
+  // For the "to my tasks" form the thing itself is group 1 and any trailing
+  // words group 2; the other patterns carry everything in group 1.
+  const body = (intoList && m === intoList ? `${m[1] ?? ""} ${m[2] ?? ""}` : (m[1] ?? "")).trim();
   const when = parseWhen(body);
   const title = when ? stripWhen(body, when.matched) || body : body;
   if (title.length < 2) return undefined;
@@ -265,42 +296,271 @@ const handleTask: Handler = ({ text, lifeState, sessionId }) => {
   return { text: `Captured${whenPhrase}.`, outcome };
 };
 
+/* ------------------------------------------------------------------ */
+/* Where a thing goes: the noun the user said, not the verb they used  */
+/* ------------------------------------------------------------------ */
+
 /**
- * "schedule X", "book a meeting with Sam Thursday at 2"
+ * The destination the user named, if they named one.
  *
- * Deliberately narrow. "Book the flights" is a *task*, not an appointment —
- * treating booking verbs as scheduling is how an assistant quietly fills a
- * calendar with to-dos. An event requires either an explicit scheduling noun
- * (meeting, call, event, appointment, lunch) or a clock time.
+ * "add X to my calendar" and "add X to my tasks" use the same verb and mean
+ * opposite things, so the noun decides. This is the rule the user asked for in
+ * as many words, and it is the fix for a real failure: "add tomorrow breakfast
+ * to my calendar from 10-10:30" was answered with "the action isn't firing",
+ * because `handleEvent` only recognised scheduling *verbs* and never looked at
+ * the word "calendar" sitting right there in the sentence.
+ *
+ * The two nouns are matched before the generic ones on purpose. "add X to my
+ * list" is a task — the list is the task list — but "add X to my calendar
+ * list" is not, so calendar wins wherever it appears.
+ */
+const CALENDAR_NOUN = /\b(?:calendar|calender|schedule|agenda|diary)\b/i;
+const TASK_NOUN = /\b(?:tasks?|to-?dos?|list|checklist)\b/i;
+
+type Destination = "calendar" | "task" | undefined;
+
+function namedDestination(text: string): Destination {
+  if (CALENDAR_NOUN.test(text)) return "calendar";
+  if (TASK_NOUN.test(text)) return "task";
+  return undefined;
+}
+
+/**
+ * Split one sentence that books several things into its parts.
+ *
+ * "add breakfast from 10-10:30 and gym from 10:30 to 11:30 and shower from
+ * 11:30 to 12:30" is one request for three entries, and every handler in this
+ * file creates exactly one — so the sentence was answered by creating nothing.
+ * People plan a morning in one breath; the alternative is four messages.
+ *
+ * Two shapes have to be handled, and the second is the one that bit:
+ *
+ *   "breakfast 10-10:30 **and** gym 10:30 to 11:30"   — conjunctions
+ *   "breakfast 10-10:30 **am** gym 10:30 to 11:30"     — nothing but spaces
+ *
+ * The second is how the user actually wrote it ("breakfast 10-10:30 am gym
+ * 10:30 to 11:30 shower 11:30 to 12:30"), and a conjunction-only split read the
+ * whole line as one item: one event, titled "following for breakfast gym 10:30
+ * to 11:30 shower 11:30 to 12:30". So a third split runs on the *clock times*
+ * themselves — an item begins where a time begins, which is exactly where one
+ * entry ends and the next starts.
+ *
+ * Both passes are deliberately conservative. A conjunction only splits when the
+ * piece after it looks like an item ("bed and breakfast" stays one title), and
+ * the time-based pass only splits when it finds two or more ranges, so a single
+ * event with a time in it is never taken apart.
+ */
+function splitItems(body: string): string[] {
+  /** Does this piece carry its own clock — a range, an "at HH", or HH:MM? */
+  const hasOwnTime = (piece: string) =>
+    /(?:\d{1,2}(?::\d{2})?\s*(?:am|pm)?\s*(?:-|–|—|to|until|till)\s*\d{1,2})|\bat\s+\d{1,2}|\d{1,2}:\d{2}/i.test(piece);
+
+  const byConjunction = body
+    .split(/\s*(?:,|;|\band\b|\bthen\b|\balso\b)\s*/i)
+    .map((piece) => piece.trim())
+    .filter((piece) => piece.length > 0);
+
+  if (byConjunction.length > 1) {
+    const items: string[] = [];
+    for (const piece of byConjunction) {
+      if (items.length === 0) {
+        items.push(piece);
+        continue;
+      }
+      // A piece is its own item when it has a time, or is a fresh phrase.
+      if (hasOwnTime(piece) || /^[A-Za-z]/.test(piece)) items.push(piece);
+    }
+    if (items.length > 1) return items;
+  }
+
+  /*
+   * Nothing separated by a conjunction, so try the times.
+   *
+   * Each range marks the start of an item: the first range belongs to the item
+   * being introduced, and every later range begins a new one at the text
+   * *before* it. A range is "10-10:30", "10:30 to 11:30 am" or "11:30 to
+   * 12:30" — a time, a separator, and a second time.
+   */
+  const RANGE = /\b\d{1,2}(?::\d{2})?\s*(?:am|pm)?\s*(?:-|–|—|to|until|till)\s*\d{1,2}(?::\d{2})?\s*(?:am|pm)?/gi;
+  const starts: number[] = [];
+  const lengths: number[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = RANGE.exec(body)) !== null) {
+    starts.push(match.index);
+    lengths.push(match[0].length);
+  }
+  if (starts.length < 2) return [body];
+
+  /*
+   * The boundary is the word that names the next item.
+   *
+   * Between one range's end and the next range's start sits the name of the
+   * thing being introduced: "…10-10:30 am gym 10:30…" leaves "gym" there, and
+   * "…10:30 to 11:30 shower 11:30…" leaves "shower".
+   *
+   * The first version required the gap to contain *only* that one word, and
+   * missed "gym" because the trailing "am" of "10-10:30 am" was left in the
+   * gap — the range pattern stopped before the meridiem, so the boundary read
+   * "am gym" and was rejected as prose. The meridiem is part of the range now,
+   * and a leading one-word remainder is accepted either way.
+   */
+  const items: string[] = [];
+  let cursor = 0;
+  for (let index = 1; index < starts.length; index += 1) {
+    const previousEnd = starts[index - 1] + lengths[index - 1];
+    const between = body.slice(previousEnd, starts[index]).trim();
+    // Optionally a stray meridiem, then the item's own name.
+    const name = /^(?:(?:am|pm)\s+)?([A-Za-z][A-Za-z'-]*)$/.exec(between)?.[1];
+    if (!name) continue;
+    const cut = body.indexOf(name, previousEnd);
+    items.push(body.slice(cursor, cut).trim());
+    cursor = cut;
+  }
+  items.push(body.slice(cursor).trim());
+
+  const cleaned = items.filter((piece) => piece.length > 0);
+  return cleaned.length > 1 ? cleaned : [body];
+}
+
+/**
+ * "schedule X", "book a meeting with Sam Thursday at 2", "add X to my calendar"
+ *
+ * The guard that used to live here — an event requires a scheduling noun or a
+ * clock time — is kept, and it is the reason "book the flights" is still a
+ * task: a booking verb alone does not make an appointment. What is new is that
+ * the word **calendar** is now one of the things that authorises an event, and
+ * that a named calendar beats a scheduling noun: "add the dentist appointment
+ * to my tasks" is a task, however much it sounds like one.
  */
 const handleEvent: Handler = ({ text, sessionId }) => {
-  const m = /(?:schedule|add (?:an? )?(?:event|meeting|appointment)|set up|put)\s+(?:a\s+)?(?:meeting\s+|call\s+|event\s+|appointment\s+)?(.+)/i.exec(text)
+  const destination = namedDestination(text);
+  if (destination === "task") return undefined; // handleTask owns this sentence.
+
+  /*
+   * Two ways in.
+   *
+   * The first is the vocabulary this always had. The second is "add X to my
+   * calendar", which is what people actually say: a capture verb, a thing, and
+   * the word calendar. The second requires the calendar noun *after* the verb,
+   * so a sentence merely mentioning a calendar ("what is on my calendar") is
+   * not a booking.
+   */
+  const explicit = /(?:schedule|add (?:an? )?(?:event|meeting|appointment)|set up|put)\s+(?:a\s+)?(?:meeting\s+|call\s+|event\s+|appointment\s+)?(.+)/i.exec(text)
     ?? /book\s+(?:a\s+)?(meeting|call|appointment|lunch|dinner|room|table)\b(.*)/i.exec(text);
+
+  const intoCalendar = destination === "calendar"
+    ? /(?:add|put|create|book|schedule|set up|save)\s+(?:me\s+)?(?:an?\s+)?(?:new\s+)?(.*)/i.exec(text)
+    : null;
+
+  const m = explicit ?? intoCalendar;
   if (!m) return undefined;
 
-  const body = m[1].trim() + (m[2] ?? "");
-  const when = parseWhen(body);
-  if (!when) return undefined; // Booking without a time is how calendars rot.
+  const raw = (m[1] ?? "").trim() + (m[2] ?? "");
 
-  // Without a clock time, only explicit scheduling nouns justify an event.
-  const hasSchedulingNoun = /\b(meeting|call|event|appointment|lunch|dinner|review|sync|standup|stand-up|1:1|one-on-one|interview|demo)\b/i.test(body);
-  if (!when.hasTime && !hasSchedulingNoun) return undefined;
-
-  const rawTitle = stripWhen(body, when.matched) || body;
-  const title = rawTitle
-    .replace(/^(?:a|an|the)\s+/i, "")
-    .replace(/\b(?:meeting|call|event)\s+(?:with|about)\s+/i, (s) => (s.toLowerCase().startsWith("meeting") ? "with " : s))
+  /*
+   * Everything the destination and the connective tissue added, so the title
+   * is the thing itself: "add tomorrow breakfast to my calendar from 10-10:30"
+   * is the title "breakfast" on the day it named.
+   *
+   * The preamble is the part that surprised: the user wrote "add **the
+   * following** to my calendar for tomorrow breakfast 10-10:30 am …", and the
+   * leading-text pattern — which grabs everything after the verb — carried
+   * "the following" into the title. It is a signpost to the list, not part of
+   * any entry, so it goes.
+   */
+  const body = raw
+    .replace(/^\s*(?:the|these|those|my)?\s*(?:following|below|next)\b[:\s]*/i, " ")
+    .replace(/\s+to\s+my\s+(?:calendar|calender|schedule|agenda|diary)\b/gi, " ")
+    .replace(/\s+(?:in|on|into)\s+my\s+(?:calendar|calender|schedule|agenda|diary)\b/gi, " ")
+    .replace(/\s+to\s+(?:the\s+)?(?:calendar|calender|schedule|agenda|diary)\b/gi, " ")
+    .replace(/\bmy\s+(?:calendar|calender|schedule|agenda|diary)\b/gi, " ")
+    // "for tomorrow" and "for the 5th" introduce the day, which `parseWhen`
+    // reads on its own; leaving the "for" behind puts a stray preposition in
+    // front of a title that no longer has anything after it.
+    .replace(/\s+/g, " ")
     .trim();
 
-  const minutes = parseDuration(body) ?? 60;
-  const start = when.hasTime ? when.date : withHour(when.date, 10);
-  const end = new Date(start.getTime() + minutes * 60_000);
+  const items = splitItems(body);
+  const created: { id?: string; title: string; start: Date; end: Date }[] = [];
+  let firstWhen: ReturnType<typeof parseWhen>;
 
-  const outcome = executeAction(
-    { type: "create_event", title: title || "Untitled", start: start.toISOString(), end: end.toISOString() },
-    { sessionId },
-  );
-  return { text: "", outcome };
+  for (const item of items) {
+    const when = parseWhen(item) ?? (items.length > 1 ? parseWhen(`${item} ${body}`) : undefined);
+    if (!when) continue;
+
+    // Without a clock time, only explicit scheduling nouns justify an event.
+    const hasSchedulingNoun = /\b(meeting|call|event|appointment|lunch|dinner|breakfast|brunch|review|sync|standup|stand-up|1:1|one-on-one|interview|demo|gym|class|lecture|session|shift)\b/i.test(item);
+    if (!when.hasTime && !hasSchedulingNoun) continue;
+
+    const rawTitle = stripWhen(item, when.matched) || item;
+    const title = rawTitle
+      .replace(/^(?:a|an|the)\s+/i, "")
+      /*
+       * The booking vocabulary is dropped from the front of a title, because the
+       * *user* said it and the entry should say the thing itself: "add an event
+       * to my calendar tomorrow at 3pm" is an entry called "event" only if this
+       * does not run — which is what happened when the calendar branch first
+       * landed, and it read "Booked 'event'".
+       */
+      .replace(/^(?:an?\s+)?(?:new\s+)?(?:calendar\s+)?(?:event|meeting|appointment|entry)\b\s*/i, "")
+      .replace(/^on\s+my\s+(?:calendar|calender|schedule|agenda|diary)\b\s*/i, "")
+      .replace(/\b(?:meeting|call|event)\s+(?:with|about)\s+/i, (s) => (s.toLowerCase().startsWith("meeting") ? "with " : s))
+      .replace(/^(?:to|on|at|in|for)\s+/i, "")
+      .trim();
+    if (title.length < 2) continue;
+
+    /*
+     * The length, in the order the phrase gives it: a stated end wins, then a
+     * stated duration, then the hour default. Before `when.end` existed a range
+     * lost its end and every entry took the default, which is how "10:00 to
+     * 10:30" would have been stored as an hour.
+     */
+    const start = when.hasTime ? when.date : withHour(when.date, 10);
+    const minutes = parseDuration(item) ?? 60;
+    const end = when.end ?? new Date(start.getTime() + minutes * 60_000);
+    if (end <= start) continue;
+
+    created.push({ title: title || "Untitled", start, end });
+    firstWhen ??= when;
+  }
+
+  if (created.length === 0) return undefined;
+
+  /*
+   * One entry takes the executor's own path so its confirmation reads like
+   * every other entry's. Several are created in turn and reported once, because
+   * three separate cards for one sentence is not an answer.
+   */
+  if (created.length === 1) {
+    const [only] = created;
+    const outcome = executeAction(
+      { type: "create_event", title: only.title, start: only.start.toISOString(), end: only.end.toISOString() },
+      { sessionId },
+    );
+    return { text: "", outcome };
+  }
+
+  const ids: string[] = [];
+  for (const entry of created) {
+    const outcome = executeAction(
+      { type: "create_event", title: entry.title, start: entry.start.toISOString(), end: entry.end.toISOString() },
+      { sessionId },
+    );
+    const id = (outcome as { ids?: string[] } | undefined)?.ids?.[0];
+    if (id) ids.push(id);
+  }
+
+  const list = created.map((entry) => `"${entry.title}"`).join(", ");
+  return {
+    text: `Booked ${created.length} — ${list}.`,
+    outcome: {
+      ok: true,
+      effect: "event.created",
+      message: `Booked ${created.length} entries for ${formatDay(firstWhen?.date ?? created[0].start)}.`,
+      ids,
+      refresh: ["calendar", "context"],
+    },
+  };
 };
 
 /** "mark X done", "I finished X", "X is done" */

@@ -330,7 +330,11 @@ function panelPatch({ apiKey, clearApiKey } = {}) {
     model: {
       enabled: true,
       provider: "openai",
-      model: "deepseek-chat",
+      // The name the provider currently documents. This was `deepseek-chat`,
+      // which DeepSeek retired on 2026-07-24; the suite still answers 200 with
+      // it, so the assertion was passing against a model that is one policy
+      // change away from a 404.
+      model: "deepseek-flash",
       baseUrl: "https://api.deepseek.com",
       temperature: 0.7,
       ...(clearApiKey ? { clearApiKey: true } : apiKey ? { apiKey } : {}),
@@ -339,14 +343,34 @@ function panelPatch({ apiKey, clearApiKey } = {}) {
 }
 
 async function keyRoundTrip() {
-  let reachable = true;
+  /**
+   * Reachable is not the same as *Xana*.
+   *
+   * This check used to be a bare `fetch` in a try/catch, which answered the
+   * wrong question: "did something accept a connection?" Any other process
+   * holding port 4310 passes that, and the suite then tried to parse whatever
+   * it answered as JSON and died with a `SyntaxError` from deep inside undici
+   * rather than saying the useful thing. It happened for real on this machine,
+   * where an unrelated program owns 4310 - and 4310 is exactly the port this
+   * defaults to.
+   *
+   * So the response has to look like Xana before the round trip is attempted:
+   * a JSON document carrying the fields this endpoint actually returns. Anything
+   * else is "no server here", which is already a supported outcome and prints a
+   * skip with the fix.
+   */
+  let reachable = false;
   try {
-    await fetch(`${base}/api/settings`, { signal: AbortSignal.timeout(2500) });
+    const res = await fetch(`${base}/api/settings`, { signal: AbortSignal.timeout(2500) });
+    if (res.ok) {
+      const body = await res.json();
+      reachable = Boolean(body) && typeof body === "object" && "model" in body;
+    }
   } catch {
     reachable = false;
   }
   if (!reachable) {
-    console.log(`  skip  no server at ${base} (start one, or set XANA_URL)`);
+    console.log(`  skip  no Xana at ${base} (start one with npm run dev, or set XANA_URL)`);
     return;
   }
 

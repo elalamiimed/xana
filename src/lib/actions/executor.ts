@@ -35,6 +35,26 @@ export interface ExecuteOptions {
   store?: XanaStore;
   /** Skip context invalidation (used by the seed script). */
   noInvalidate?: boolean;
+  /**
+   * Who asked for this write.
+   *
+   * Defaults to `"local"` because that is what every existing caller is: the
+   * deterministic engine, a card button, the seed script. The agent loop passes
+   * `"model"`, which is the distinction that matters when someone later reads
+   * `action_log` and wants to know how much of the database a model put there.
+   */
+  source?: "local" | "model" | "system";
+  /**
+   * Present means "this write must happen at most once".
+   *
+   * The agent loop builds this from the provider's tool-call id, so a retried
+   * round trip, a double-submitted request, or a model that repeats itself
+   * cannot create the same task twice. Absent for every local write, which is
+   * correct: a person saying "add milk" twice means two tasks.
+   */
+  idempotencyKey?: string;
+  /** Name for the audit row. Defaults to the intent's own `type`. */
+  tool?: string;
 }
 
 export function executeAction(intent: ActionIntent, opts: ExecuteOptions = {}): ActionOutcome {
@@ -44,74 +64,126 @@ export function executeAction(intent: ActionIntent, opts: ExecuteOptions = {}): 
     return outcome;
   };
 
+  /**
+   * The duplicate check, before anything is dispatched.
+   *
+   * Only a *successful* prior write spends a key (see `seenIdempotencyKey`), so
+   * a refused first attempt can still be retried. The reply is empty rather than
+   * a sentence: the first call already told the model and the user what
+   * happened, and saying it twice reads as two things having happened.
+   */
+  if (opts.idempotencyKey && store.seenIdempotencyKey(opts.idempotencyKey)) {
+    return { ok: true, effect: "action.duplicate", message: "", ids: [] };
+  }
+
   try {
-    switch (intent.type) {
-      case "create_task":
-        return finish(createTask(intent, store));
+    /**
+     * The effect and its audit row commit together.
+     *
+     * `better-sqlite3` nests transactions as SAVEPOINTs, so the handlers below
+     * that already open their own transaction keep working unchanged, and a
+     * handler that throws rolls back both. That is what makes "the log says it
+     * happened" and "it happened" the same claim rather than two claims that
+     * usually agree.
+     *
+     * There is no `store.transaction()` to call: the store exposes its
+     * connection as `db`, and the two existing callers inside `store.ts` build
+     * their transactions from it the same way. Adding a wrapper method purely
+     * for this call would be a second spelling of one idea.
+     */
+    const run = store.db.transaction(() => {
+      const outcome = dispatch(intent, store, opts);
+      store.logAction({
+        sessionId: opts.sessionId,
+        source: opts.source ?? "local",
+        tool: opts.tool ?? intent.type,
+        intent,
+        ok: outcome.ok,
+        effect: outcome.effect,
+        detail: outcome.message,
+        idempotencyKey: opts.idempotencyKey,
+      });
+      return outcome;
+    });
+    return finish(run());
+  } catch (err) {
+    return {
+      ok: false,
+      effect: "action.failed",
+      message: `That didn't take — ${err instanceof Error ? err.message : String(err)}.`,
+    };
+  }
+}
 
-      case "complete_task":
-        return finish(completeTask(intent.taskId, store));
+/** The switch, unchanged in meaning; split out so the wrapper above stays readable. */
+function dispatch(intent: ActionIntent, store: XanaStore, opts: ExecuteOptions): ActionOutcome {
+  switch (intent.type) {
+    case "create_task":
+      return createTask(intent, store);
 
-      case "update_task":
-        return finish(updateTask(intent, store));
+    case "complete_task":
+      return completeTask(intent.taskId, store);
 
-      case "create_event":
-        return finish(createEvent(intent, store));
+    case "update_task":
+      return updateTask(intent, store);
 
-      case "create_note":
-        return finish(createNote(intent, store));
+    case "create_event":
+      return createEvent(intent, store);
 
-      case "create_reminder":
-        return finish(createReminder(intent, store));
+    case "create_note":
+      return createNote(intent, store);
 
-      case "create_goal":
-        return finish(createGoal(intent, store));
+    case "create_reminder":
+      return createReminder(intent, store);
 
-      case "complete_milestone":
-        return finish(completeMilestone(intent.milestoneId, store));
+    case "create_goal":
+      return createGoal(intent, store);
 
-      case "log_habit":
-        return finish(logHabit(intent.habitId, intent.date, store));
+    case "complete_milestone":
+      return completeMilestone(intent.milestoneId, store);
 
-      case "log_energy":
-        return finish(logEnergy(intent.level, intent.at, store));
+    case "log_habit":
+      return logHabit(intent.habitId, intent.date, store);
 
-      case "log_meal":
-        return finish(logMeal(intent.meal, store));
+    case "log_energy":
+      return logEnergy(intent.level, intent.at, store);
 
-      case "log_health":
-        return finish(logHealth(intent, store));
+    case "log_meal":
+      return logMeal(intent.meal, store);
 
-      case "remember":
-        return finish(remember(intent, store, opts.sessionId));
+    case "log_health":
+      return logHealth(intent, store);
 
-      case "start_focus":
-        return finish(startFocus(intent, store));
+    case "remember":
+      return remember(intent, store, opts.sessionId);
 
-      case "protect_block":
-        return finish(protectBlock(intent, store));
+    case "start_focus":
+      return startFocus(intent, store);
 
-      case "reflect":
-        return finish(reflect(intent.period, store));
+    case "protect_block":
+      return protectBlock(intent, store);
 
-      case "brief_me":
-        // Handled by the mind, which has the life state in hand.
-        return { ok: true, effect: "briefing.requested", message: "", refresh: ["context"] };
+    case "reflect":
+      return reflect(intent.period, store);
 
-      case "delete_task":
-        return finish(deleteTask(intent.taskId, store));
+    case "brief_me":
+      // Handled by the mind, which has the life state in hand.
+      return { ok: true, effect: "briefing.requested", message: "", refresh: ["context"] };
 
-      case "clear_tasks":
-        return finish(clearTasks(intent.scope ?? "open", store));
+    case "delete_task":
+      return deleteTask(intent.taskId, store);
+
+    case "clear_tasks":
+      return clearTasks(intent.scope ?? "open", store);
 
       case "delete_event":
-        return finish(deleteEvent(intent.eventId, store));
+        return deleteEvent(intent.eventId, store);
 
       case "delete_goal":
-        return finish(deleteGoal(intent.goalId, store));
+        return deleteGoal(intent.goalId, store);
 
       case "forget_memory":
-        return finish(forgetMemory(intent.memoryId, store));
+        return forgetMemory(intent.memoryId, store);
 
       case "none":
         return { ok: true, effect: "none", message: "" };
@@ -123,13 +195,6 @@ export function executeAction(intent: ActionIntent, opts: ExecuteOptions = {}): 
         return { ok: false, effect: "action.unknown", message: "I don't have a way to do that yet." };
       }
     }
-  } catch (err) {
-    return {
-      ok: false,
-      effect: "action.failed",
-      message: `That didn't take — ${err instanceof Error ? err.message : String(err)}.`,
-    };
-  }
 }
 
 /* ------------------------------------------------------------------ */

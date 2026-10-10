@@ -293,6 +293,136 @@ have.
 | `GET` | `/xana/plugins` | Pre-rename alias of `/xana/connections`; `POST` answers there too |
 | `GET` | `/xana/cave` | My cave: the goal board with computed pace, a page of memories, and the last seven days of health |
 | `POST` | `/xana/cave` | `{ op, ...args }` — one of the fixed goal, step, task, event, memory, note, log and bin operations |
+| `GET` | `/api/schedule` | Whether anything is worth saying right now, and the reason for every candidate it suppressed. Read-only — it never spends the budget |
+
+### Speaking first: the scheduled pass
+
+Xana can now volunteer a sentence rather than only answering. The path has three
+parts, and the split matters:
+
+| Module | What it owns |
+|---|---|
+| `src/lib/derived/proactive.ts` | The **decision**: Horvitz's expected-value rule — `P(relevant)·benefit − (1−P(relevant))·cost` — with quiet hours (22:00–07:00 by default, wrapping midnight), a daily budget, meeting and focus-session suppression, and a `reason` string for every verdict. Pure and fully tested. |
+| `src/lib/derived/checkin.ts` | The **pass**: gathers what the rest of the app already measured (`state.nudges`, overdue tasks, stalled goals, at-risk habits), scores it, spends the budget, and records what it said in `proactive_log`. |
+| `scripts/schedule.ts` | The **trigger**, which you supply. `npm run schedule`, `npm run schedule:dry`, or `--json` for the full decision record. |
+
+**Nothing here writes its own sentences.** Every string was produced by
+`derived/nudges.ts` from measured data — a task past its date, an event in forty
+minutes, a habit that cannot now meet its target. A pass that *wrote* new
+sentences with a model would be a pass that could invent something at 3am with
+nobody watching, which is exactly what the budget and the quiet hours exist to
+prevent.
+
+**Why a script and not a timer.** A `setInterval` inside the Next process does
+not survive a module reload or a restart and stops silently; it wakes in parallel
+with request handlers against a single SQLite writer; and it leaves no record, so
+"why did she say that at 3am" has no answer. Task Scheduler, cron and systemd
+timers all have none of those problems.
+
+```
+# Windows Task Scheduler, every two hours 08:00-21:00
+Program:   node
+Arguments: --import ./scripts/ts-loader.mjs scripts/schedule.ts
+Start in:  C:\path\to\Xana
+
+# cron, hourly, silent when there is nothing to say
+0 8-21 * * * cd /path/to/Xana && node --import ./scripts/ts-loader.mjs scripts/schedule.ts
+```
+
+**The budget is real.** `proactive_log` records every sentence with a
+`dedupe_key` (a hash of the *text*, not the nudge id — the derived layer mints a
+fresh id on every rebuild, so keying on id would make everything look new). The
+unique index on `(dedupe_key, day)` means the same overdue task is announced once
+a day, and `day` is a **Beijing** date key, because a UTC boundary would hand her
+a second allowance at 08:00 local — precisely when the morning pass runs.
+
+Exit codes: `0` when it ran, whether or not she had anything to say; `1` when the
+pass itself failed. A quiet assistant is a working assistant, so silence is not
+an error — a scheduled job that alerts on silence gets muted on day two.
+
+**What is not measured yet.** The `ignored` signal — a suggestion shown and never
+acted on — is the only feedback that would let the budget adapt, and it needs a
+sweep that notices an unanswered nudge. Until that exists the budget is fixed at
+three a day and the threshold is conservative, on purpose.
+
+### Learning from a conversation
+
+`derived/memory.ts` catches the phrasings a human anticipated — "remember that…",
+"I prefer…" — and stores them, precisely and offline. `derived/learning.ts` adds
+the other half: after a turn, the model is asked whether anything **durable**
+was said, and what survives a filter is written through the same store.
+
+This is the narrowest model-write in the project, and each restriction is a
+mechanism rather than advice:
+
+- **Facts about the user only** — a preference, a person, a place, a project, a
+  decision, a fact. Never a summary of the conversation, and never a validation.
+- **Praise is refused in both directions.** The research pass found that a memory
+  system which remembers what the user *liked hearing* drifts toward flattery,
+  because the write path is the training signal. So `soundsSycophantic` (shared
+  with the reply path) plus a rejection list catch "the user is engaged and
+  thoughtful", "the user appreciated the suggestion", and the rest of the shapes
+  a model reaches for when there is nothing to remember.
+- **A to-do is not a memory.** "Needs to reply to the landlord by the 20th" is a
+  task; a pattern refuses the disguise.
+- **The same fact learned twice is stored once.** Two mechanisms, because one is
+  not enough: a content hash catches an identical sentence, and an embedding
+  comparison catches a *rephrase* — the live failure was one fact arriving as
+  "Their landlord wants an answer about the deposit by the 20th" and then "They
+  need to give their landlord an answer about the deposit by the 20th".
+- **No model, no learning.** Without a key it returns `[]` and the offline
+  patterns are all that run. It never throws, and never changes the reply.
+
+**The threshold is measured, and the measurement is uncomfortable.**
+`DUPLICATE_SIMILARITY` is 0.75, chosen from a probe: pairs that must match score
+0.730–0.809 and pairs that must not score 0.743 and below, so **the ranges
+overlap by about a point**. A single threshold on a feature-hashing embedder
+cannot separate them perfectly. Production compares `title. content`, which puts
+rephrases at 0.758 and above, so the overlap does not bite today — and the number
+is recorded in the module and asserted in the suite because it is the concrete
+case for the local sentence-transformer the README lists as the next step.
+
+### The mind: two engines and a closed catalog
+`think()` in `src/lib/mind/index.ts` is still the one entry point, and it still
+resolves intent locally first — that rule is unchanged and is the project's most
+valuable property (`MEMORY.md` §1). What changed is what happens when the local
+engine matches nothing.
+
+| Module | What it is |
+|---|---|
+| `src/lib/mind/local.ts` | The deterministic intent engine. Unchanged in behaviour and still first on every turn. |
+| `src/lib/mind/tools.ts` | The **closed catalog**: sixteen named tools with typed JSON Schemas, a safety class, and `resolves` declarations for arguments that must name a real record. Also owns `recoverTextToolCalls`, `stripToolMarkup` and `parseToolArguments`. |
+| `src/lib/mind/guard.ts` | `validateActionIntent()` — the one gate every proposed write passes. Returns `allow`, `confirm` (destructive only) or `refuse`. Never throws, never calls a model. |
+| `src/lib/mind/agent.ts` | `runAgentTurn()` — at most 4 model round trips, every write through `executeAction`, every refusal fed back to the model. Plus `runConversationTurn()` and the pending-confirmation store. |
+| `src/lib/mind/resolve.ts` | Name→record resolution. The model passes a name, never an id. |
+| `src/lib/mind/persona.ts` | The two-tier persona: a fixed honesty `CORE` and overridable `GUIDELINES`. |
+| `src/lib/mind/casual.ts` | `isCasual()` — talk versus request, biased toward "request". |
+| `src/lib/mind/voice.ts` | `stripMarkdown`, `shapeForModality`, `soundsSycophantic`. Pure. |
+| `src/lib/mind/plan.ts` | `decomposeGoal()` (offline skeleton) and `validateMilestones()` (the deterministic filter that lets a model propose structure). |
+| `src/lib/mind/render.ts` | `renderLifeState()` — extracted so `agent.ts` and `index.ts` can share it without a cycle. |
+
+**Why the loop is safe, in one paragraph.** The catalog is the safety argument,
+not the model's judgement. There is no tool that takes a free-form query, a URL, a
+path or a command, so a proposal is always a choice among operations a human
+already wrote down and which were already reachable by typing a sentence. Names
+resolve server-side against what the interface is displaying, so an unmatched name
+is a refusal rather than an edit to the wrong record. The idempotency key is
+derived from `sessionId + toolCallId` — server-owned values — so a retried round
+trip cannot double-write. Every effect and its `action_log` row commit in one
+transaction. And with no key configured the loop is not entered at all.
+
+**A tool call can arrive as text, and that is handled.** Observed live four times
+in one afternoon: the model wrote its intended call into the *reply* rather than
+the tool channel, in three spellings - a DSML fence, `<tool_call>name</tool_call>`,
+and plain prose like `Calling: get_goals`. All of them would have reached the user
+as machine syntax, with no tool run and no honesty guard tripped, because a guard
+looks for a false *claim of a change* and library syntax is not one.
+`recoverTextToolCalls` turns a recognisable call back into a real one;
+`stripToolMarkup` is the unconditional net that guarantees no reply leaves the
+module carrying markup, whatever new spelling appears next. Note that the model
+fences with **U+FF5C FULLWIDTH VERTICAL LINE** as often as with the ASCII pipe:
+they are indistinguishable on screen, and a recogniser built from ASCII matches
+nothing while looking correct.
 
 ---
 
@@ -566,6 +696,35 @@ a speech service, and here it does not.
 already have installed. Turn it on in **Settings → Voice** and pick one; the
 voice, rate and pitch are controls, and each has a sample button. The text is
 stripped of markdown first, so a briefing does not read out "dash energy colon".
+
+**That switch is a preference. The mute is a button, and it is the one to reach
+for.** The moment you want her quiet is the moment she is talking, and going to
+Settings is four actions with a voice over the top of them — so there is a
+speaker in the header. Press it and the sentence stops where it is and no later
+reply is read; press it again and she speaks from the next reply onward. It is
+remembered across reloads, because a mute that lifts on the next page load is not
+a mute.
+
+The two are deliberately separate settings. Muting from the header does **not**
+switch off *Read replies aloud*: unmuting gives back exactly the preference you
+chose, and the panel keeps showing it. The one rule between them is that **the
+mute is cleared when that switch moves** — on, so that asking for her voice out
+loud is never answered with silence; or off, because a mute of a reading that is
+switched off says nothing and would be a trap the next time it went on. Saving
+anything else in that panel — the speed, the voice — leaves the mute exactly
+where it was, which is the bug the first version of this had. The panel says so
+when it finds itself muted, and offers **Unmute now** from there.
+
+> The report that produced this: *"whenever i text xana she just keeps on
+> talking, and it is annoying. add a button to mute her."*
+
+Two details are load-bearing rather than incidental. The mute is applied **on the
+press**, before the request that stores it, so a reply already on its way is
+caught as well — waiting for the round trip would leave a window in which she
+starts talking to the person who just asked her not to. And silencing her also
+**releases the microphone**: always-listening holds it shut for exactly as long
+as she is speaking, so a mute that stopped the audio and left that flag set would
+silence her and deafen her at once.
 
 **She listens** through the browser's `SpeechRecognition` API, or — better on a
 machine where that service is blocked — through the local Whisper service below.

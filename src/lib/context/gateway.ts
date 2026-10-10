@@ -48,6 +48,7 @@ import { habitsWithHealth, latestHealth, moodTrend, sleepDebt } from "../derived
 import { detectPatterns } from "../derived/patterns";
 import { buildNudges, headlineFor } from "../derived/nudges";
 import { ingestSnapshot, knownPeople } from "../derived/memory";
+import { recallHybrid } from "../derived/recall";
 
 /* ------------------------------------------------------------------ */
 /* Cache                                                               */
@@ -161,9 +162,21 @@ export async function buildLifeState(opts: ContextOptions = {}): Promise<LifeSta
   /* --- Free time in the waking day. --- */
   const freeMinutes = computeFreeMinutes(todaysEvents, now);
 
-  /* --- Recall: ask the store what matters about right now. --- */
+  /* --- Recall: ask the memory what matters about right now. --- */
   const recallQuery = buildRecallQuery({ next, focus, patterns: [] });
-  let memory: MemoryHit[] = store.recall(recallQuery, { limit: 5, minScore: 0.1 });
+  /**
+   * The hybrid channel, with the old scorer as the net under it.
+   *
+   * `recallHybrid` fuses BM25 through FTS5 with the dense channel by rank, and
+   * falls back to `store.recall` when it returns nothing - a database with no
+   * FTS5 build, or a query with no terms in it. Keeping the old path as the
+   * fallback rather than deleting it means this change cannot make recall
+   * *worse* on any input; it can only reorder what was already there.
+   */
+  let memory: MemoryHit[] = recallHybrid(recallQuery, { limit: 5, store });
+  if (memory.length === 0) {
+    memory = store.recall(recallQuery, { limit: 5, minScore: 0.1 });
+  }
   if (memory.length === 0) {
     // Nothing matched the moment; surface what has mattered most lately.
     memory = store
